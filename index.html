@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HAM Pro: Modular Edition</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #2c2f33; color: #fff; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+        /* --- Steuerungsmenü --- */
+        #top-bar { background-color: #1e2124; padding: 12px 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; z-index: 10; border-bottom: 2px solid #444; }
+        h2 { margin: 0; color: #fff; font-size: 18px; border-right: 2px solid #555; padding-right: 12px; }
+        .control-group { display: flex; align-items: center; gap: 5px; }
+        label { font-weight: bold; font-size: 11px; color: #ccc; }
+        select, input[type="range"], input[type="number"] { padding: 4px; border-radius: 4px; font-size: 11px; background: #fff; color: #000; }
+        input[type="number"] { width: 45px; text-align: center; }
+        input:disabled, select:disabled { background: #555 !important; color: #aaa !important; cursor: not-allowed; }
+        
+        button { padding: 6px 10px; font-size: 12px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
+        #btn-load { background-color: #007bff; color: white; } #btn-load:hover { background-color: #0069d9; }
+        #btn-encode { background-color: #28a745; color: white; } #btn-encode:hover { background-color: #218838; }
+        #btn-encode:disabled, #btn-save:disabled, #btn-builder:disabled, #btn-analysis:disabled { background-color: #555; cursor: not-allowed; color: #888; }
+        #btn-save { background-color: #ffc107; color: black; } #btn-save:hover { background-color: #e0a800; }
+        #btn-builder { background-color: #17a2b8; color: white; } #btn-builder:hover { background-color: #138496; }
+        #btn-auto-step { background-color: #e83e8c; color: white; padding: 4px 6px; font-size: 11px; } #btn-auto-step:hover { background-color: #d63384; }
+        #btn-analysis { background-color: #6f42c1; color: white; } #btn-analysis:hover { background-color: #5a32a3; }
+        .btn-zoom { background-color: #6c757d; color: white; } .btn-zoom.active { background-color: #17a2b8; }
+        
+        #palette-box { display: none; background: #111; padding: 3px 6px; border-radius: 4px; border: 1px solid #444; align-items: center; gap: 6px; }
+        #palette-pickers-container { display: flex; gap: 2px; flex-wrap: wrap; max-width: 150px; max-height: 40px; overflow-y: auto; }
+        .palette-picker { width: 18px; height: 18px; border: none; cursor: pointer; padding: 0; background: none; }
+
+        /* Counter Stream Panel */
+        #stream-panel { background: #181a1c; padding: 8px 20px; border-bottom: 1px solid #444; display: flex; gap: 15px; align-items: center; font-size: 11px; }
+        #stream-list { display: flex; gap: 5px; flex-wrap: wrap; max-height: 35px; overflow-y: auto; align-items: center; }
+        .stream-tag { background: #2b2f33; border: 1px solid #555; padding: 2px 6px; border-radius: 3px; font-size: 10px; display: flex; align-items: center; gap: 5px; cursor: pointer; transition: background 0.2s; }
+        .stream-tag:hover { background: #3c4043; border-color: #777; }
+        .stream-tag-del { color: #ff6b6b; margin-left: 5px; padding: 0 3px; cursor: pointer; font-weight: bold; }
+        .stream-tag-del:hover { color: #ff4d4d; transform: scale(1.1); }
+
+        .status-container { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 260px; border-left: 2px solid #555; padding-left: 10px; }
+        progress { width: 100%; height: 6px; } 
+        .status-row { display: flex; justify-content: space-between; font-size: 11px; color: #aaa; }
+
+        /* --- Bildbereich --- */
+        #image-area { display: flex; flex: 1; overflow: hidden; background-color: #000; }
+        .view-pane { flex: 1; position: relative; overflow: hidden; cursor: grab; }
+        .view-pane.grabbing { cursor: grabbing; } #pane-left { border-right: 2px solid #444; }
+        .pane-label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 4px; font-weight: bold; font-size: 12px; z-index: 100; pointer-events: none; }
+        .view-pane canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; box-shadow: 0 0 20px rgba(255,255,255,0.1); image-rendering: pixelated; }
+        .divider { width: 2px; height: 25px; background-color: #555; margin: 0 2px; }
+
+        /* Modals */
+        .modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:1000; justify-content:center; align-items:center; }
+        .modal-content { background:#1e2124; padding:20px; border-radius:8px; width:750px; max-height:90vh; overflow-y:auto; color:white; border: 1px solid #444; }
+        .swatch-btn { display:inline-block; width:22px; height:22px; border:1px solid #fff; cursor:pointer; border-radius:4px; flex-shrink:0; }
+        .swatch-row { display:flex; align-items:center; gap:8px; margin-bottom:5px; background:#111; padding:3px 6px; border-radius:4px; }
+        .builder-slot { width:20px; height:20px; border:1px solid #444; border-radius:3px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-size:9px; font-weight:bold; }
+        
+        table.analysis-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 10px; }
+        table.analysis-table th, table.analysis-table td { border: 1px solid #444; padding: 4px 6px; text-align: center; }
+        table.analysis-table th { background: #2b2f33; }
+        .error-link { color: #4dabf7; cursor: pointer; text-decoration: underline; }
+        .error-link:hover { color: #74c0fc; }
+        #avg-mse-display { font-size: 11px; color: #ffc107; font-weight: bold; background: #111; padding: 4px 8px; border-radius: 4px; border: 1px solid #444; }
+    </style>
+</head>
+<body>
+
+<div id="top-bar">
+    <h2>HAM LAB</h2>
+    <div class="control-group">
+        <button id="btn-load">1. Bild laden</button>
+        <button id="btn-encode" disabled>2. Codieren</button>
+        <button id="btn-save" disabled>3. Speichern</button>
+    </div>
+    
+    <div class="divider"></div>
+    <div class="control-group">
+        <label>Format:</label>
+        <select id="format" style="width: 140px;">
+            <option value="HAM04">HAM04 (4-Bit)</option>
+            <option value="HAM05">HAM05 (5-Bit)</option>
+            <option value="HAM06">HAM06 (6-Bit)</option>
+            <option value="HAM08">HAM08 (8-Bit)</option>
+            <option value="HAM08_PAL">HAM08 (128-F. Pal)</option>
+            <option value="HAM12" selected>HAM12 (12-Bit)</option>
+            <option value="HAM16">HAM16 (16-Bit)</option>
+        </select>
+    </div>
+
+    <div class="control-group">
+        <label>Strategie:</label>
+        <select id="encode-strategy">
+            <option value="both">Greedy</option>
+            <option value="anchor_only">Nur Anker</option>
+            <option value="delta_only">Nur Delta</option>
+            <option value="lookahead_2">2-Px Lookahead</option>
+            <option value="lookahead_3">3-Px Lookahead</option>
+            <option value="lookahead_4">4-Px Lookahead</option>
+        </select>
+    </div>
+    <div class="control-group">
+        <label>Metrik:</label>
+        <select id="encode-metric">
+            <option value="yuv">YUV</option>
+            <option value="rgb">RGB</option>
+        </select>
+    </div>
+
+    <!-- Schrittweiten-Steuerung -->
+    <div class="control-group" id="ham-step-group">
+        <label>Schritt:</label>
+        <input type="number" id="ham-step" min="1" max="128" value="4">
+        <div style="display:flex; align-items:center; gap:2px; background:#111; padding:2px 4px; border-radius:4px; border:1px solid #444;">
+            <label style="font-size:10px;">Min:</label>
+            <input type="number" id="auto-min-step" min="1" max="128" value="4" style="width:30px;">
+            <label style="font-size:10px;">Max:</label>
+            <input type="number" id="auto-max-step" min="1" max="128" value="16" style="width:30px;">
+        </div>
+        <button id="btn-auto-step" title="Teste Schrittweitenbereich">Auto</button>
+    </div>
+
+    <!-- Bänke-Steuerung statt Pauschal-Palette -->
+    <div id="palette-box">
+        <label>Bank:</label>
+        <select id="pal-bank-select" style="font-size:11px; padding:2px; min-width:90px;"></select>
+        <div id="palette-pickers-container"></div>
+        <button id="btn-builder" disabled>Build Bank</button>
+    </div>
+
+    <div class="divider"></div>
+    <div class="control-group">
+        <button id="btn-zoom-fit" class="btn-zoom active">Fit</button>
+        <button id="btn-zoom-1x" class="btn-zoom">1x</button>
+        <button id="btn-zoom-2x" class="btn-zoom">2x</button>
+        <button id="btn-zoom-4x" class="btn-zoom">4x</button>
+        <button id="btn-zoom-8x" class="btn-zoom">8x</button>
+    </div>
+    
+    <div class="control-group">
+        <button id="btn-analysis" disabled>Fehler-Analyse</button>
+        <div id="avg-mse-display" style="display:none;">⌀ RGB: 0.0 | ⌀ YUV: 0.0</div>
+    </div>
+
+    <div class="status-container">
+        <div class="status-row">
+            <span id="img-dim-text">Größe: - | Farben: - | Modus: -</span>
+            <span id="mouse-pos-text">X: - | Y: - | Px: -</span>
+        </div>
+        <progress id="progress" value="0" max="100"></progress>
+        <div class="status-row"><span id="status-text">Warte auf Bild...</span></div>
+    </div>
+    <input type="file" id="file-img" accept="image/png, image/jpeg, image/bmp, image/webp" style="display: none;">
+</div>
+
+<!-- Counter Register / Segment Stream Panel -->
+<div id="stream-panel">
+    <span style="font-weight:bold; color:#4dabf7;">Counter Segmente:</span>
+    <div class="control-group">
+        <label>Von Pixel:</label>
+        <input type="number" id="seg-start-px" value="0" readonly style="background:#333; color:#aaa; width:65px;">
+    </div>
+    <div class="control-group">
+        <label>Bis Pixel:</label>
+        <input type="number" id="seg-end-px" value="0" style="width:65px;">
+    </div>
+    <div class="control-group" id="seg-step-group">
+        <label>Schritt:</label>
+        <input type="number" id="seg-step" value="4" min="1" max="128">
+    </div>
+    <div class="control-group" id="seg-bank-group">
+        <label>Bank:</label>
+        <input type="number" id="seg-bank" value="0" min="0" max="31">
+    </div>
+    <button id="btn-add-segment" style="background:#28a745; color:#fff;">In Liste übernehmen</button>
+    <button id="btn-clear-segments" style="background:#dc3545; color:#fff;">Reset</button>
+    <div id="stream-list"><i>Keine Segmente definiert (Nutzt Standard für Gesamtbild).</i></div>
+</div>
+
+<div id="image-area">
+    <div class="view-pane" id="pane-left"><div class="pane-label">ORIGINAL</div><canvas id="canvas-original"></canvas></div>
+    <div class="view-pane" id="pane-right"><div class="pane-label" id="decoded-label">DEKODIERT</div><canvas id="canvas-decoded"></canvas></div>
+</div>
+
+<!-- Builder Modal -->
+<div id="builder-modal" class="modal-overlay">
+   <div class="modal-content">
+      <h3 style="margin-top:0;">Optimierer für <span id="b-bank-title" style="color:#4dabf7;">Bank 0</span> (<span id="b-fmt"></span>)</h3>
+      <div id="builder-status" style="color:#aaa; font-size:13px;">Initialisiere...</div>
+      <div style="font-size:11px; color:#aaa; margin-top:6px;">Klicke auf einen Slot, um die Farbe direkt zu wählen:</div>
+      <div id="builder-palette-preview" style="display:flex; flex-wrap:wrap; gap:3px; margin:6px 0; background:#000; padding:6px; border-radius:4px; max-height:75px; overflow-y:auto;"></div>
+      <div style="display:flex; gap:15px; margin-top:12px;">
+          <div style="flex:1;"><h4 style="margin:0 0 6px 0; color:#ff6b6b; font-size:13px;">Top 5 Fehler im Segment</h4><div id="builder-mse-list"></div></div>
+          <div style="flex:1;"><h4 style="margin:0 0 6px 0; color:#4dabf7; font-size:13px;">Top 5 Segment-Histogramm</h4><div id="builder-hist-list"></div></div>
+      </div>
+      <div style="margin-top:15px; display:flex; justify-content:space-between; align-items:center;">
+          <button id="btn-builder-cancel" style="background:#555; color:#fff;">Schließen / Übernehmen</button>
+          <button id="btn-builder-auto" style="background:#28a745; color:#fff;">Bank Auto-Füllen (Segment MSE)</button>
+      </div>
+   </div>
+</div>
+
+<!-- Auto-Step Result Modal -->
+<div id="auto-step-modal" class="modal-overlay">
+   <div class="modal-content" style="width: 700px;">
+      <h3 style="margin-top:0;">Auto-Schrittweiten-Analyse</h3>
+      <div id="auto-step-status" style="color:#aaa; font-size:13px; margin-bottom:10px;">Berechne...</div>
+      <div style="max-height: 350px; overflow-y: auto;">
+          <table class="analysis-table">
+              <thead><tr><th>Schrittweite (±)</th><th>⌀ RGB MSE</th><th>⌀ YUV MSE</th><th>Max YUV MSE</th><th>Aktion</th></tr></thead>
+              <tbody id="auto-step-body"></tbody>
+          </table>
+      </div>
+      <div style="margin-top:15px; display:flex; flex-direction:column; gap:8px;">
+          <div style="font-size:11px; color:#ffc107;" id="auto-step-recommendation"></div>
+          <div id="auto-step-range-suggestion" style="font-size:11px;"></div>
+      </div>
+      <div style="margin-top:10px; text-align:right;"><button id="btn-auto-step-close" style="background:#555; color:#fff;">Schließen</button></div>
+   </div>
+</div>
+
+<!-- Fehler-Analyse Modal -->
+<div id="analysis-modal" class="modal-overlay">
+   <div class="modal-content" style="width: 850px;">
+      <h3 style="margin-top:0;">Fehler- & Histogramm-Analyse</h3>
+      
+      <div style="background:#2b2f33; padding:10px; border-radius:6px; border:1px solid #4dabf7; margin-bottom:15px;">
+          <h4 style="margin:0 0 8px 0; color:#4dabf7;">Aktuelles Segment (Px <span id="ana-seg-start"></span> bis <span id="ana-seg-end"></span>)</h4>
+          <div id="ana-seg-avg" style="font-size:12px; margin-bottom:8px;"></div>
+          <div id="analysis-seg-top5" style="background:#111; padding:8px; border-radius:4px; font-size:12px;"></div>
+      </div>
+
+      <h4 style="margin:10px 0 5px 0; color:#ffc107;">Gesamtbild: Top 5 Max MSE Abweichungen</h4>
+      <div id="analysis-top5" style="background:#111; padding:8px; border-radius:4px; font-size:12px;"></div>
+      
+      <h4 style="margin:15px 0 5px 0; color:#4dabf7;">Fehler-Histogramm (Gesamtbild)</h4>
+      <div style="max-height: 300px; overflow-y: auto;">
+          <table class="analysis-table">
+              <thead><tr><th>Intervall</th><th>RGB MSE Count</th><th>RGB %</th><th>YUV MSE Count</th><th>YUV %</th></tr></thead>
+              <tbody id="analysis-histogram-body"></tbody>
+          </table>
+      </div>
+      <div style="margin-top:20px; text-align:right;"><button id="btn-analysis-close" style="background:#555; color:#fff;">Schließen</button></div>
+   </div>
+</div>
+
+<!-- Verknüpfung der Hauptlogik (ES6 Module) -->
+<script type="module" src="/src/main.js"></script>
+
+</body>
+</html>
