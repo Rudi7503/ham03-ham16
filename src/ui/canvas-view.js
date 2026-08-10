@@ -7,7 +7,7 @@ export function getScaleFactor(mode, imgW, imgH, viewportElement) {
     if (mode === 'fit') {
         const vRect = viewportElement.getBoundingClientRect();
         if (vRect.width === 0) return 1.0;
-        return Math.min(vRect.width / imgW, vRect.height / imgH) * 0.95;
+        return Math.min((vRect.width - 20) / imgW, (vRect.height - 20) / imgH);
     }
     if (mode === '1x') return 1.0;
     if (mode === '2x') return 2.0;
@@ -17,7 +17,7 @@ export function getScaleFactor(mode, imgW, imgH, viewportElement) {
 
 export function updateView(imgW, imgH) {
     if (!imgW || !imgH) return;
-    const viewOriginal = document.getElementById('wrapper-original');
+    const viewOriginal = document.getElementById('pane-left');
     const canvasOriginal = document.getElementById('canvas-original');
     const canvasDecoded = document.getElementById('canvas-decoded');
     
@@ -29,33 +29,33 @@ export function updateView(imgW, imgH) {
     const centerY = (vRect.height - (imgH * scale)) / 2;
 
     const tStr = `translate(${centerX + viewState.panX}px, ${centerY + viewState.panY}px) scale(${scale})`;
+    
+    canvasOriginal.style.transformOrigin = '0 0';
+    canvasDecoded.style.transformOrigin = '0 0';
     canvasOriginal.style.transform = tStr;
     canvasDecoded.style.transform = tStr;
 }
 
 export function setZoomMode(newMode, imgW, imgH) {
     if (!imgW || !imgH) return;
-    const viewOriginal = document.getElementById('wrapper-original');
+    const viewOriginal = document.getElementById('pane-left');
     if(!viewOriginal) return;
-    const vRect = viewOriginal.getBoundingClientRect();
+    
+    // UI Active-Class auf Buttons umschalten
+    document.querySelectorAll('.btn-zoom').forEach(b => b.classList.remove('active'));
+    let activeBtn = document.getElementById(`btn-zoom-${newMode}`);
+    if (activeBtn) activeBtn.classList.add('active');
 
+    const vRect = viewOriginal.getBoundingClientRect();
     let oldScale = getScaleFactor(viewState.mode, imgW, imgH, viewOriginal);
+    
     let centerX = (vRect.width / 2) - (vRect.width - (imgW * oldScale)) / 2 - viewState.panX;
     let centerY = (vRect.height / 2) - (vRect.height - (imgH * oldScale)) / 2 - viewState.panY;
-
+    
     let imgCenterX = centerX / oldScale;
     let imgCenterY = centerY / oldScale;
 
     viewState.mode = newMode;
-
-    // Aktualisiert Buttons nur, wenn sie im HTML existieren
-    ['fit', '1x', '2x', '4x', '8x'].forEach(m => {
-        let btn = document.getElementById(`btn-zoom-${m}`);
-        if(btn) btn.classList.remove('active');
-    });
-    let activeBtn = document.getElementById(`btn-zoom-${newMode}`);
-    if(activeBtn) activeBtn.classList.add('active');
-
     let newScale = getScaleFactor(newMode, imgW, imgH, viewOriginal);
 
     if (newMode === 'fit') {
@@ -72,7 +72,7 @@ export function centerOnCoordinate(x, y, imgW, imgH) {
     if(modal) modal.style.display = 'none';
     setZoomMode('8x', imgW, imgH);
 
-    const viewOriginal = document.getElementById('wrapper-original');
+    const viewOriginal = document.getElementById('pane-left');
     if(!viewOriginal) return;
     const vRect = viewOriginal.getBoundingClientRect();
 
@@ -113,8 +113,8 @@ export function redrawCanvasWithHighlight(originalData, decodedData, imgW, imgH,
 }
 
 export function setupCanvasEvents(getDimensionsFn) {
-    const viewports = [document.getElementById('wrapper-original'), document.getElementById('wrapper-decoded')].filter(Boolean);
-    const mousePosText = document.getElementById('mouse-pos-text'); // Darf null sein
+    const viewports = [document.getElementById('pane-left'), document.getElementById('pane-right')].filter(Boolean);
+    const mousePosText = document.getElementById('mouse-pos-text'); 
 
     viewports.forEach(view => {
         view.addEventListener('mousedown', e => {
@@ -124,13 +124,13 @@ export function setupCanvasEvents(getDimensionsFn) {
             viewState.startX = e.clientX - viewState.panX;
             viewState.startY = e.clientY - viewState.panY;
             viewState.panning = true;
-            view.style.cursor = 'grabbing';
+            view.classList.add('grabbing');
         });
     });
 
     window.addEventListener('mouseup', () => {
         viewState.panning = false;
-        viewports.forEach(view => view.style.cursor = '');
+        viewports.forEach(view => view.classList.remove('grabbing'));
     });
 
     window.addEventListener('mousemove', e => {

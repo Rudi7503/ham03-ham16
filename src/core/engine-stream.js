@@ -8,7 +8,8 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
     
     let activeCmds = [...userSegments];
     if (activeCmds.length === 0) {
-        activeCmds.push({ absEnd: totalPixels, waitPixels: totalPixels, bank: 0, step: 4 });
+        // FIX: Der Fallback muss nun zwingend ein RGB-Objekt sein!
+        activeCmds.push({ absEnd: totalPixels, waitPixels: totalPixels, bank: 0, step: {r:4, g:4, b:4} });
     }
 
     let commandArray = [];
@@ -63,15 +64,17 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
             let multipliers = config.hasTurbo ? [0, 1] : [0];
             for (let t of multipliers) {
                 let m = t ? 4 : 1;
-                let s = currentStep * m;
+                let sr = currentStep.r * m;
+                let sg = currentStep.g * m;
+                let sb = currentStep.b * m;
 
                 if (config.isPaletted) {
                     for (let ri = 0; ri < config.channels.r.length; ri++) {
                         for (let gi = 0; gi < config.channels.g.length; gi++) {
                             for (let bi = 0; bi < config.channels.b.length; bi++) {
-                                let dr = config.channels.r[ri] * s;
-                                let dg = config.channels.g[gi] * s;
-                                let db = config.channels.b[bi] * s;
+                                let dr = config.channels.r[ri] * sr;
+                                let dg = config.channels.g[gi] * sg;
+                                let db = config.channels.b[bi] * sb;
 
                                 let nr = clamp(c_acc.r + dr, 0, 255);
                                 let ng = clamp(c_acc.g + dg, 0, 255);
@@ -87,26 +90,25 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
                 } else {
                     let diffR = tr - c_acc.r, diffG = tg - c_acc.g, diffB = tb - c_acc.b;
                     if (format === "HAM16") {
-                        let dr = clamp(Math.round(diffR / s), -8, 7);
-                        let dg = clamp(Math.round(diffG / s), -16, 15);
-                        let db = clamp(Math.round(diffB / s), -16, 15);
+                        let dr = clamp(Math.round(diffR / sr), -8, 7);
+                        let dg = clamp(Math.round(diffG / sg), -16, 15);
+                        let db = clamp(Math.round(diffB / sb), -16, 15);
                         branches.push({ 
                             cmd: { isAnchor: false, format: "HAM16", isTurbo: (m===4), dr, dg, db }, 
-                            r: clamp(c_acc.r + dr * s, 0, 255), g: clamp(c_acc.g + dg * s, 0, 255), b: clamp(c_acc.b + db * s, 0, 255) 
+                            r: clamp(c_acc.r + dr * sr, 0, 255), g: clamp(c_acc.g + dg * sg, 0, 255), b: clamp(c_acc.b + db * sb, 0, 255) 
                         });
                     } else if (format === "HAM12") {
-                        let dr = clamp(Math.round(diffR / s), -4, 3);
-                        let dg = clamp(Math.round(diffG / s), -8, 7);
-                        let db = clamp(Math.round(diffB / s), -4, 3);
+                        let dr = clamp(Math.round(diffR / sr), -4, 3);
+                        let dg = clamp(Math.round(diffG / sg), -8, 7);
+                        let db = clamp(Math.round(diffB / sb), -4, 3);
                         branches.push({ 
                             cmd: { isAnchor: false, format: "HAM12", isTurbo: (m===4), dr, dg, db }, 
-                            r: clamp(c_acc.r + dr * s, 0, 255), g: clamp(c_acc.g + dg * s, 0, 255), b: clamp(c_acc.b + db * s, 0, 255) 
+                            r: clamp(c_acc.r + dr * sr, 0, 255), g: clamp(c_acc.g + dg * sg, 0, 255), b: clamp(c_acc.b + db * sb, 0, 255) 
                         });
                     }
                 }
             }
         }
-
         let best_cost = Infinity;
         let best_branch = null;
         let evaluatedBranches = branches.length > 200 ? branches.slice(0, 200) : branches;
@@ -136,7 +138,6 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
             commandArray.push(best.cmd);
             acc_r = best.r; acc_g = best.g; acc_b = best.b;
 
-            // Zähle Anker vs. Deltas vs. Turbo
             if (best.cmd.isAnchor) {
                 stats.anchorCount++;
             } else {

@@ -6,7 +6,7 @@ import { decodeStream } from './core/decoder.js';
 import { HAM_CONFIGS } from './codecs/configs.js';
 import { computeDetailedAnalysis, runSimulationWithStrategy, errorBins } from './core/analysis.js';
 import { simulateBuilderEncode } from './core/builder.js';
-import { hexToRgb, rgbToHex, clamp } from './codecs/utils.js';
+import { hexToRgb, rgbToHex, clamp, get_rgb_dist } from './codecs/utils.js';
 
 // --- GLOBALE STATES ---
 let currentImgW = 0, currentImgH = 0, totalPixels = 0;
@@ -15,16 +15,21 @@ let originalImageData = null;
 let decodedImageData = null;
 let currentFormat = "HAM12"; 
 let latestPackedData = null;
+let latestCommandArray = null;
 
 let globalPaletteRAM = new Uint8Array(256 * 3);
 let userSegments = []; 
 let editingSegmentIndex = -1;
-let currentBuilderSlot = 1;
+let currentBuilderSlot = 0;
 
 // --- DOM ELEMENTE ---
 const formatSelect = document.getElementById('format');
 const hamStepGroup = document.getElementById('ham-step-group');
-const hamStepInput = document.getElementById('ham-step');
+
+const hamStepR = document.getElementById('ham-step-r');
+const hamStepG = document.getElementById('ham-step-g');
+const hamStepB = document.getElementById('ham-step-b');
+
 const encodeStrategySelect = document.getElementById('encode-strategy');
 const encodeMetricSelect = document.getElementById('encode-metric');
 
@@ -46,7 +51,11 @@ const ctxDecoded = canvasDecoded.getContext('2d', { willReadFrequently: true });
 
 const segStartPxInput = document.getElementById('seg-start-px');
 const segEndPxInput = document.getElementById('seg-end-px');
-const segStepInput = document.getElementById('seg-step');
+
+const segStepR = document.getElementById('seg-step-r');
+const segStepG = document.getElementById('seg-step-g');
+const segStepB = document.getElementById('seg-step-b');
+
 const segBankInput = document.getElementById('seg-bank');
 const streamListDiv = document.getElementById('stream-list');
 const btnAddSegment = document.getElementById('btn-add-segment');
@@ -55,34 +64,67 @@ const btnAutoStep = document.getElementById('btn-auto-step');
 const autoMinInput = document.getElementById('auto-min-step');
 const autoMaxInput = document.getElementById('auto-max-step');
 
+// --- HILFSFUNKTION FÜR SCHRITTWEITEN ---
+// Zieht sich die Werte aus dem UI, falls keine Segmente angelegt sind
+function getEffectiveSegments() {
+    if (userSegments.length > 0) return userSegments;
+    return [{
+        absEnd: totalPixels,
+        waitPixels: totalPixels,
+        bank: palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0,
+        step: {
+            r: hamStepR ? (parseInt(hamStepR.value) || 4) : 4,
+            g: hamStepG ? (parseInt(hamStepG.value) || 4) : 4,
+            b: hamStepB ? (parseInt(hamStepB.value) || 4) : 4
+        }
+    }];
+}
+
 // --- INIT UI ---
 setupCanvasEvents(() => ({ w: currentImgW, h: currentImgH }));
 
+['fit', '1x', '2x', '4x', '8x'].forEach(mode => {
+    let btn = document.getElementById(`btn-zoom-${mode}`);
+    if (btn) btn.addEventListener('click', () => setZoomMode(mode, currentImgW, currentImgH));
+});
+
 function updateStatusTextDimAndColors(decColorCount, stats = null) {
-    let statText = "";
-    if (stats) {
-        statText = ` | Anker: ${stats.anchorCount} | Deltas: ${stats.deltaCount} (Turbo: ${stats.turboCount})`;
+    let statText = stats ? ` | Anker: ${stats.anchorCount} | Deltas: ${stats.deltaCount} (Turbo: ${stats.turboCount})` : "";
+    let dimTextEl = document.getElementById('img-dim-text');
+    if (dimTextEl) {
+        dimTextEl.innerText = `Größe: ${currentImgW}x${currentImgH} px | Farben: ${originalColorsCount} / ${decColorCount}${statText}`;
     }
-    document.getElementById('img-dim-text').innerText = 
-        `Größe: ${currentImgW}x${currentImgH} px | Farben: ${originalColorsCount} / ${decColorCount}${statText}`;
 }
 
 function updateProgress(prefix, current, total, startTime) {
     if (current > 0 && current % 10 === 0 || current === total) {
         let elapsed = ((Date.now() - startTime) / 1000 / current) * (total - current);
-        document.getElementById('progress').value = (current / total) * 100;
-        document.getElementById('status-text').innerText = 
-            `${prefix} - Pixel ${current}/${total} | ETA: ${Math.round(elapsed)}s`;
+        let progressEl = document.getElementById('progress');
+        if(progressEl) progressEl.value = (current / total) * 100;
+        let statusTextEl = document.getElementById('status-text');
+        if (statusTextEl) {
+            statusTextEl.innerText = `${prefix} - Pixel ${current}/${total} | ETA: ${Math.round(elapsed)}s`;
+        }
     }
+}
+
+function refreshDecodedImage() {
+    if (!latestCommandArray || !currentImgW) return;
+    let config = HAM_CONFIGS[currentFormat];
+    let decodedPixels = decodeStream(latestCommandArray, currentImgW, currentImgH, globalPaletteRAM, getEffectiveSegments(), config);
+    ctxDecoded.putImageData(new ImageData(decodedPixels, currentImgW, currentImgH), 0, 0);
+    decodedImageData = ctxDecoded.getImageData(0, 0, currentImgW, currentImgH);
+    triggerCanvasHighlight();
 }
 
 // --- PALETTEN & FORMAT UI ---
 function updateBankPickers() {
+    if (!paletteContainer) return;
     paletteContainer.innerHTML = "";
-    let f = formatSelect.value;
+    let f = formatSelect ? formatSelect.value : "HAM12";
     let config = HAM_CONFIGS[f] || HAM_CONFIGS["HAM12"];
     let slotsPerBank = config.slotsPerBank || 8;
-    let currentBank = parseInt(palBankSelect.value) || 0;
+    let currentBank = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
     let startSlot = currentBank * slotsPerBank;
 
     for(let i = 0; i < slotsPerBank; i++) {
@@ -99,14 +141,16 @@ function updateBankPickers() {
             globalPaletteRAM[slotIdx * 3] = nr; 
             globalPaletteRAM[slotIdx * 3 + 1] = ng; 
             globalPaletteRAM[slotIdx * 3 + 2] = nb;
+            refreshDecodedImage();
         });
         paletteContainer.appendChild(input);
     }
 }
 
 function populateBankDropdown() {
+    if (!palBankSelect) return;
     palBankSelect.innerHTML = "";
-    let f = formatSelect.value;
+    let f = formatSelect ? formatSelect.value : "HAM12";
     let config = HAM_CONFIGS[f] || HAM_CONFIGS["HAM12"];
     let slotsPerBank = config.slotsPerBank || 8;
     let maxBänke = slotsPerBank > 0 ? Math.floor(256 / slotsPerBank) : 1;
@@ -117,27 +161,33 @@ function populateBankDropdown() {
         opt.innerText = `Bank ${b} (${b * slotsPerBank}-${(b + 1) * slotsPerBank - 1})`;
         palBankSelect.appendChild(opt);
     }
-    segBankInput.max = Math.max(0, maxBänke - 1);
+    if (segBankInput) segBankInput.max = Math.max(0, maxBänke - 1);
     updateBankPickers();
 }
 
 function handleFormatChange() {
-    let f = formatSelect.value;
+    let f = formatSelect ? formatSelect.value : "HAM12";
     let config = HAM_CONFIGS[f] || HAM_CONFIGS["HAM12"];
     let isPalFormat = config.isPaletted;
 
-    paletteBox.style.display = isPalFormat ? 'block' : 'none';
-    hamStepGroup.style.display = 'flex'; 
-    hamStepInput.disabled = false;
-    segStepInput.disabled = false;
-    segBankInput.disabled = !isPalFormat;
+    if (paletteBox) paletteBox.style.display = isPalFormat ? 'block' : 'none';
+    if (hamStepGroup) hamStepGroup.style.display = 'flex'; 
+    if (hamStepR) hamStepR.disabled = false; 
+    if (hamStepG) hamStepG.disabled = false; 
+    if (hamStepB) hamStepB.disabled = false;
+    
+    if (segStepR) segStepR.disabled = false; 
+    if (segStepG) segStepG.disabled = false; 
+    if (segStepB) segStepB.disabled = false;
+    
+    if (segBankInput) segBankInput.disabled = !isPalFormat;
 
     if(isPalFormat) populateBankDropdown();
 }
 
-formatSelect.addEventListener('change', handleFormatChange);
-palBankSelect.addEventListener('change', () => { segBankInput.value = palBankSelect.value; updateBankPickers(); });
-segBankInput.addEventListener('input', () => { palBankSelect.value = segBankInput.value; updateBankPickers(); });
+if (formatSelect) formatSelect.addEventListener('change', handleFormatChange);
+if (palBankSelect) palBankSelect.addEventListener('change', () => { if (segBankInput) segBankInput.value = palBankSelect.value; updateBankPickers(); });
+if (segBankInput) segBankInput.addEventListener('input', () => { if (palBankSelect) palBankSelect.value = segBankInput.value; updateBankPickers(); });
 
 // --- BILD LADEN ---
 function countUniqueColors(imgData) {
@@ -148,8 +198,8 @@ function countUniqueColors(imgData) {
     return set.size;
 }
 
-btnLoad.addEventListener('click', () => fileImg.click());
-fileImg.addEventListener('change', (e) => {
+if (btnLoad) btnLoad.addEventListener('click', () => { if(fileImg) fileImg.click(); });
+if (fileImg) fileImg.addEventListener('change', (e) => {
     let file = e.target.files[0]; 
     if (!file) return;
     let reader = new FileReader();
@@ -172,20 +222,32 @@ fileImg.addEventListener('change', (e) => {
             canvasDecoded.height = currentImgH;
             ctxDecoded.clearRect(0, 0, currentImgW, currentImgH);
             decodedImageData = null;
+            latestCommandArray = null;
             
             editingSegmentIndex = -1;
-            segStartPxInput.value = 0; 
-            segEndPxInput.value = totalPixels; 
+            
+            let startInp = document.getElementById('seg-start-px');
+            let endInp = document.getElementById('seg-end-px');
+            if (startInp) startInp.value = 0; 
+            if (endInp) endInp.value = totalPixels; 
+            
             userSegments = [];
-            btnAddSegment.innerText = "Hinzufügen";
+            if (btnAddSegment) btnAddSegment.innerText = "Hinzufügen";
             
             updateStreamUI(); 
             handleFormatChange();
 
-            btnEncode.disabled = false; btnBuilder.disabled = false; btnSave.disabled = true; btnAnalysis.disabled = false;
+            if (btnEncode) btnEncode.disabled = false; 
+            if (btnBuilder) btnBuilder.disabled = false; 
+            if (btnSave) btnSave.disabled = true; 
+            if (btnAnalysis) btnAnalysis.disabled = false;
+
             let mseDisp = document.getElementById('avg-mse-display');
             if(mseDisp) mseDisp.style.display = 'none';
-            document.getElementById('status-text').innerText = "Bild geladen.";
+            
+            let statusText = document.getElementById('status-text');
+            if(statusText) statusText.innerText = "Bild geladen.";
+            
             setZoomMode('fit', currentImgW, currentImgH);
         }
         img.src = ev.target.result;
@@ -195,17 +257,31 @@ fileImg.addEventListener('change', (e) => {
 
 // --- SEGMENT STREAM LOGIK ---
 function triggerCanvasHighlight() {
-    let sPx = parseInt(segStartPxInput.value) || 0;
-    let ePx = parseInt(segEndPxInput.value) || totalPixels;
+    if (!originalImageData || !currentImgW) return;
+    
+    let startInput = document.getElementById('seg-start-px');
+    let endInput = document.getElementById('seg-end-px');
+    
+    let sPx = startInput ? (parseInt(startInput.value) || 0) : 0;
+    let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
+    
     redrawCanvasWithHighlight(originalImageData, decodedImageData, currentImgW, currentImgH, sPx, ePx, totalPixels);
 }
 
-btnAddSegment.addEventListener('click', () => {
+if (btnAddSegment) btnAddSegment.addEventListener('click', () => {
     if (!totalPixels) return;
-    let startPx = parseInt(segStartPxInput.value) || 0;
-    let endPx = parseInt(segEndPxInput.value) || totalPixels;
-    let step = parseInt(segStepInput.value) || 4;
-    let bank = parseInt(segBankInput.value) || 0;
+    let startInput = document.getElementById('seg-start-px');
+    let endInput = document.getElementById('seg-end-px');
+    
+    let startPx = startInput ? (parseInt(startInput.value) || 0) : 0;
+    let endPx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
+    
+    let step = { 
+        r: segStepR ? (parseInt(segStepR.value) || 4) : 4, 
+        g: segStepG ? (parseInt(segStepG.value) || 4) : 4, 
+        b: segStepB ? (parseInt(segStepB.value) || 4) : 4 
+    };
+    let bank = segBankInput ? (parseInt(segBankInput.value) || 0) : 0;
 
     if (endPx <= 0 || endPx > totalPixels) { alert("Ungültiges End-Pixel!"); return; }
 
@@ -232,8 +308,8 @@ btnAddSegment.addEventListener('click', () => {
     }
 
     let lastEnd = userSegments.length > 0 ? userSegments[userSegments.length - 1].absEnd : 0;
-    segStartPxInput.value = lastEnd;
-    segEndPxInput.value = totalPixels;
+    if (startInput) startInput.value = lastEnd;
+    if (endInput) endInput.value = totalPixels;
     
     updateStreamUI(); 
     triggerCanvasHighlight();
@@ -243,13 +319,20 @@ window.editSegment = function(idx) {
     editingSegmentIndex = idx;
     let s = userSegments[idx];
     let prevEnd = idx === 0 ? 0 : userSegments[idx - 1].absEnd;
-    segStartPxInput.value = prevEnd;
-    segEndPxInput.value = s.absEnd;
-    segBankInput.value = s.bank;
-    segStepInput.value = s.step;
-    palBankSelect.value = s.bank;
+    
+    let startInput = document.getElementById('seg-start-px');
+    let endInput = document.getElementById('seg-end-px');
+    if (startInput) startInput.value = prevEnd;
+    if (endInput) endInput.value = s.absEnd;
+    if (segBankInput) segBankInput.value = s.bank;
+    
+    if (segStepR) segStepR.value = s.step.r; 
+    if (segStepG) segStepG.value = s.step.g; 
+    if (segStepB) segStepB.value = s.step.b;
+    
+    if (palBankSelect) palBankSelect.value = s.bank;
     updateBankPickers();
-    btnAddSegment.innerText = "Aktualisieren";
+    if (btnAddSegment) btnAddSegment.innerText = "Aktualisieren";
     triggerCanvasHighlight();
 };
 
@@ -261,28 +344,36 @@ window.deleteSegment = function(e, idx) {
         userSegments[i].waitPixels = userSegments[i].absEnd - pEnd;
     }
     editingSegmentIndex = -1;
-    btnAddSegment.innerText = "Hinzufügen";
+    if (btnAddSegment) btnAddSegment.innerText = "Hinzufügen";
     
     let lastEnd = userSegments.length > 0 ? userSegments[userSegments.length - 1].absEnd : 0;
-    segStartPxInput.value = lastEnd;
-    segEndPxInput.value = totalPixels;
+    let startInput = document.getElementById('seg-start-px');
+    let endInput = document.getElementById('seg-end-px');
+    if (startInput) startInput.value = lastEnd;
+    if (endInput) endInput.value = totalPixels;
+    
     updateStreamUI(); 
     triggerCanvasHighlight();
 };
 
-document.getElementById('btn-clear-segments').addEventListener('click', () => {
+let btnClearSegs = document.getElementById('btn-clear-segments');
+if (btnClearSegs) btnClearSegs.addEventListener('click', () => {
     userSegments = []; 
     editingSegmentIndex = -1;
-    btnAddSegment.innerText = "Hinzufügen";
-    segStartPxInput.value = 0; 
-    segEndPxInput.value = totalPixels;
+    if (btnAddSegment) btnAddSegment.innerText = "Hinzufügen";
+    let startInput = document.getElementById('seg-start-px');
+    let endInput = document.getElementById('seg-end-px');
+    if (startInput) startInput.value = 0; 
+    if (endInput) endInput.value = totalPixels;
     updateStreamUI(); 
     triggerCanvasHighlight();
 });
 
-segEndPxInput.addEventListener('input', triggerCanvasHighlight);
+let segEndInputEl = document.getElementById('seg-end-px');
+if (segEndInputEl) segEndInputEl.addEventListener('input', triggerCanvasHighlight);
 
 function updateStreamUI() {
+    if (!streamListDiv) return;
     if (userSegments.length === 0) { 
         streamListDiv.innerHTML = "<i>Keine Segmente.</i>"; 
         return; 
@@ -291,7 +382,7 @@ function updateStreamUI() {
     userSegments.forEach((s, idx) => {
         let prevEnd = idx === 0 ? 0 : userSegments[idx - 1].absEnd;
         html += `<div style="display:flex; justify-content:space-between; margin-bottom:2px; background:#eee; padding:2px 4px;">
-            <span>[#${idx + 1}] ${prevEnd}&rarr;${s.absEnd} (B:${s.bank}, S:${s.step})</span>
+            <span>[#${idx + 1}] ${prevEnd}&rarr;${s.absEnd} (B:${s.bank}, S:[${s.step.r},${s.step.g},${s.step.b}])</span>
             <span><a href="#" onclick="editSegment(${idx})">✏️</a> <a href="#" onclick="deleteSegment(event, ${idx})">❌</a></span>
         </div>`;
     });
@@ -299,50 +390,62 @@ function updateStreamUI() {
 }
 
 // --- KERN-ENCODER & DECODER ---
-btnEncode.addEventListener('click', async () => {
+if (btnEncode) btnEncode.addEventListener('click', async () => {
     if (!currentImgW || !currentImgH) { alert("Bitte lade zuerst ein Bild!"); return; }
     
-    currentFormat = formatSelect.value;
-    document.getElementById('decoded-label').innerText = `DEKODIERT (${currentFormat})`;
-    
-    btnLoad.disabled = true; btnEncode.disabled = true; btnSave.disabled = true; 
-    btnBuilder.disabled = true; btnAnalysis.disabled = true;
-
+    currentFormat = formatSelect ? formatSelect.value : "HAM12";
     let config = HAM_CONFIGS[currentFormat];
-    let strategy = encodeStrategySelect.value;
-    let metric = encodeMetricSelect.value;
+    
+    if (config && config.isPaletted && globalPaletteRAM[0] === 0 && globalPaletteRAM[1] === 0 && globalPaletteRAM[2] === 0) {
+        globalPaletteRAM[0] = originalImageData.data[0];
+        globalPaletteRAM[1] = originalImageData.data[1];
+        globalPaletteRAM[2] = originalImageData.data[2];
+        updateBankPickers();
+    }
+
+    let decLabel = document.getElementById('decoded-label');
+    if (decLabel) decLabel.innerText = `DEKODIERT (${currentFormat})`;
+    
+    btnLoad.disabled = true; btnEncode.disabled = true; if(btnSave) btnSave.disabled = true; 
+    if(btnBuilder) btnBuilder.disabled = true; if(btnAnalysis) btnAnalysis.disabled = true;
+
+    let strategy = encodeStrategySelect ? encodeStrategySelect.value : "both";
+    let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv";
     let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
     
     let startTime = Date.now();
 
     let encodeResult = await encodeStream(
         originalImageData.data, currentImgW, currentImgH, currentFormat, 
-        userSegments, globalPaletteRAM, strategy, metric, max_depth, 
+        getEffectiveSegments(), globalPaletteRAM, strategy, metric, max_depth, 
         (current, total) => updateProgress("[1/2] Encode", current, total, startTime)
     );
 
     latestPackedData = encodeResult.packedData;
-    let commandArray = encodeResult.commandArray;
+    latestCommandArray = encodeResult.commandArray;
     let stats = encodeResult.stats;
 
-    let decodedPixels = decodeStream(commandArray, currentImgW, currentImgH, globalPaletteRAM, userSegments, config);
+    let decodedPixels = decodeStream(latestCommandArray, currentImgW, currentImgH, globalPaletteRAM, getEffectiveSegments(), config);
     
     ctxDecoded.putImageData(new ImageData(decodedPixels, currentImgW, currentImgH), 0, 0);
     decodedImageData = ctxDecoded.getImageData(0, 0, currentImgW, currentImgH);
     
     updateStatusTextDimAndColors(countUniqueColors(decodedPixels), stats);
-    document.getElementById('progress').value = 100; 
-    document.getElementById('status-text').innerText = `Fertig. Modus: ${currentFormat}`;
+    let progressEl = document.getElementById('progress');
+    if(progressEl) progressEl.value = 100; 
+    let statusEl = document.getElementById('status-text');
+    if(statusEl) statusEl.innerText = `Fertig. Modus: ${currentFormat}`;
     triggerCanvasHighlight();
 
-    btnLoad.disabled = false; btnEncode.disabled = false; btnSave.disabled = false; 
-    btnBuilder.disabled = false; btnAnalysis.disabled = false;
+    btnLoad.disabled = false; btnEncode.disabled = false; if(btnSave) btnSave.disabled = false; 
+    if(btnBuilder) btnBuilder.disabled = false; if(btnAnalysis) btnAnalysis.disabled = false;
 });
 
 // --- ANALYSIS MODAL ---
 window.splitAtPixel = function(pixelIdx) {
     let targetPx = Math.max(0, pixelIdx - 1);
-    document.getElementById('analysis-modal').style.display = 'none';
+    let modal = document.getElementById('analysis-modal');
+    if (modal) modal.style.display = 'none';
     
     let start = 0;
     for(let i = 0; i < userSegments.length; i++) {
@@ -353,72 +456,97 @@ window.splitAtPixel = function(pixelIdx) {
     }
     
     editingSegmentIndex = -1;
-    btnAddSegment.innerText = "Hinzufügen";
-    segStartPxInput.value = start;
-    segEndPxInput.value = targetPx;
+    if (btnAddSegment) btnAddSegment.innerText = "Hinzufügen";
+    let startInput = document.getElementById('seg-start-px');
+    let endInput = document.getElementById('seg-end-px');
+    if (startInput) startInput.value = start;
+    if (endInput) endInput.value = targetPx;
     triggerCanvasHighlight();
 }
 window.centerOnCoordinate = function(x, y) { centerOnCoordinate(x, y, currentImgW, currentImgH); }
 
-btnAnalysis.addEventListener('click', () => {
+if (btnAnalysis) btnAnalysis.addEventListener('click', () => {
     if(!latestPackedData || !currentImgW) { alert("Bitte lade und codiere zuerst ein Bild."); return; }
     
-    let sPx = parseInt(segStartPxInput.value) || 0;
-    let ePx = parseInt(segEndPxInput.value) || totalPixels;
+    let startInput = document.getElementById('seg-start-px');
+    let endInput = document.getElementById('seg-end-px');
+    let sPx = startInput ? (parseInt(startInput.value) || 0) : 0;
+    let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
     
     const stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, sPx, ePx);
     
-    document.getElementById('ana-seg-start').innerText = sPx;
-    document.getElementById('ana-seg-end').innerText = ePx;
+    let anaStart = document.getElementById('ana-seg-start');
+    if (anaStart) anaStart.innerText = sPx;
+    let anaEnd = document.getElementById('ana-seg-end');
+    if (anaEnd) anaEnd.innerText = ePx;
     
     let avgMseDisplay = document.getElementById('avg-mse-display');
-    avgMseDisplay.innerText = `⌀ RGB: ${stats.global.avgRgb.toFixed(2)} | ⌀ YUV: ${stats.global.avgYuv.toFixed(2)}`;
-    avgMseDisplay.style.display = 'inline';
+    if (avgMseDisplay) {
+        avgMseDisplay.innerText = `⌀ RGB: ${stats.global.avgRgb.toFixed(2)} | ⌀ YUV: ${stats.global.avgYuv.toFixed(2)}`;
+        avgMseDisplay.style.display = 'inline';
+    }
     
-    document.getElementById('ana-seg-avg').innerHTML = `<b>⌀ RGB MSE:</b> ${stats.segment.avgRgb.toFixed(2)} &nbsp;|&nbsp; <b>⌀ YUV MSE:</b> ${stats.segment.avgYuv.toFixed(2)}`;
+    let anaSegAvg = document.getElementById('ana-seg-avg');
+    if (anaSegAvg) anaSegAvg.innerHTML = `<b>⌀ RGB MSE:</b> ${stats.segment.avgRgb.toFixed(2)} &nbsp;|&nbsp; <b>⌀ YUV MSE:</b> ${stats.segment.avgYuv.toFixed(2)}`;
 
     let renderTop5 = (list) => list.map((e, i) => `<div>#${i + 1}: Px ${e.pixelIdx} (${e.details}) | MSE: ${Math.round(e.mse)} 
         | <a href="#" onclick="centerOnCoordinate(${e.x}, ${e.y})">Zentrieren</a>
         | <a href="#" style="color:red;" onclick="splitAtPixel(${e.pixelIdx})">Trennen</a></div>`).join('');
 
-    document.getElementById('analysis-seg-top5').innerHTML = renderTop5(stats.segment.top5) || "<i>Keine Fehler.</i>";
-    document.getElementById('analysis-top5').innerHTML = renderTop5(stats.global.top5);
+    let anaSegTop5 = document.getElementById('analysis-seg-top5');
+    if (anaSegTop5) anaSegTop5.innerHTML = renderTop5(stats.segment.top5) || "<i>Keine Fehler.</i>";
+    
+    let anaTop5 = document.getElementById('analysis-top5');
+    if (anaTop5) anaTop5.innerHTML = renderTop5(stats.global.top5);
 
     let tableHtml = "";
     for(let i = 0; i <= errorBins.length; i++) {
         let label = i === errorBins.length ? `> ${errorBins[errorBins.length - 1]}` : (i === 0 ? `0` : `${errorBins[i - 1] + 1} - ${errorBins[i]}`);
         tableHtml += `<tr><td>${label}</td><td>${stats.histogram.rgbBins[i]}</td><td>${((stats.histogram.rgbBins[i] / totalPixels) * 100).toFixed(2)}%</td><td>${stats.histogram.yuvBins[i]}</td><td>${((stats.histogram.yuvBins[i] / totalPixels) * 100).toFixed(2)}%</td></tr>`;
     }
-    document.getElementById('analysis-histogram-body').innerHTML = tableHtml;
+    let histBody = document.getElementById('analysis-histogram-body');
+    if (histBody) histBody.innerHTML = tableHtml;
 
-    document.getElementById('analysis-modal').style.display = 'block';
+    let modal = document.getElementById('analysis-modal');
+    if (modal) modal.style.display = 'block';
 });
 
-document.getElementById('btn-analysis-close').addEventListener('click', () => {
-    document.getElementById('analysis-modal').style.display = 'none';
+let btnAnaClose = document.getElementById('btn-analysis-close');
+if (btnAnaClose) btnAnaClose.addEventListener('click', () => {
+    let modal = document.getElementById('analysis-modal');
+    if (modal) modal.style.display = 'none';
 });
 
 // --- BUILDER MODAL LOGIK ---
-btnBuilder.addEventListener('click', () => {
+if (btnBuilder) btnBuilder.addEventListener('click', () => {
     if (!currentImgW) { alert("Bitte lade zuerst ein Bild!"); return; }
-    let f = formatSelect.value;
+    let f = formatSelect ? formatSelect.value : "HAM12";
     let config = HAM_CONFIGS[f];
-    if (!config.isPaletted) {
+    if (!config || !config.isPaletted) {
         alert("Der Paletten-Builder ist nur für palettenbasierte Formate verfügbar!");
         return;
     }
     
-    document.getElementById('b-fmt').innerText = f;
-    document.getElementById('builder-modal').style.display = 'block';
+    let bFmt = document.getElementById('b-fmt');
+    if (bFmt) bFmt.innerText = f;
+    
+    let bankIdx = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
+    currentBuilderSlot = bankIdx * config.slotsPerBank;
+
+    let modal = document.getElementById('builder-modal');
+    if (modal) modal.style.display = 'block';
     refreshBuilderUI();
 });
 
 function refreshBuilderUI() {
-    let bankIdx = parseInt(palBankSelect.value) || 0;
-    document.getElementById('b-bank-title').innerText = `Bank ${bankIdx}`;
+    let bankIdx = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
+    let bankTitle = document.getElementById('b-bank-title');
+    if (bankTitle) bankTitle.innerText = `Bank ${bankIdx}`;
     
-    let f = formatSelect.value;
+    let f = formatSelect ? formatSelect.value : "HAM12";
     let config = HAM_CONFIGS[f];
+    if (!config) return;
+    
     let slotsPerBank = config.slotsPerBank;
     let startSlot = bankIdx * slotsPerBank;
     
@@ -435,12 +563,18 @@ function refreshBuilderUI() {
         slotDiv.style.width = '24px';
         slotDiv.style.height = '24px';
         slotDiv.style.backgroundColor = rgbToHex(r, g, b);
-        slotDiv.style.border = '1px solid #000';
+        
+        if (slotIdx === currentBuilderSlot) {
+            slotDiv.style.border = '3px solid #007bff';
+        } else {
+            slotDiv.style.border = '1px solid #000';
+        }
+        
         slotDiv.style.cursor = 'pointer';
         slotDiv.title = `Slot ${slotIdx}`;
         slotDiv.addEventListener('click', () => {
             currentBuilderSlot = slotIdx;
-            runBuilderAnalysis();
+            refreshBuilderUI();
         });
         previewContainer.appendChild(slotDiv);
     }
@@ -448,9 +582,16 @@ function refreshBuilderUI() {
 }
 
 function runBuilderAnalysis() {
-    let sPx = parseInt(segStartPxInput.value) || 0;
-    let ePx = parseInt(segEndPxInput.value) || totalPixels;
-    let stepVal = parseInt(hamStepInput.value) || 4;
+    let startInput = document.getElementById('seg-start-px');
+    let endInput = document.getElementById('seg-end-px');
+    let sPx = startInput ? (parseInt(startInput.value) || 0) : 0;
+    let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
+    
+    let stepVal = { 
+        r: hamStepR ? (parseInt(hamStepR.value) || 4) : 4, 
+        g: hamStepG ? (parseInt(hamStepG.value) || 4) : 4, 
+        b: hamStepB ? (parseInt(hamStepB.value) || 4) : 4 
+    };
 
     let results = simulateBuilderEncode(
         sPx, ePx, originalImageData.data, currentImgW, 
@@ -458,19 +599,28 @@ function runBuilderAnalysis() {
         currentBuilderSlot, stepVal, currentFormat
     );
 
-    document.getElementById('builder-mse-list').innerHTML = results.topMse.map((e, idx) => 
-        `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <span>#${idx + 1}: <span style="display:inline-block;width:12px;height:12px;background:${e.hex};border:1px solid #000;"></span> ${e.hex} (MSE: ${Math.round(e.val)})</span>
-            <button onclick="assignColorToSlot('${e.hex}')">Übernehmen</button>
-         </div>`).join('') || "<i>Keine Fehler.</i>";
+    let mseListEl = document.getElementById('builder-mse-list');
+    if (mseListEl) {
+        mseListEl.innerHTML = results.topMse.map((e, idx) => 
+            `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                <span>#${idx + 1}: <span style="display:inline-block;width:12px;height:12px;background:${e.hex};border:1px solid #000;"></span> ${e.hex} (MSE: ${Math.round(e.val)})</span>
+                <button onclick="assignColorToSlot('${e.hex}')">Übernehmen</button>
+             </div>`).join('') || "<i>Keine Fehler.</i>";
+    }
 
-    document.getElementById('builder-hist-list').innerHTML = results.topHist.map((e, idx) => 
-        `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <span>#${idx + 1}: <span style="display:inline-block;width:12px;height:12px;background:${e.hex};border:1px solid #000;"></span> ${e.hex} (${e.count}x)</span>
-            <button onclick="assignColorToSlot('${e.hex}')">Übernehmen</button>
-         </div>`).join('') || "<i>Keine Farben.</i>";
+    let histListEl = document.getElementById('builder-hist-list');
+    if (histListEl) {
+        histListEl.innerHTML = results.topHist.map((e, idx) => 
+            `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                <span>#${idx + 1}: <span style="display:inline-block;width:12px;height:12px;background:${e.hex};border:1px solid #000;"></span> ${e.hex} (${e.count}x)</span>
+                <button onclick="assignColorToSlot('${e.hex}')">Übernehmen</button>
+             </div>`).join('') || "<i>Keine Farben.</i>";
+    }
     
-    document.getElementById('builder-status').innerText = `Analysiert Slot ${currentBuilderSlot} (Segment Px ${sPx} bis ${ePx})`;
+    let statusEl = document.getElementById('builder-status');
+    if (statusEl) {
+        statusEl.innerText = `Analysiert Slot ${currentBuilderSlot} (Segment Px ${sPx} bis ${ePx})`;
+    }
 }
 
 window.assignColorToSlot = function(hex) {
@@ -478,119 +628,274 @@ window.assignColorToSlot = function(hex) {
     globalPaletteRAM[currentBuilderSlot * 3] = r;
     globalPaletteRAM[currentBuilderSlot * 3 + 1] = g;
     globalPaletteRAM[currentBuilderSlot * 3 + 2] = b;
+    
+    let bankIdx = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
+    let config = HAM_CONFIGS[currentFormat];
+    let maxSlot = (bankIdx * config.slotsPerBank) + config.slotsPerBank - 1;
+    if (currentBuilderSlot < maxSlot) {
+        currentBuilderSlot++;
+    }
+    
     updateBankPickers();
     refreshBuilderUI();
+    refreshDecodedImage();
 }
 
-document.getElementById('btn-builder-cancel').addEventListener('click', () => {
-    document.getElementById('builder-modal').style.display = 'none';
+let btnBuildCancel = document.getElementById('btn-builder-cancel');
+if (btnBuildCancel) btnBuildCancel.addEventListener('click', () => {
+    let modal = document.getElementById('builder-modal');
+    if (modal) modal.style.display = 'none';
 });
 
-document.getElementById('btn-builder-auto').addEventListener('click', () => {
+// CLOSED-LOOP ITERATIVE PALETTE OPTIMIZER
+let btnBuildAuto = document.getElementById('btn-builder-auto');
+if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     if (!currentImgW) { alert("Bitte lade zuerst ein Bild!"); return; }
     
-    let sPx = parseInt(segStartPxInput.value) || 0;
-    let ePx = parseInt(segEndPxInput.value) || totalPixels;
-    let stepVal = parseInt(hamStepInput.value) || 4;
-
-    let bankIdx = parseInt(palBankSelect.value) || 0;
+    let startInput = document.getElementById('seg-start-px');
+    let endInput = document.getElementById('seg-end-px');
+    let sPx = startInput ? (parseInt(startInput.value) || 0) : 0;
+    let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
+    
+    let bankIdx = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
     let config = HAM_CONFIGS[currentFormat];
     let slotsPerBank = config.slotsPerBank;
     let startSlot = bankIdx * slotsPerBank;
 
-    document.getElementById('builder-status').innerText = "Fülle Bank automatisch... Bitte warten!";
-
-    setTimeout(() => {
-        for (let i = 0; i < slotsPerBank; i++) {
-            let currentSlot = startSlot + i;
-            let results = simulateBuilderEncode(
-                sPx, ePx, originalImageData.data, currentImgW, 
-                Array.from({length: 256}, (_, idx) => [globalPaletteRAM[idx * 3], globalPaletteRAM[idx * 3 + 1], globalPaletteRAM[idx * 3 + 2]]), 
-                currentSlot, stepVal, currentFormat
-            );
-
-            let bestHex = "#000000";
-            if (results.topMse.length > 0) bestHex = results.topMse[0].hex;
-            else if (results.topHist.length > 0) bestHex = results.topHist[0].hex;
-
-            let [r, g, b] = hexToRgb(bestHex);
-            globalPaletteRAM[currentSlot * 3] = r;
-            globalPaletteRAM[currentSlot * 3 + 1] = g;
-            globalPaletteRAM[currentSlot * 3 + 2] = b;
-        }
-        
-        updateBankPickers();
-        refreshBuilderUI();
-        document.getElementById('builder-status').innerText = `Bank ${bankIdx} erfolgreich optimiert!`;
-    }, 50);
-});
-
-// --- AUTO SCHRITTWEITEN LOGIK ---
-btnAutoStep.addEventListener('click', () => {
-    if (!currentImgW) { alert("Bitte lade zuerst ein Bild!"); return; }
+    let statusEl = document.getElementById('builder-status');
     
-    let minStep = parseInt(autoMinInput.value) || 1;
-    let maxStep = parseInt(autoMaxInput.value) || 16;
-    if (minStep > maxStep) { alert("Min muss kleiner/gleich Max sein!"); return; }
+    for (let i = 0; i < slotsPerBank; i++) {
+        let currentSlot = startSlot + i;
+        globalPaletteRAM[currentSlot * 3] = 0;
+        globalPaletteRAM[currentSlot * 3 + 1] = 0;
+        globalPaletteRAM[currentSlot * 3 + 2] = 0;
+    }
+    updateBankPickers();
+    refreshBuilderUI();
 
-    document.getElementById('auto-step-modal').style.display = 'block';
-    document.getElementById('auto-step-status').innerText = `Berechne Schrittweiten von ${minStep} bis ${maxStep}...`;
-    let tbody = document.getElementById('auto-step-body');
-    tbody.innerHTML = "";
-
-    let sPx = parseInt(segStartPxInput.value) || 0;
-    let ePx = parseInt(segEndPxInput.value) || totalPixels;
-    
-    let strategy = encodeStrategySelect.value;
-    let metric = encodeMetricSelect.value;
+    let strategy = encodeStrategySelect ? encodeStrategySelect.value : 'both';
+    let metric = encodeMetricSelect ? encodeMetricSelect.value : 'yuv';
     let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
 
-    setTimeout(async () => {
-        let results = [];
-        let pal = Array.from({length: 256}, (_, i) => [globalPaletteRAM[i * 3], globalPaletteRAM[i * 3 + 1], globalPaletteRAM[i * 3 + 2]]);
+    for (let i = 0; i < slotsPerBank; i++) {
+        let currentSlot = startSlot + i;
+        if (statusEl) statusEl.innerText = `Optimiere Slot ${currentSlot} (${i + 1}/${slotsPerBank}) durch echten Codec...`;
+        await new Promise(r => setTimeout(r, 20)); 
 
-        for (let s = minStep; s <= maxStep; s++) {
-            let res = await runSimulationWithStrategy(sPx, ePx, originalImageData.data, currentImgW, pal, s, strategy, metric, max_depth, currentFormat);
-            results.push({ step: s, ...res });
+        let encodeResult = await encodeStream(
+            originalImageData.data, currentImgW, currentImgH, currentFormat, 
+            getEffectiveSegments(), globalPaletteRAM, strategy, metric, max_depth, 
+            null, sPx, ePx
+        );
+        
+        let decodedPixels = decodeStream(encodeResult.commandArray, currentImgW, currentImgH, globalPaletteRAM, getEffectiveSegments(), config);
+        
+        ctxDecoded.putImageData(new ImageData(decodedPixels, currentImgW, currentImgH), 0, 0);
+        triggerCanvasHighlight();
+        await new Promise(r => setTimeout(r, 10));
+
+        let errorMap = new Map();
+        let histMap = new Map();
+        let end = Math.min(totalPixels, ePx);
+
+        for (let p = sPx; p < end; p++) {
+            let idx = p * 4;
+            let r1 = originalImageData.data[idx], g1 = originalImageData.data[idx+1], b1 = originalImageData.data[idx+2];
+            let r2 = decodedPixels[idx], g2 = decodedPixels[idx+1], b2 = decodedPixels[idx+2];
+            
+            let hex = rgbToHex(r1, g1, b1);
+            histMap.set(hex, (histMap.get(hex) || 0) + 1);
+            errorMap.set(hex, (errorMap.get(hex) || 0) + get_rgb_dist(r1, g1, b1, r2, g2, b2));
         }
 
-        results.sort((a, b) => a.avgYuv - b.avgYuv);
+        let worstHex = "#000000";
+        let maxScore = -1;
 
-        results.forEach(r => {
-            let tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td>± ${r.step}</td>
-                <td>${r.avgRgb.toFixed(2)}</td>
-                <td>${r.avgYuv.toFixed(2)}</td>
-                <td>${Math.round(r.maxYuv)}</td>
-                <td><button onclick="applyAutoStep(${r.step})">Anwenden</button></td>
-            `;
-            tbody.appendChild(tr);
-        });
+        for (let [hex, count] of histMap.entries()) {
+            let avgErr = errorMap.get(hex) / count;
+            let totalError = errorMap.get(hex); 
+            if (avgErr > 2 && totalError > maxScore) {
+                maxScore = totalError;
+                worstHex = hex;
+            }
+        }
 
-        document.getElementById('auto-step-recommendation').innerText = `🏆 Empfehlung: Schrittweite ±${results[0].step} (YUV: ${results[0].avgYuv.toFixed(2)})`;
-        document.getElementById('auto-step-status').innerText = "Berechnung abgeschlossen.";
-    }, 50);
+        if (maxScore === -1 && histMap.size > 0) {
+            let maxCount = -1;
+            for (let [hex, count] of histMap.entries()) {
+                if (count > maxCount) { maxCount = count; worstHex = hex; }
+            }
+        }
+
+        let [wr, wg, wb] = hexToRgb(worstHex);
+        globalPaletteRAM[currentSlot * 3] = wr;
+        globalPaletteRAM[currentSlot * 3 + 1] = wg;
+        globalPaletteRAM[currentSlot * 3 + 2] = wb;
+        
+        currentBuilderSlot = currentSlot;
+        updateBankPickers();
+        refreshBuilderUI();
+    }
+
+    if (statusEl) statusEl.innerText = "Erstelle finales Bild...";
+    await new Promise(r => setTimeout(r, 20));
+
+    let finalEncode = await encodeStream(
+        originalImageData.data, currentImgW, currentImgH, currentFormat, 
+        getEffectiveSegments(), globalPaletteRAM, strategy, metric, max_depth, 
+        null, 0, totalPixels
+    );
+    
+    latestCommandArray = finalEncode.commandArray;
+    refreshDecodedImage();
+    
+    if (statusEl) statusEl.innerText = `Bank ${bankIdx} erfolgreich iterativ optimiert!`;
 });
 
-window.applyAutoStep = function(stepVal) {
-    hamStepInput.value = stepVal;
-    segStepInput.value = stepVal;
+// --- AUTO SCHRITTWEITEN LOGIK (KOORDINATENABSTIEG R, G, B) ---
+if (btnAutoStep) btnAutoStep.addEventListener('click', async () => {
+    if (!currentImgW) { alert("Bitte lade zuerst ein Bild!"); return; }
+    
+    let minInput = document.getElementById('auto-min-step');
+    let maxInput = document.getElementById('auto-max-step');
+    let minStep = minInput ? (parseInt(minInput.value) || 1) : 1;
+    let maxStep = maxInput ? (parseInt(maxInput.value) || 16) : 16;
+
+    if (minStep > maxStep) { alert("Min muss kleiner/gleich Max sein!"); return; }
+
+    let modal = document.getElementById('auto-step-modal');
+    if (modal) modal.style.display = 'block';
+    
+    let statusEl = document.getElementById('auto-step-status');
+    let tbody = document.getElementById('auto-step-body');
+    if (tbody) tbody.innerHTML = "";
+    
+    let recEl = document.getElementById('auto-step-recommendation');
+    if (recEl) recEl.innerText = "";
+
+    let startInput = document.getElementById('seg-start-px');
+    let endInput = document.getElementById('seg-end-px');
+    let sPx = startInput ? (parseInt(startInput.value) || 0) : 0;
+    let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
+    
+    let strategy = encodeStrategySelect ? encodeStrategySelect.value : 'both';
+    let metric = encodeMetricSelect ? encodeMetricSelect.value : 'yuv';
+    let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
+
+    let pal = Array.from({length: 256}, (_, i) => [globalPaletteRAM[i * 3], globalPaletteRAM[i * 3 + 1], globalPaletteRAM[i * 3 + 2]]);
+
+    async function evaluateStep(r, g, b) {
+        return await runSimulationWithStrategy(sPx, ePx, originalImageData.data, currentImgW, pal, {r, g, b}, strategy, metric, max_depth, currentFormat);
+    }
+
+    let bestUniformYuv = Infinity;
+    let bestStep = { r: minStep, g: minStep, b: minStep };
+    let initialStats = null;
+
+    for (let s = minStep; s <= maxStep; s++) {
+        if (statusEl) statusEl.innerText = `Phase 1: Suche einheitliche Schrittweite ${s} von ${maxStep}...`;
+        await new Promise(res => setTimeout(res, 10));
+
+        let res = await evaluateStep(s, s, s);
+        if (res.avgYuv < bestUniformYuv) {
+            bestUniformYuv = res.avgYuv;
+            bestStep = { r: s, g: s, b: s };
+            initialStats = res;
+        }
+    }
+
+    if (tbody && initialStats) {
+        tbody.innerHTML += `<tr>
+            <td>Basis: [${bestStep.r}, ${bestStep.g}, ${bestStep.b}]</td>
+            <td>${initialStats.avgRgb.toFixed(2)}</td>
+            <td>${initialStats.avgYuv.toFixed(2)}</td>
+            <td>${Math.round(initialStats.maxYuv)}</td>
+            <td><button onclick="applyAutoStep(${bestStep.r}, ${bestStep.g}, ${bestStep.b})">Anwenden</button></td>
+        </tr>`;
+    }
+
+    let channels = ['r', 'g', 'b'];
+    let bestYuv = bestUniformYuv;
+    let finalStats = initialStats;
+
+    for (let ch of channels) {
+        let improved = true;
+        while (improved) {
+            improved = false;
+            let currentVal = bestStep[ch];
+
+            if (statusEl) statusEl.innerText = `Phase 2: Optimiere Kanal [${ch.toUpperCase()}] um ${currentVal}...`;
+            await new Promise(res => setTimeout(res, 10));
+
+            if (currentVal > 1) {
+                let testMinus = { ...bestStep };
+                testMinus[ch] = currentVal - 1;
+                let resMinus = await evaluateStep(testMinus.r, testMinus.g, testMinus.b);
+                if (resMinus.avgYuv < bestYuv) {
+                    bestYuv = resMinus.avgYuv;
+                    bestStep = testMinus;
+                    finalStats = resMinus;
+                    improved = true;
+                    continue;
+                }
+            }
+
+            if (!improved && currentVal < 128) {
+                let testPlus = { ...bestStep };
+                testPlus[ch] = currentVal + 1;
+                let resPlus = await evaluateStep(testPlus.r, testPlus.g, testPlus.b);
+                if (resPlus.avgYuv < bestYuv) {
+                    bestYuv = resPlus.avgYuv;
+                    bestStep = testPlus;
+                    finalStats = resPlus;
+                    improved = true;
+                }
+            }
+        }
+    }
+
+    if (tbody && finalStats) {
+        tbody.innerHTML += `<tr style="background: rgba(40,167,69,0.2);">
+            <td><strong>Optimal: [${bestStep.r}, ${bestStep.g}, ${bestStep.b}]</strong></td>
+            <td>${finalStats.avgRgb.toFixed(2)}</td>
+            <td>${finalStats.avgYuv.toFixed(2)}</td>
+            <td>${Math.round(finalStats.maxYuv)}</td>
+            <td><button onclick="applyAutoStep(${bestStep.r}, ${bestStep.g}, ${bestStep.b})">Anwenden</button></td>
+        </tr>`;
+    }
+
+    if (recEl) {
+        recEl.innerText = `🏆 Koordinatenabstieg beendet! Bestes Ergebnis: RGB [${bestStep.r}, ${bestStep.g}, ${bestStep.b}] (YUV: ${bestYuv.toFixed(2)})`;
+    }
+    if (statusEl) statusEl.innerText = "Berechnung abgeschlossen.";
+});
+
+window.applyAutoStep = function(r, g, b) {
+    if (hamStepR) hamStepR.value = r; 
+    if (hamStepG) hamStepG.value = g; 
+    if (hamStepB) hamStepB.value = b;
+    
+    if (segStepR) segStepR.value = r; 
+    if (segStepG) segStepG.value = g; 
+    if (segStepB) segStepB.value = b;
     
     if (editingSegmentIndex >= 0) {
-        userSegments[editingSegmentIndex].step = stepVal;
+        userSegments[editingSegmentIndex].step = { r, g, b };
         updateStreamUI();
     }
     
-    document.getElementById('auto-step-modal').style.display = 'none';
+    let modal = document.getElementById('auto-step-modal');
+    if (modal) modal.style.display = 'none';
 };
 
-document.getElementById('btn-auto-step-close').addEventListener('click', () => {
-    document.getElementById('auto-step-modal').style.display = 'none';
+let btnAutoClose = document.getElementById('btn-auto-step-close');
+if (btnAutoClose) btnAutoClose.addEventListener('click', () => {
+    let modal = document.getElementById('auto-step-modal');
+    if (modal) modal.style.display = 'none';
 });
 
 // --- BILD/DATEN SPEICHERN ---
-btnSave.addEventListener('click', () => {
+if (btnSave) btnSave.addEventListener('click', () => {
     if (!latestPackedData) {
         alert("Es gibt keine kodierten Daten zum Speichern. Bitte zuerst kodieren!");
         return;

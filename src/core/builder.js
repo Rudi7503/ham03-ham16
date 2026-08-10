@@ -1,11 +1,15 @@
 // src/core/builder.js
 import { HAM_CONFIGS } from '../codecs/configs.js';
-import { get_rgb_dist, hexToRgb, rgbToHex } from '../codecs/utils.js';
+import { get_rgb_dist, rgbToHex, hexToRgb, clamp } from '../codecs/utils.js';
 
 export function simulateBuilderEncode(startPx, endPx, imgData, imgW, palette, targetSlot, stepVal, format) {
     let config = HAM_CONFIGS[format] || HAM_CONFIGS["HAM04"];
+    let slotsPerBank = config.slotsPerBank || 8;
+    let bankIdx = Math.floor(targetSlot / slotsPerBank);
+    let startSlot = bankIdx * slotsPerBank;
+
     let histMap = new Map();
-    let mseMap = new Map();
+    let errorMap = new Map();
 
     let totalPixels = imgData.length / 4;
     let end = Math.min(totalPixels, endPx);
@@ -14,28 +18,68 @@ export function simulateBuilderEncode(startPx, endPx, imgData, imgW, palette, ta
         let idx = i * 4;
         let r = imgData[idx], g = imgData[idx + 1], b = imgData[idx + 2];
         let hex = rgbToHex(r, g, b);
-
-        // Zähle Farben für das Histogramm
         histMap.set(hex, (histMap.get(hex) || 0) + 1);
-
-        // Berechne Distanz zur Zielfarbe im anvisierten Slot
-        let sr = palette[targetSlot][0];
-        let sg = palette[targetSlot][1];
-        let sb = palette[targetSlot][2];
-
-        let dist = get_rgb_dist(r, g, b, sr, sg, sb);
-        mseMap.set(hex, (mseMap.get(hex) || 0) + dist);
     }
 
-    let filteredHist = Array.from(histMap.entries())
-        .map(([hex, count]) => ({ hex, count }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 10);
+    let multipliers = config.hasTurbo ? [0, 1] : [0];
 
-    let topMse = Array.from(mseMap.entries())
-        .map(([hex, val]) => ({ hex, val: val / histMap.get(hex) }))
-        .sort((a, b) => b.val - a.val)
-        .slice(0, 10);
+    for (let [hex, count] of histMap.entries()) {
+        let [r, g, b] = hexToRgb(hex);
+        let minErr = Infinity;
 
-    return { topHist: filteredHist, topMse };
+        if (targetSlot === startSlot) {
+            minErr = get_rgb_dist(r, g, b, 0, 0, 0); 
+        } else {
+            for (let s = startSlot; s < targetSlot; s++) {
+                let sr = palette[s][0], sg = palette[s][1], sb = palette[s][2];
+                let d = get_rgb_dist(r, g, b, sr, sg, sb);
+                if (d < minErr) minErr = d;
+
+                if (minErr > 2) {
+                    for (let t of multipliers) {
+                        let m = t ? 4 : 1;
+                        let sr_step = stepVal.r * m;
+                        let sg_step = stepVal.g * m;
+                        let sb_step = stepVal.b * m;
+                        for (let ri = 0; ri < config.channels.r.length; ri++) {
+                            for (let gi = 0; gi < config.channels.g.length; gi++) {
+                                for (let bi = 0; bi < config.channels.b.length; bi++) {
+                                    let nr = clamp(sr + config.channels.r[ri] * sr_step, 0, 255);
+                                    let ng = clamp(sg + config.channels.g[gi] * sg_step, 0, 255);
+                                    let nb = clamp(sb + config.channels.b[bi] * sb_step, 0, 255);
+                                    
+                                    let d2 = get_rgb_dist(r, g, b, nr, ng, nb);
+                                    if (d2 < minErr) minErr = d2;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        errorMap.set(hex, minErr);
+    }
+
+    let filteredHist = [];
+    let topMse = [];
+
+    for (let [hex, count] of histMap.entries()) {
+        let remainingError = errorMap.get(hex);
+        if (remainingError > 2) {
+            filteredHist.push({ hex, count });
+            topMse.push({ hex, val: remainingError * count });
+        }
+    }
+
+    if (topMse.length === 0 && histMap.size > 0) {
+        for (let [hex, count] of histMap.entries()) {
+             topMse.push({ hex, val: errorMap.get(hex) * count });
+             filteredHist.push({ hex, count });
+        }
+    }
+
+    filteredHist.sort((a, b) => b.count - a.count);
+    topMse.sort((a, b) => b.val - a.val);
+
+    return { topHist: filteredHist.slice(0, 10), topMse: topMse.slice(0, 10) };
 }

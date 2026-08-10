@@ -27,7 +27,7 @@
         .btn-zoom { background-color: #6c757d; color: white; } .btn-zoom.active { background-color: #17a2b8; }
         
         #palette-box { display: none; background: #111; padding: 3px 6px; border-radius: 4px; border: 1px solid #444; align-items: center; gap: 6px; }
-        #palette-pickers-container { display: flex; gap: 2px; flex-wrap: wrap; max-width: 150px; max-height: 40px; overflow-y: auto; }
+        #palette-pickers-container { display: flex; gap: 2px; flex-wrap: wrap; max-width: 260px; max-height: 120px; overflow-y: auto; }
         .palette-picker { width: 18px; height: 18px; border: none; cursor: pointer; padding: 0; background: none; }
 
         /* Counter Stream Panel */
@@ -78,14 +78,13 @@
     <div class="divider"></div>
     <div class="control-group">
         <label>Format:</label>
-        <select id="format" style="width: 140px;">
-            <option value="HAM04">HAM04 (4-Bit)</option>
-            <option value="HAM05">HAM05 (5-Bit)</option>
-            <option value="HAM06">HAM06 (6-Bit)</option>
-            <option value="HAM08">HAM08 (8-Bit)</option>
-            <option value="HAM08_PAL">HAM08 (128-F. Pal)</option>
-            <option value="HAM12" selected>HAM12 (12-Bit)</option>
-            <option value="HAM16">HAM16 (16-Bit)</option>
+        <select id="format">
+            <option value="HAM04">HAM04</option>
+            <option value="HAM05">HAM05</option>
+            <option value="HAM06">HAM06</option>
+            <option value="HAM08_PAL">HAM08</option>
+            <option value="HAM12" selected>HAM12</option>
+            <option value="HAM16">HAM16</option>
         </select>
     </div>
 
@@ -108,10 +107,14 @@
         </select>
     </div>
 
-    <!-- Schrittweiten-Steuerung -->
+   <!-- Schrittweiten-Steuerung (Global) -->
     <div class="control-group" id="ham-step-group">
         <label>Schritt:</label>
-        <input type="number" id="ham-step" min="1" max="128" value="4">
+        <div style="display:flex; gap:2px;">
+            <input type="number" id="ham-step-r" min="1" max="128" value="4" style="width:35px; color:#ff6b6b; font-weight:bold;" title="Rot">
+            <input type="number" id="ham-step-g" min="1" max="128" value="4" style="width:35px; color:#28a745; font-weight:bold;" title="Grün">
+            <input type="number" id="ham-step-b" min="1" max="128" value="4" style="width:35px; color:#4dabf7; font-weight:bold;" title="Blau">
+        </div>
         <div style="display:flex; align-items:center; gap:2px; background:#111; padding:2px 4px; border-radius:4px; border:1px solid #444;">
             <label style="font-size:10px;">Min:</label>
             <input type="number" id="auto-min-step" min="1" max="128" value="4" style="width:30px;">
@@ -167,7 +170,11 @@
     </div>
     <div class="control-group" id="seg-step-group">
         <label>Schritt:</label>
-        <input type="number" id="seg-step" value="4" min="1" max="128">
+        <div style="display:flex; gap:2px;">
+            <input type="number" id="seg-step-r" value="4" min="1" max="128" style="width:38px; color:#ff6b6b;" title="Rot">
+            <input type="number" id="seg-step-g" value="4" min="1" max="128" style="width:38px; color:#28a745;" title="Grün">
+            <input type="number" id="seg-step-b" value="4" min="1" max="128" style="width:38px; color:#4dabf7;" title="Blau">
+        </div>
     </div>
     <div class="control-group" id="seg-bank-group">
         <label>Bank:</label>

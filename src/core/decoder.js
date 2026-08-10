@@ -13,7 +13,7 @@ export function decodeStream(commandArray, imgW, imgH, globalPaletteRAM, userSeg
     // Segmente für den Stream normalisieren
     let activeCmds = [...userSegments];
     if (activeCmds.length === 0) {
-        activeCmds.push({ absEnd: totalPixels, waitPixels: totalPixels, bank: 0, step: 4 });
+        activeCmds.push({ absEnd: totalPixels, waitPixels: totalPixels, bank: 0, step: {r:4, g:4, b:4} });
     } else if (activeCmds[activeCmds.length - 1].absEnd < totalPixels) {
         let last = activeCmds[activeCmds.length - 1];
         activeCmds.push({ 
@@ -45,7 +45,7 @@ export function decodeStream(commandArray, imgW, imgH, globalPaletteRAM, userSeg
         if (cmd.isAnchor) {
             if (config.isPaletted) {
                 // Bank-Umschaltung: Berechnet den absoluten Slot im 256er RAM
-                let absoluteSlot = (currentBank * slotsPerBank) + cmd.anchorIdx;
+                let absoluteSlot = (currentBank * slotsPerBank) + (cmd.anchorIdx || 0);
                 let off = absoluteSlot * 3;
                 acc_r = globalPaletteRAM[off];
                 acc_g = globalPaletteRAM[off + 1];
@@ -57,17 +57,24 @@ export function decodeStream(commandArray, imgW, imgH, globalPaletteRAM, userSeg
                 acc_b = cmd.b;
             }
         } else {
-            // Delta-Modulation basierend auf den Kanal-Definitionen der Config
             let multiplier = cmd.isTurbo ? 4 : 1;
-            let s = currentStep * multiplier;
+            let sr = currentStep.r * multiplier;
+            let sg = currentStep.g * multiplier;
+            let sb = currentStep.b * multiplier;
 
-            let dr = config.channels.r[cmd.rIndex];
-            let dg = config.channels.g[cmd.gIndex];
-            let db = config.channels.b[cmd.bIndex];
+            if (cmd.dr !== undefined || cmd.dg !== undefined || cmd.db !== undefined) {
+                acc_r = clamp(acc_r + (cmd.dr || 0) * sr, 0, 255);
+                acc_g = clamp(acc_g + (cmd.dg || 0) * sg, 0, 255);
+                acc_b = clamp(acc_b + (cmd.db || 0) * sb, 0, 255);
+            } else {
+                let dr = config.channels.r[cmd.rIndex || 0] || 0;
+                let dg = config.channels.g[cmd.gIndex || 0] || 0;
+                let db = config.channels.b[cmd.bIndex || 0] || 0;
 
-            acc_r = clamp(acc_r + dr * s, 0, 255);
-            acc_g = clamp(acc_g + dg * s, 0, 255);
-            acc_b = clamp(acc_b + db * s, 0, 255);
+                acc_r = clamp(acc_r + dr * sr, 0, 255);
+                acc_g = clamp(acc_g + dg * sg, 0, 255);
+                acc_b = clamp(acc_b + db * sb, 0, 255);
+            }
         }
 
         let outIdx = i * 4;
