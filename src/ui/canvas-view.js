@@ -12,7 +12,9 @@ export function getScaleFactor(mode, imgW, imgH, viewportElement) {
     if (mode === '1x') return 1.0;
     if (mode === '2x') return 2.0;
     if (mode === '4x') return 4.0;
-    return 8.0;
+    if (mode === '8x') return 8.0;
+    if (mode === '16x') return 16.0;
+    return 32.0;
 }
 
 export function updateView(imgW, imgH) {
@@ -41,7 +43,6 @@ export function setZoomMode(newMode, imgW, imgH) {
     const viewOriginal = document.getElementById('pane-left');
     if(!viewOriginal) return;
     
-    // UI Active-Class auf Buttons umschalten
     document.querySelectorAll('.btn-zoom').forEach(b => b.classList.remove('active'));
     let activeBtn = document.getElementById(`btn-zoom-${newMode}`);
     if (activeBtn) activeBtn.classList.add('active');
@@ -112,39 +113,56 @@ export function redrawCanvasWithHighlight(originalData, decodedData, imgW, imgH,
     if (decodedData) applyDimming(ctxDecoded);
 }
 
-export function setupCanvasEvents(getDimensionsFn) {
-    const viewports = [document.getElementById('pane-left'), document.getElementById('pane-right')].filter(Boolean);
-    const mousePosText = document.getElementById('mouse-pos-text'); 
+export function setupCanvasEvents(getDimensionsFn, getImageDataFn) {
+    const mousePosText = document.getElementById('mouse-pos-text');
+    const viewOriginal = document.getElementById('pane-left');
 
-    viewports.forEach(view => {
-        view.addEventListener('mousedown', e => {
-            const dim = getDimensionsFn();
-            if(!dim.w) return;
-            e.preventDefault();
+    if (viewOriginal) {
+        viewOriginal.addEventListener('mousedown', e => {
+            viewState.panning = true;
             viewState.startX = e.clientX - viewState.panX;
             viewState.startY = e.clientY - viewState.panY;
-            viewState.panning = true;
-            view.classList.add('grabbing');
         });
-    });
 
-    window.addEventListener('mouseup', () => {
-        viewState.panning = false;
-        viewports.forEach(view => view.classList.remove('grabbing'));
-    });
+        window.addEventListener('mouseup', () => {
+            viewState.panning = false;
+        });
+    }
 
     window.addEventListener('mousemove', e => {
         const dim = getDimensionsFn();
-        if (!dim.w) return;
+        if (!dim.w || !viewOriginal) return;
 
-        if(viewports.length > 0 && mousePosText) {
-            const vRect = viewports[0].getBoundingClientRect();
-            let scale = getScaleFactor(viewState.mode, dim.w, dim.h, viewports[0]);
-            let imgX = Math.floor((e.clientX - vRect.left - ((vRect.width - (dim.w * scale)) / 2) - viewState.panX) / scale);
-            let imgY = Math.floor((e.clientY - vRect.top - ((vRect.height - (dim.h * scale)) / 2) - viewState.panY) / scale);
+        const vRect = viewOriginal.getBoundingClientRect();
+        let scale = getScaleFactor(viewState.mode, dim.w, dim.h, viewOriginal);
+        
+        let imgX = Math.floor((e.clientX - vRect.left - ((vRect.width - (dim.w * scale)) / 2) - viewState.panX) / scale);
+        let imgY = Math.floor((e.clientY - vRect.top - ((vRect.height - (dim.h * scale)) / 2) - viewState.panY) / scale);
 
+        if (mousePosText) {
             if (imgX >= 0 && imgX < dim.w && imgY >= 0 && imgY < dim.h) {
-                mousePosText.innerText = `X: ${imgX} | Y: ${imgY} | Px: ${imgY * dim.w + imgX}`;
+                const px = imgY * dim.w + imgX;
+                let text = `X: ${imgX} | Y: ${imgY} | Px: ${px}`;
+
+                if (getImageDataFn) {
+                    const data = getImageDataFn();
+                    if (data.original) {
+                        let idx = px * 4;
+                        let r1 = data.original.data[idx];
+                        let g1 = data.original.data[idx + 1];
+                        let b1 = data.original.data[idx + 2];
+                        let a1 = data.original.data[idx + 3]; // Alpha-Wert (0 - 255)
+
+                        text += ` | Orig: RGBA(${r1},${g1},${b1},${Math.round((a1/255)*100)}%)`;
+                        if (data.decoded) {
+                            let r2 = data.decoded.data[idx];
+                            let g2 = data.decoded.data[idx + 1];
+                            let b2 = data.decoded.data[idx + 2];
+                            text += ` | Dec: RGB(${r2},${g2},${b2})`;
+                        }
+                    }
+                }
+                mousePosText.innerText = text;
             } else {
                 mousePosText.innerText = `X: - | Y: - | Px: -`;
             }
@@ -155,10 +173,5 @@ export function setupCanvasEvents(getDimensionsFn) {
         viewState.panX = e.clientX - viewState.startX;
         viewState.panY = e.clientY - viewState.startY;
         updateView(dim.w, dim.h);
-    });
-
-    window.addEventListener('resize', () => {
-        const dim = getDimensionsFn();
-        if (dim.w) updateView(dim.w, dim.h);
     });
 }

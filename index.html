@@ -149,11 +149,21 @@
         <button id="btn-zoom-2x" class="btn-zoom">2x</button>
         <button id="btn-zoom-4x" class="btn-zoom">4x</button>
         <button id="btn-zoom-8x" class="btn-zoom">8x</button>
+        <button id="btn-zoom-16x" class="btn-zoom">16x</button>
+        <button id="btn-zoom-32x" class="btn-zoom">32x</button>
     </div>
     
     <div class="control-group">
         <button id="btn-analysis" disabled>Fehler-Analyse</button>
         <div id="avg-mse-display" style="display:none;">⌀ RGB: 0.0 | ⌀ YUV: 0.0</div>
+    </div>
+
+    <div class="control-group" style="display:inline-flex; align-items:center;">
+    <button id="btn-toggle-edges" style="background:o6c757d; color:white; margin-right:8px;">Canny-Overlay</button>
+    <label style="font-size:11px; margin-right:4px;">Low:</label>
+    <input type="number" id="canny-low" value="30" min="5" max="500" style="width:50px; margin-right:8px;" title="Canny Low Threshold">
+    <label style="font-size:11px; margin-right:4px;">High:</label>
+    <input type="number" id="canny-high" value="100" min="10" max="1000" style="width:50px;" title="Canny High Threshold">
     </div>
 
     <div class="status-container">

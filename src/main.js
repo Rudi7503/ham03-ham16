@@ -7,6 +7,7 @@ import { HAM_CONFIGS } from './codecs/configs.js';
 import { computeDetailedAnalysis, runSimulationWithStrategy, errorBins } from './core/analysis.js';
 import { simulateBuilderEncode } from './core/builder.js';
 import { hexToRgb, rgbToHex, clamp, get_rgb_dist, get_yuv_dist, get_yuv_dist_weight } from './codecs/utils.js';
+import { computeEdgeMask, extractContours } from './core/edge-detector.js';
 
 // --- GLOBALE STATES ---
 let currentImgW = 0, currentImgH = 0, totalPixels = 0;
@@ -80,9 +81,16 @@ function getEffectiveSegments() {
 }
 
 // --- INIT UI ---
-setupCanvasEvents(() => ({ w: currentImgW, h: currentImgH }));
+// --- INIT UI ---
+setupCanvasEvents(
+    () => ({ w: currentImgW, h: currentImgH }),
+    () => ({
+        original: (showEdgeOverlay && cachedEdgeImageData) ? cachedEdgeImageData : originalImageData,
+        decoded: decodedImageData
+    })
+);
 
-['fit', '1x', '2x', '4x', '8x'].forEach(mode => {
+['fit', '1x', '2x', '4x', '8x', '16x', '32x'].forEach(mode => {
     let btn = document.getElementById(`btn-zoom-${mode}`);
     if (btn) btn.addEventListener('click', () => setZoomMode(mode, currentImgW, currentImgH));
 });
@@ -91,11 +99,10 @@ function updateStatusTextDimAndColors(decColorCount, stats = null) {
     let statText = stats ? ` | Anker: ${stats.anchorCount} | Deltas: ${stats.deltaCount} (Turbo: ${stats.turboCount})` : "";
     let dimTextEl = document.getElementById('img-dim-text');
     if (dimTextEl) {
-        dimTextEl.innerText = `Größe: ${currentImgW}x${currentImgH} px | Farben: ${originalColorsCount} / ${decColorCount}${statText}`;
+        dimTextEl.innerText = `Größe: ${currentImgW}x${currentImgH} px | Farben: ${originalColorsCount} / ${decColorCount} | Modus: ${currentFormat}${statText}`;
     }
 }
 
-// Verbesserte phasenbasierte Fortschrittsanzeige
 let lastPhase = "";
 let phaseStartTime = 0;
 
@@ -140,7 +147,7 @@ function updateBankPickers() {
     paletteContainer.innerHTML = "";
     let f = formatSelect ? formatSelect.value : "HAM12";
     let config = HAM_CONFIGS[f] || HAM_CONFIGS["HAM12"];
-    let slotsPerBank = config.slotsPerBank || 8;
+    let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : (f === "HAM8" ? 64 : 16);
     let currentBank = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
     let startSlot = currentBank * slotsPerBank;
 
@@ -169,7 +176,7 @@ function populateBankDropdown() {
     palBankSelect.innerHTML = "";
     let f = formatSelect ? formatSelect.value : "HAM12";
     let config = HAM_CONFIGS[f] || HAM_CONFIGS["HAM12"];
-    let slotsPerBank = config.slotsPerBank || 8;
+    let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : (f === "HAM8" ? 64 : 16);
     let maxBänke = slotsPerBank > 0 ? Math.floor(256 / slotsPerBank) : 1;
 
     for(let b = 0; b < maxBänke; b++) {
@@ -200,6 +207,7 @@ function handleFormatChange() {
     if (segBankInput) segBankInput.disabled = !isPalFormat;
 
     if(isPalFormat) populateBankDropdown();
+    updateStatusTextDimAndColors(decodedImageData ? countUniqueColors(decodedImageData.data) : 0);
 }
 
 function handleStrategyVisibility() {
@@ -227,6 +235,7 @@ function countUniqueColors(imgData) {
 }
 
 if (btnLoad) btnLoad.addEventListener('click', () => { if(fileImg) fileImg.click(); });
+// --- BILD LADEN (Mit Alpha-Entfernung & schwarzem Hintergrund) ---
 if (fileImg) fileImg.addEventListener('change', (e) => {
     let file = e.target.files[0]; 
     if (!file) return;
@@ -240,9 +249,24 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
             
             canvasOriginal.width = currentImgW; 
             canvasOriginal.height = currentImgH;
-            ctxOriginal.drawImage(img, 0, 0);
             
-            originalImageData = ctxOriginal.getImageData(0, 0, currentImgW, currentImgH);
+            // 1. Temporäres Canvas für den Hintergrund-Ausgleich erstellen
+            let tempCanvas = document.createElement('canvas');
+            tempCanvas.width = currentImgW;
+            tempCanvas.height = currentImgH;
+            let tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+            
+            // 2. Hintergrundfarbe festlegen (Schwarz) und füllen
+            tempCtx.fillStyle = '#000000';
+            tempCtx.fillRect(0, 0, currentImgW, currentImgH);
+            
+            // 3. Bild darüber zeichnen (Transparenzen verschmelzen mit dem schwarzen Hintergrund)
+            tempCtx.drawImage(img, 0, 0);
+            
+            // 4. Bereinigte Bilddaten ohne Alpha-Probleme übernehmen
+            originalImageData = tempCtx.getImageData(0, 0, currentImgW, currentImgH);
+            ctxOriginal.putImageData(originalImageData, 0, 0);
+
             originalColorsCount = countUniqueColors(originalImageData.data);
 
             updateStatusTextDimAndColors(0);
@@ -274,9 +298,16 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
             if(mseDisp) mseDisp.style.display = 'none';
             
             let statusText = document.getElementById('status-text');
-            if(statusText) statusText.innerText = "Bild geladen.";
+            if(statusText) statusText.innerText = "Bild geladen (Alpha entfernt).";
             
             setZoomMode('fit', currentImgW, currentImgH);
+            
+            showEdgeOverlay = false;
+            if(btnToggleEdges) {
+                btnToggleEdges.classList.remove('active');
+                btnToggleEdges.style.backgroundColor = '#6c757d';
+            }
+            cachedEdgeImageData = null;
         }
         img.src = ev.target.result;
     }
@@ -293,7 +324,9 @@ function triggerCanvasHighlight() {
     let sPx = startInput ? (parseInt(startInput.value) || 0) : 0;
     let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
     
-    redrawCanvasWithHighlight(originalImageData, decodedImageData, currentImgW, currentImgH, sPx, ePx, totalPixels);
+    let activeBaseImage = (showEdgeOverlay && cachedEdgeImageData) ? cachedEdgeImageData : originalImageData;
+    
+    redrawCanvasWithHighlight(activeBaseImage, decodedImageData, currentImgW, currentImgH, sPx, ePx, totalPixels);
 }
 
 if (btnAddSegment) btnAddSegment.addEventListener('click', () => {
@@ -587,7 +620,7 @@ function refreshBuilderUI() {
     let config = HAM_CONFIGS[f];
     if (!config) return;
     
-    let slotsPerBank = config.slotsPerBank;
+    let slotsPerBank = config.slotsPerBank ? config.slotsPerBank : (f === "HAM8" ? 64 : 16);
     let startSlot = bankIdx * slotsPerBank;
     
     let previewContainer = document.getElementById('builder-palette-preview');
@@ -673,7 +706,8 @@ window.assignColorToSlot = function(hex) {
     
     let bankIdx = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
     let config = HAM_CONFIGS[currentFormat];
-    let maxSlot = (bankIdx * config.slotsPerBank) + config.slotsPerBank - 1;
+    let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : (currentFormat === "HAM8" ? 64 : 16);
+    let maxSlot = (bankIdx * slotsPerBank) + slotsPerBank - 1;
     if (currentBuilderSlot < maxSlot) {
         currentBuilderSlot++;
     }
@@ -689,7 +723,6 @@ if (btnBuildCancel) btnBuildCancel.addEventListener('click', () => {
     if (modal) modal.style.display = 'none';
 });
 
-// CLOSED-LOOP ITERATIVE PALETTE OPTIMIZER
 let btnBuildAuto = document.getElementById('btn-builder-auto');
 if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     if (!currentImgW) { alert("Bitte lade zuerst ein Bild!"); return; }
@@ -701,7 +734,7 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     
     let bankIdx = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
     let config = HAM_CONFIGS[currentFormat];
-    let slotsPerBank = config.slotsPerBank;
+    let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : (currentFormat === "HAM8" ? 64 : 16);
     let startSlot = bankIdx * slotsPerBank;
 
     let statusEl = document.getElementById('builder-status');
@@ -961,3 +994,86 @@ if (btnSave) btnSave.addEventListener('click', () => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 });
+
+// --- KANTEN-OVERLAY LOGIK ---
+let showEdgeOverlay = false;
+let cachedEdgeImageData = null;
+let lastLow = 30;
+let lastHigh = 100;
+
+const btnToggleEdges = document.getElementById('btn-toggle-edges');
+const cannyLowInput = document.getElementById('canny-low');
+const cannyHighInput = document.getElementById('canny-high');
+
+function updateEdgeOverlay() {
+    if (!originalImageData) return;
+    
+    let currentLow = cannyLowInput ? (parseInt(cannyLowInput.value) || 30) : 30;
+    let currentHigh = cannyHighInput ? (parseInt(cannyHighInput.value) || 100) : 100;
+    
+    if (currentLow !== lastLow || currentHigh !== lastHigh || !cachedEdgeImageData) {
+        lastLow = currentLow;
+        lastHigh = currentHigh;
+
+        let rawMask = computeEdgeMask(originalImageData, currentImgW, currentImgH, currentLow, currentHigh);
+        let contours = extractContours(rawMask, currentImgW, currentImgH, 10);
+        
+        let combined = new ImageData(new Uint8ClampedArray(originalImageData.data), currentImgW, currentImgH);
+        let outD = combined.data;
+        for (let i = 0; i < outD.length; i += 4) {
+            outD[i] = outD[i] * 0.3;     
+            outD[i+1] = outD[i+1] * 0.3; 
+            outD[i+2] = outD[i+2] * 0.3; 
+        }
+        
+        contours.forEach((line) => {
+            let r = Math.floor(Math.random() * 155) + 100;
+            let g = Math.floor(Math.random() * 155) + 100;
+            let b = Math.floor(Math.random() * 155) + 100;
+
+            line.forEach(point => {
+                let idx = (point.y * currentImgW + point.x) * 4;
+                outD[idx]     = r;
+                outD[idx + 1] = g;
+                outD[idx + 2] = b;
+                outD[idx + 3] = 255;
+            });
+        });
+
+        cachedEdgeImageData = combined;
+    }
+    
+    ctxOriginal.putImageData(cachedEdgeImageData, 0, 0);
+    triggerCanvasHighlight();
+}
+
+if (btnToggleEdges) {
+    btnToggleEdges.addEventListener('click', () => {
+        if (!originalImageData) {
+            alert("Bitte lade zuerst ein Bild!");
+            return;
+        }
+
+        showEdgeOverlay = !showEdgeOverlay;
+        btnToggleEdges.classList.toggle('active', showEdgeOverlay);
+        btnToggleEdges.style.backgroundColor = showEdgeOverlay ? '#17a2b8' : '#6c757d';
+
+        if (showEdgeOverlay) {
+            updateEdgeOverlay();
+        } else {
+            ctxOriginal.putImageData(originalImageData, 0, 0);
+            triggerCanvasHighlight();
+        }
+    });
+}
+
+if (cannyLowInput) {
+    cannyLowInput.addEventListener('input', () => {
+        if (showEdgeOverlay) updateEdgeOverlay();
+    });
+}
+if (cannyHighInput) {
+    cannyHighInput.addEventListener('input', () => {
+        if (showEdgeOverlay) updateEdgeOverlay();
+    });
+}
