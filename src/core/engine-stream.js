@@ -1,42 +1,38 @@
 // src/core/engine-stream.js
 import { HAM_CONFIGS } from '../codecs/configs.js';
-import { clamp, get_yuv_dist, get_rgb_dist } from '../codecs/utils.js';
+import { clamp, get_yuv_dist, get_yuv_dist_weight, get_rgb_dist } from '../codecs/utils.js';
 
-export async function encodeStream(origData, imgW, imgH, format, userSegments, globalPaletteRAM, strategy, metric, max_depth, progressCallback, startOverride=0, endOverride=0) {
+export async function encodeStream(origData, imgW, imgH, format, userSegments, globalPaletteRAM, strategy, metric, max_depth, progressCallback, startOverride=0, endOverride=0, hybridPercent=5.0) {
     let totalPixels = imgW * imgH;
     let config = HAM_CONFIGS[format];
     
     let activeCmds = [...userSegments];
     if (activeCmds.length === 0) {
-        // FIX: Der Fallback muss nun zwingend ein RGB-Objekt sein!
         activeCmds.push({ absEnd: totalPixels, waitPixels: totalPixels, bank: 0, step: {r:4, g:4, b:4} });
     }
-
-    let commandArray = [];
-    let acc_r = 127, acc_g = 127, acc_b = 127;
-    let slotsPerBank = config.slotsPerBank || 0;
-    
-    let wait_counter = 0;
-    let cmd_idx = 0;
-    let currentBank = activeCmds[0].bank;
-    let currentStep = activeCmds[0].step;
 
     let simStart = startOverride || 0;
     let simEnd = endOverride || totalPixels;
 
-    // Statistik-Zähler
-    let stats = { anchorCount: 0, deltaCount: 0, turboCount: 0 };
+    let isHybrid = strategy.startsWith('hybrid');
+    let hybrid_depth = isHybrid ? (parseInt(strategy.split('_')[1]) || 3) : max_depth;
+    let currentStrategy = isHybrid ? 'both' : strategy;
 
-    function findBestBranch(x, y, c_acc, d) {
-        if (d === max_depth || x >= imgW) return { cost: 0, cmd: null, r: c_acc.r, g: c_acc.g, b: c_acc.b };
+    let commandArray = new Array(totalPixels);
+    let pixelStates = new Array(totalPixels);
+    
+    let stats = { anchorCount: 0, deltaCount: 0, turboCount: 0 };
+    let slotsPerBank = config.slotsPerBank || 0;
+
+    function findBestBranch(x, y, c_acc, d, max_d, currentBank, currentStep) {
+        if (d === max_d || x >= imgW) return { cost: 0, cmd: null, r: c_acc.r, g: c_acc.g, b: c_acc.b };
 
         let pIdx = y * imgW + x;
         let origIdx = pIdx * 4;
         let tr = origData[origIdx], tg = origData[origIdx + 1], tb = origData[origIdx + 2];
         let branches = [];
 
-        // 1. ANKER-ZWEIGE
-        if (strategy !== 'delta_only') {
+        if (currentStrategy !== 'delta_only') {
             if (config.isPaletted) {
                 let startSlot = currentBank * slotsPerBank;
                 for (let i = 0; i < slotsPerBank; i++) {
@@ -59,30 +55,21 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
             }
         }
 
-        // 2. DELTA-ZWEIGE
-        if (strategy !== 'anchor_only') {
+        if (currentStrategy !== 'anchor_only') {
             let multipliers = config.hasTurbo ? [0, 1] : [0];
             for (let t of multipliers) {
                 let m = t ? 4 : 1;
-                let sr = currentStep.r * m;
-                let sg = currentStep.g * m;
-                let sb = currentStep.b * m;
+                let sr = currentStep.r * m, sg = currentStep.g * m, sb = currentStep.b * m;
 
                 if (config.isPaletted) {
                     for (let ri = 0; ri < config.channels.r.length; ri++) {
                         for (let gi = 0; gi < config.channels.g.length; gi++) {
                             for (let bi = 0; bi < config.channels.b.length; bi++) {
-                                let dr = config.channels.r[ri] * sr;
-                                let dg = config.channels.g[gi] * sg;
-                                let db = config.channels.b[bi] * sb;
-
-                                let nr = clamp(c_acc.r + dr, 0, 255);
-                                let ng = clamp(c_acc.g + dg, 0, 255);
-                                let nb = clamp(c_acc.b + db, 0, 255);
-
                                 branches.push({ 
                                     cmd: { isAnchor: false, isTurbo: (m === 4), rIndex: ri, gIndex: gi, bIndex: bi }, 
-                                    r: nr, g: ng, b: nb 
+                                    r: clamp(c_acc.r + config.channels.r[ri] * sr, 0, 255), 
+                                    g: clamp(c_acc.g + config.channels.g[gi] * sg, 0, 255), 
+                                    b: clamp(c_acc.b + config.channels.b[bi] * sb, 0, 255) 
                                 });
                             }
                         }
@@ -90,17 +77,13 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
                 } else {
                     let diffR = tr - c_acc.r, diffG = tg - c_acc.g, diffB = tb - c_acc.b;
                     if (format === "HAM16") {
-                        let dr = clamp(Math.round(diffR / sr), -8, 7);
-                        let dg = clamp(Math.round(diffG / sg), -16, 15);
-                        let db = clamp(Math.round(diffB / sb), -16, 15);
+                        let dr = clamp(Math.round(diffR / sr), -8, 7), dg = clamp(Math.round(diffG / sg), -16, 15), db = clamp(Math.round(diffB / sb), -16, 15);
                         branches.push({ 
                             cmd: { isAnchor: false, format: "HAM16", isTurbo: (m===4), dr, dg, db }, 
                             r: clamp(c_acc.r + dr * sr, 0, 255), g: clamp(c_acc.g + dg * sg, 0, 255), b: clamp(c_acc.b + db * sb, 0, 255) 
                         });
                     } else if (format === "HAM12") {
-                        let dr = clamp(Math.round(diffR / sr), -4, 3);
-                        let dg = clamp(Math.round(diffG / sg), -8, 7);
-                        let db = clamp(Math.round(diffB / sb), -4, 3);
+                        let dr = clamp(Math.round(diffR / sr), -4, 3), dg = clamp(Math.round(diffG / sg), -8, 7), db = clamp(Math.round(diffB / sb), -4, 3);
                         branches.push({ 
                             cmd: { isAnchor: false, format: "HAM12", isTurbo: (m===4), dr, dg, db }, 
                             r: clamp(c_acc.r + dr * sr, 0, 255), g: clamp(c_acc.g + dg * sg, 0, 255), b: clamp(c_acc.b + db * sb, 0, 255) 
@@ -109,14 +92,19 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
                 }
             }
         }
+
         let best_cost = Infinity;
         let best_branch = null;
         let evaluatedBranches = branches.length > 200 ? branches.slice(0, 200) : branches;
 
         for (let b of evaluatedBranches) {
-            let next_acc = { r: b.r, g: b.g, b: b.b };
-            let next_res = findBestBranch(x + 1, y, next_acc, d + 1);
-            let dist = metric === 'yuv' ? get_yuv_dist(tr, tg, tb, b.r, b.g, b.b) : get_rgb_dist(tr, tg, tb, b.r, b.g, b.b);
+            let next_res = findBestBranch(x + 1, y, { r: b.r, g: b.g, b: b.b }, d + 1, max_d, currentBank, currentStep);
+            
+            let dist = 0;
+            if (metric === 'yuv_weight') dist = get_yuv_dist_weight(tr, tg, tb, b.r, b.g, b.b);
+            else if (metric === 'yuv') dist = get_yuv_dist(tr, tg, tb, b.r, b.g, b.b);
+            else dist = get_rgb_dist(tr, tg, tb, b.r, b.g, b.b);
+
             let total = dist + next_res.cost;
 
             if (total < best_cost) {
@@ -127,37 +115,93 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
         return best_branch || { cost: 0, cmd: branches[0]?.cmd || { isAnchor: true, anchorIdx: 0 }, r: c_acc.r, g: c_acc.g, b: c_acc.b };
     }
 
-    for (let i = 0; i < totalPixels; i++) {
-        if (cmd_idx < activeCmds.length && wait_counter === activeCmds[cmd_idx].waitPixels) {
-            wait_counter = 0; cmd_idx++;
-            if (cmd_idx < activeCmds.length) { currentBank = activeCmds[cmd_idx].bank; currentStep = activeCmds[cmd_idx].step; }
-        }
-
-        if (i >= simStart && i < simEnd) {
-            let best = findBestBranch(i % imgW, Math.floor(i / imgW), { r: acc_r, g: acc_g, b: acc_b }, 0);
-            commandArray.push(best.cmd);
-            acc_r = best.r; acc_g = best.g; acc_b = best.b;
-
-            if (best.cmd.isAnchor) {
-                stats.anchorCount++;
+    async function encodeSpan(startPx, endPx, initialAcc, depth, isPass2 = false) {
+        let acc = { ...initialAcc };
+        let cmd_idx = 0;
+        
+        while (cmd_idx < activeCmds.length && startPx >= activeCmds[cmd_idx].absEnd) cmd_idx++;
+        
+        for (let i = startPx; i < endPx; i++) {
+            let currentBank = activeCmds[cmd_idx] ? activeCmds[cmd_idx].bank : 0;
+            let currentStep = activeCmds[cmd_idx] ? activeCmds[cmd_idx].step : {r:4, g:4, b:4};
+            
+            if (i >= simStart && i < simEnd) {
+                let best = findBestBranch(i % imgW, Math.floor(i / imgW), acc, 0, depth, currentBank, currentStep);
+                commandArray[i] = best.cmd;
+                acc = { r: best.r, g: best.g, b: best.b };
+                pixelStates[i] = acc;
             } else {
-                stats.deltaCount++;
-                if (best.cmd.isTurbo) stats.turboCount++;
+                commandArray[i] = { isAnchor: true, anchorIdx: 0 };
+                pixelStates[i] = acc;
             }
-        } else {
-            commandArray.push({ isAnchor: true, anchorIdx: 0 });
-            stats.anchorCount++;
+
+            if (cmd_idx < activeCmds.length && (i + 1) === activeCmds[cmd_idx].absEnd) cmd_idx++;
+
+            if (!isPass2 && i % (imgW*2) === 0 && progressCallback) {
+                progressCallback("Phase 1: Greedy-Codierung", i, totalPixels);
+                await new Promise(r => setTimeout(r, 0));
+            }
+        }
+        return acc;
+    }
+
+    // --- PHASE 1 ---
+    await encodeSpan(0, totalPixels, { r: 127, g: 127, b: 127 }, isHybrid ? 1 : max_depth, false);
+
+    // --- PHASE 2 & 3 (Fehleranalyse & Lookahead) ---
+    if (isHybrid) {
+        if (progressCallback) progressCallback(`Phase 2: Fehlerstatistik (Suche Top ${hybridPercent}%)`, 0, 1);
+        await new Promise(r => setTimeout(r, 10)); 
+
+        let blockStart = simStart;
+        let allBlocks = [];
+        
+        while (blockStart < simEnd) {
+            let blockEnd = blockStart + 1;
+            while (blockEnd < simEnd && !commandArray[blockEnd].isAnchor) blockEnd++;
+            
+            let blockError = 0;
+            for (let i = blockStart; i < blockEnd; i++) {
+                let origIdx = i * 4;
+                let st = pixelStates[i];
+                let err = 0;
+                
+                if (metric === 'yuv_weight') err = get_yuv_dist_weight(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
+                else if (metric === 'yuv') err = get_yuv_dist(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
+                else err = get_rgb_dist(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
+                
+                blockError += err;
+            }
+            
+            let avgError = blockError / (blockEnd - blockStart);
+            allBlocks.push({start: blockStart, end: blockEnd, err: avgError});
+            blockStart = blockEnd;
         }
 
-        wait_counter++;
-
-        if (i % (imgW*2) === 0 && progressCallback) {
-            progressCallback(i, totalPixels);
-            await new Promise(r => setTimeout(r, 0));
+        // Sortieren nach dem schlimmsten Fehler
+        allBlocks.sort((a, b) => b.err - a.err);
+        
+        // Exakt X Prozent der Blöcke auswählen
+        let targetCount = Math.ceil(allBlocks.length * (hybridPercent / 100));
+        let badBlocks = allBlocks.slice(0, targetCount);
+        
+        for (let b = 0; b < badBlocks.length; b++) {
+            let startAcc = badBlocks[b].start === 0 ? { r: 127, g: 127, b: 127 } : pixelStates[badBlocks[b].start - 1];
+            await encodeSpan(badBlocks[b].start, badBlocks[b].end, startAcc, hybrid_depth, true);
+            
+            if (progressCallback) progressCallback(`Phase 3: Lookahead (Repariere ${badBlocks.length} Problem-Blöcke)`, b + 1, badBlocks.length);
+            if (b % 5 === 0) await new Promise(r => setTimeout(r, 0));
         }
     }
 
-    if (progressCallback) progressCallback(totalPixels, totalPixels);
+    for (let i = simStart; i < simEnd; i++) {
+        if (commandArray[i].isAnchor) stats.anchorCount++;
+        else {
+            stats.deltaCount++;
+            if (commandArray[i].isTurbo) stats.turboCount++;
+        }
+    }
+    
     let packedData = startOverride === 0 ? packCommandsToBinary(commandArray, format) : null;
     return { commandArray, packedData, stats };
 }

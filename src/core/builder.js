@@ -1,8 +1,8 @@
 // src/core/builder.js
 import { HAM_CONFIGS } from '../codecs/configs.js';
-import { get_rgb_dist, rgbToHex, hexToRgb, clamp } from '../codecs/utils.js';
+import { get_rgb_dist, get_yuv_dist, get_yuv_dist_weight, rgbToHex, hexToRgb, clamp } from '../codecs/utils.js';
 
-export function simulateBuilderEncode(startPx, endPx, imgData, imgW, palette, targetSlot, stepVal, format) {
+export function simulateBuilderEncode(startPx, endPx, imgData, imgW, palette, targetSlot, stepVal, format, metric = 'yuv_weight') {
     let config = HAM_CONFIGS[format] || HAM_CONFIGS["HAM04"];
     let slotsPerBank = config.slotsPerBank || 8;
     let bankIdx = Math.floor(targetSlot / slotsPerBank);
@@ -13,6 +13,13 @@ export function simulateBuilderEncode(startPx, endPx, imgData, imgW, palette, ta
 
     let totalPixels = imgData.length / 4;
     let end = Math.min(totalPixels, endPx);
+
+    // Hilfsfunktion für die gewählte Metrik
+    const getDist = (r1, g1, b1, r2, g2, b2) => {
+        if (metric === 'yuv_weight') return get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
+        if (metric === 'yuv') return get_yuv_dist(r1, g1, b1, r2, g2, b2);
+        return get_rgb_dist(r1, g1, b1, r2, g2, b2);
+    };
 
     for (let i = startPx; i < end; i++) {
         let idx = i * 4;
@@ -28,11 +35,11 @@ export function simulateBuilderEncode(startPx, endPx, imgData, imgW, palette, ta
         let minErr = Infinity;
 
         if (targetSlot === startSlot) {
-            minErr = get_rgb_dist(r, g, b, 0, 0, 0); 
+            minErr = getDist(r, g, b, 0, 0, 0); 
         } else {
             for (let s = startSlot; s < targetSlot; s++) {
                 let sr = palette[s][0], sg = palette[s][1], sb = palette[s][2];
-                let d = get_rgb_dist(r, g, b, sr, sg, sb);
+                let d = getDist(r, g, b, sr, sg, sb);
                 if (d < minErr) minErr = d;
 
                 if (minErr > 2) {
@@ -48,7 +55,7 @@ export function simulateBuilderEncode(startPx, endPx, imgData, imgW, palette, ta
                                     let ng = clamp(sg + config.channels.g[gi] * sg_step, 0, 255);
                                     let nb = clamp(sb + config.channels.b[bi] * sb_step, 0, 255);
                                     
-                                    let d2 = get_rgb_dist(r, g, b, nr, ng, nb);
+                                    let d2 = getDist(r, g, b, nr, ng, nb);
                                     if (d2 < minErr) minErr = d2;
                                 }
                             }

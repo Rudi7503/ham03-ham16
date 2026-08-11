@@ -6,7 +6,7 @@ import { decodeStream } from './core/decoder.js';
 import { HAM_CONFIGS } from './codecs/configs.js';
 import { computeDetailedAnalysis, runSimulationWithStrategy, errorBins } from './core/analysis.js';
 import { simulateBuilderEncode } from './core/builder.js';
-import { hexToRgb, rgbToHex, clamp, get_rgb_dist } from './codecs/utils.js';
+import { hexToRgb, rgbToHex, clamp, get_rgb_dist, get_yuv_dist, get_yuv_dist_weight } from './codecs/utils.js';
 
 // --- GLOBALE STATES ---
 let currentImgW = 0, currentImgH = 0, totalPixels = 0;
@@ -65,7 +65,6 @@ const autoMinInput = document.getElementById('auto-min-step');
 const autoMaxInput = document.getElementById('auto-max-step');
 
 // --- HILFSFUNKTION FÜR SCHRITTWEITEN ---
-// Zieht sich die Werte aus dem UI, falls keine Segmente angelegt sind
 function getEffectiveSegments() {
     if (userSegments.length > 0) return userSegments;
     return [{
@@ -96,14 +95,32 @@ function updateStatusTextDimAndColors(decColorCount, stats = null) {
     }
 }
 
-function updateProgress(prefix, current, total, startTime) {
-    if (current > 0 && current % 10 === 0 || current === total) {
-        let elapsed = ((Date.now() - startTime) / 1000 / current) * (total - current);
+// Verbesserte phasenbasierte Fortschrittsanzeige
+let lastPhase = "";
+let phaseStartTime = 0;
+
+function updateProgressDetail(phase, current, total) {
+    if (phase !== lastPhase) {
+        lastPhase = phase;
+        phaseStartTime = Date.now();
+    }
+    
+    if (current > 0 && current % 10 === 0 || current === total || total <= 1) {
+        let elapsed = (Date.now() - phaseStartTime) / 1000;
+        let eta = 0;
+        if (current > 0) {
+            let speed = current / elapsed;
+            eta = (total - current) / speed;
+        }
+        
         let progressEl = document.getElementById('progress');
-        if(progressEl) progressEl.value = (current / total) * 100;
+        if(progressEl) progressEl.value = total > 0 ? (current / total) * 100 : 100;
+        
         let statusTextEl = document.getElementById('status-text');
         if (statusTextEl) {
-            statusTextEl.innerText = `${prefix} - Pixel ${current}/${total} | ETA: ${Math.round(elapsed)}s`;
+            let etaText = (current === 0 || !isFinite(eta)) ? "..." : Math.round(eta) + "s";
+            if (total <= 1) etaText = "Verarbeite...";
+            statusTextEl.innerText = `[${phase}] - ${current}/${total} | ETA: ${etaText}`;
         }
     }
 }
@@ -185,7 +202,18 @@ function handleFormatChange() {
     if(isPalFormat) populateBankDropdown();
 }
 
+function handleStrategyVisibility() {
+    let strat = encodeStrategySelect ? encodeStrategySelect.value : "";
+    let hypGroup = document.getElementById('hybrid-group');
+    if (hypGroup) {
+        hypGroup.style.display = strat.startsWith('hybrid') ? 'flex' : 'none';
+    }
+}
+
 if (formatSelect) formatSelect.addEventListener('change', handleFormatChange);
+if (encodeStrategySelect) encodeStrategySelect.addEventListener('change', handleStrategyVisibility);
+handleStrategyVisibility();
+
 if (palBankSelect) palBankSelect.addEventListener('change', () => { if (segBankInput) segBankInput.value = palBankSelect.value; updateBankPickers(); });
 if (segBankInput) segBankInput.addEventListener('input', () => { if (palBankSelect) palBankSelect.value = segBankInput.value; updateBankPickers(); });
 
@@ -410,31 +438,40 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
     if(btnBuilder) btnBuilder.disabled = true; if(btnAnalysis) btnAnalysis.disabled = true;
 
     let strategy = encodeStrategySelect ? encodeStrategySelect.value : "both";
-    let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv";
+    let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
     let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
     
-    let startTime = Date.now();
+    let hypPercentInp = document.getElementById('hybrid-percent');
+    let hybridPercent = hypPercentInp ? (parseFloat(hypPercentInp.value) || 5.0) : 5.0;
 
     let encodeResult = await encodeStream(
         originalImageData.data, currentImgW, currentImgH, currentFormat, 
         getEffectiveSegments(), globalPaletteRAM, strategy, metric, max_depth, 
-        (current, total) => updateProgress("[1/2] Encode", current, total, startTime)
+        (phase, current, total) => updateProgressDetail(phase, current, total),
+        0, 0, hybridPercent
     );
 
     latestPackedData = encodeResult.packedData;
     latestCommandArray = encodeResult.commandArray;
     let stats = encodeResult.stats;
 
+    updateProgressDetail("Phase 4: Dekodierung & Rendering", 0, 1);
+    await new Promise(r => setTimeout(r, 20));
+    
+    let decStart = Date.now();
     let decodedPixels = decodeStream(latestCommandArray, currentImgW, currentImgH, globalPaletteRAM, getEffectiveSegments(), config);
     
     ctxDecoded.putImageData(new ImageData(decodedPixels, currentImgW, currentImgH), 0, 0);
     decodedImageData = ctxDecoded.getImageData(0, 0, currentImgW, currentImgH);
     
+    let decTime = Date.now() - decStart;
+
     updateStatusTextDimAndColors(countUniqueColors(decodedPixels), stats);
     let progressEl = document.getElementById('progress');
     if(progressEl) progressEl.value = 100; 
+    
     let statusEl = document.getElementById('status-text');
-    if(statusEl) statusEl.innerText = `Fertig. Modus: ${currentFormat}`;
+    if(statusEl) statusEl.innerText = `✅ Fertig! (Modus: ${currentFormat}, Renderzeit: ${decTime}ms)`;
     triggerCanvasHighlight();
 
     btnLoad.disabled = false; btnEncode.disabled = false; if(btnSave) btnSave.disabled = false; 
@@ -518,6 +555,9 @@ if (btnAnaClose) btnAnaClose.addEventListener('click', () => {
 });
 
 // --- BUILDER MODAL LOGIK ---
+let builderMetricSelect = document.getElementById('builder-metric');
+if (builderMetricSelect) builderMetricSelect.addEventListener('change', runBuilderAnalysis);
+
 if (btnBuilder) btnBuilder.addEventListener('click', () => {
     if (!currentImgW) { alert("Bitte lade zuerst ein Bild!"); return; }
     let f = formatSelect ? formatSelect.value : "HAM12";
@@ -593,10 +633,12 @@ function runBuilderAnalysis() {
         b: hamStepB ? (parseInt(hamStepB.value) || 4) : 4 
     };
 
+    let bMetric = builderMetricSelect ? builderMetricSelect.value : 'yuv_weight';
+
     let results = simulateBuilderEncode(
         sPx, ePx, originalImageData.data, currentImgW, 
         Array.from({length: 256}, (_, i) => [globalPaletteRAM[i * 3], globalPaletteRAM[i * 3 + 1], globalPaletteRAM[i * 3 + 2]]), 
-        currentBuilderSlot, stepVal, currentFormat
+        currentBuilderSlot, stepVal, currentFormat, bMetric
     );
 
     let mseListEl = document.getElementById('builder-mse-list');
@@ -674,7 +716,7 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     refreshBuilderUI();
 
     let strategy = encodeStrategySelect ? encodeStrategySelect.value : 'both';
-    let metric = encodeMetricSelect ? encodeMetricSelect.value : 'yuv';
+    let bMetric = builderMetricSelect ? builderMetricSelect.value : 'yuv_weight';
     let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
 
     for (let i = 0; i < slotsPerBank; i++) {
@@ -684,7 +726,7 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
 
         let encodeResult = await encodeStream(
             originalImageData.data, currentImgW, currentImgH, currentFormat, 
-            getEffectiveSegments(), globalPaletteRAM, strategy, metric, max_depth, 
+            getEffectiveSegments(), globalPaletteRAM, strategy, bMetric, max_depth, 
             null, sPx, ePx
         );
         
@@ -705,7 +747,13 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
             
             let hex = rgbToHex(r1, g1, b1);
             histMap.set(hex, (histMap.get(hex) || 0) + 1);
-            errorMap.set(hex, (errorMap.get(hex) || 0) + get_rgb_dist(r1, g1, b1, r2, g2, b2));
+            
+            let err = 0;
+            if (bMetric === 'yuv_weight') err = get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
+            else if (bMetric === 'yuv') err = get_yuv_dist(r1, g1, b1, r2, g2, b2);
+            else err = get_rgb_dist(r1, g1, b1, r2, g2, b2);
+            
+            errorMap.set(hex, (errorMap.get(hex) || 0) + err);
         }
 
         let worstHex = "#000000";
@@ -742,7 +790,7 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
 
     let finalEncode = await encodeStream(
         originalImageData.data, currentImgW, currentImgH, currentFormat, 
-        getEffectiveSegments(), globalPaletteRAM, strategy, metric, max_depth, 
+        getEffectiveSegments(), globalPaletteRAM, strategy, bMetric, max_depth, 
         null, 0, totalPixels
     );
     
@@ -752,7 +800,7 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     if (statusEl) statusEl.innerText = `Bank ${bankIdx} erfolgreich iterativ optimiert!`;
 });
 
-// --- AUTO SCHRITTWEITEN LOGIK (KOORDINATENABSTIEG R, G, B) ---
+// --- AUTO SCHRITTWEITEN LOGIK ---
 if (btnAutoStep) btnAutoStep.addEventListener('click', async () => {
     if (!currentImgW) { alert("Bitte lade zuerst ein Bild!"); return; }
     
@@ -779,7 +827,7 @@ if (btnAutoStep) btnAutoStep.addEventListener('click', async () => {
     let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
     
     let strategy = encodeStrategySelect ? encodeStrategySelect.value : 'both';
-    let metric = encodeMetricSelect ? encodeMetricSelect.value : 'yuv';
+    let metric = encodeMetricSelect ? encodeMetricSelect.value : 'yuv_weight';
     let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
 
     let pal = Array.from({length: 256}, (_, i) => [globalPaletteRAM[i * 3], globalPaletteRAM[i * 3 + 1], globalPaletteRAM[i * 3 + 2]]);

@@ -1,9 +1,8 @@
 // src/core/analysis.js
 import { HAM_CONFIGS } from '../codecs/configs.js';
-import { get_rgb_dist, get_yuv_dist, rgbToHex } from '../codecs/utils.js';
+import { get_rgb_dist, get_yuv_dist, get_yuv_dist_weight, rgbToHex } from '../codecs/utils.js';
 import { decodeStream } from './decoder.js';
 import { encodeStream } from './engine-stream.js';
-
 export const errorBins = [0, 5, 10, 20, 50, 100];
 
 export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, endPx) {
@@ -66,6 +65,7 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
 // Schnelle Simulation für den Auto-Step-Algorithmus (blockiert UI nicht mehr)
 export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palette, stepVal, strategy, metric, max_depth, format) {
     let imgH = origData.length / (imgW * 4);
+    
     // Wir nutzen den echten Encoder im Fast-Forward Modus
     let segs = [{ absEnd: origData.length / 4, waitPixels: origData.length / 4, bank: 0, step: stepVal }];
     
@@ -83,7 +83,14 @@ export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palett
         let r1 = origData[idx], g1 = origData[idx+1], b1 = origData[idx+2];
         let r2 = decoded[idx], g2 = decoded[idx+1], b2 = decoded[idx+2];
         
-        let yDist = get_yuv_dist(r1, g1, b1, r2, g2, b2);
+        // NEU: Berücksichtige die ausgewählte Metrik für die Statistik-Berechnung
+        let yDist = 0;
+        if (metric === 'yuv_weight') {
+            yDist = get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
+        } else {
+            yDist = get_yuv_dist(r1, g1, b1, r2, g2, b2);
+        }
+        
         let rDist = get_rgb_dist(r1, g1, b1, r2, g2, b2);
         
         yuvSum += yDist;
