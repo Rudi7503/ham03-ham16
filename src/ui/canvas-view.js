@@ -82,36 +82,7 @@ export function centerOnCoordinate(x, y, imgW, imgH) {
     updateView(imgW, imgH);
 }
 
-export function redrawCanvasWithHighlight(originalData, decodedData, imgW, imgH, startPx, endPx, totalPixels) {
-    if (!imgW || !originalData) return;
-    const canvasOriginal = document.getElementById('canvas-original');
-    const canvasDecoded = document.getElementById('canvas-decoded');
-    if(!canvasOriginal || !canvasDecoded) return;
 
-    const ctxOriginal = canvasOriginal.getContext('2d', { willReadFrequently: true });
-    const ctxDecoded = canvasDecoded.getContext('2d', { willReadFrequently: true });
-
-    ctxOriginal.putImageData(originalData, 0, 0);
-    if (decodedData) ctxDecoded.putImageData(decodedData, 0, 0);
-    else ctxDecoded.clearRect(0, 0, imgW, imgH);
-
-    if(startPx >= totalPixels) return;
-
-    let startY = Math.floor(startPx / imgW), startX = startPx % imgW;
-    let endY = Math.floor(endPx / imgW), endX = endPx % imgW;
-
-    function applyDimming(ctx) {
-        ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
-        if (startY > 0) ctx.fillRect(0, 0, imgW, startY);
-        if (startX > 0) ctx.fillRect(0, startY, startX, 1);
-        if (endPx < totalPixels) {
-            if (endX < imgW) ctx.fillRect(endX, endY, imgW - endX, 1);
-            if (endY < imgH - 1) ctx.fillRect(0, endY + 1, imgW, imgH - endY - 1);
-        }
-    }
-    applyDimming(ctxOriginal);
-    if (decodedData) applyDimming(ctxDecoded);
-}
 
 export function setupCanvasEvents(getDimensionsFn, getImageDataFn) {
     const mousePosText = document.getElementById('mouse-pos-text');

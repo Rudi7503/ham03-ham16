@@ -1,13 +1,11 @@
 // src/main.js
-
-import { setZoomMode, updateView, centerOnCoordinate, redrawCanvasWithHighlight, setupCanvasEvents, viewState } from './ui/canvas-view.js';
+import { setZoomMode, updateView, centerOnCoordinate, setupCanvasEvents, viewState } from './ui/canvas-view.js';
 import { encodeStream } from './core/engine-stream.js';
 import { decodeStream } from './core/decoder.js';
 import { HAM_CONFIGS } from './codecs/configs.js';
 import { computeDetailedAnalysis, runSimulationWithStrategy, errorBins } from './core/analysis.js';
 import { simulateBuilderEncode } from './core/builder.js';
-import { hexToRgb, rgbToHex, clamp, get_rgb_dist, get_yuv_dist, get_yuv_dist_weight } from './codecs/utils.js';
-import { computeEdgeMask, extractContours } from './core/edge-detector.js';
+import { hexToRgb, rgbToHex, countUniqueColors, get_yuv_dist, get_yuv_dist_weight, get_rgb_dist } from './codecs/utils.js';
 
 // --- GLOBALE STATES ---
 let currentImgW = 0, currentImgH = 0, totalPixels = 0;
@@ -19,14 +17,14 @@ let latestPackedData = null;
 let latestCommandArray = null;
 
 let globalPaletteRAM = new Uint8Array(256 * 3);
-let userSegments = []; 
-let editingSegmentIndex = -1;
 let currentBuilderSlot = 0;
+
+// NEU: History-Array für die letzten 10 Codier-Durchgänge
+let encodeHistory = [];
 
 // --- DOM ELEMENTE ---
 const formatSelect = document.getElementById('format');
 const hamStepGroup = document.getElementById('ham-step-group');
-
 const hamStepR = document.getElementById('ham-step-r');
 const hamStepG = document.getElementById('ham-step-g');
 const hamStepB = document.getElementById('ham-step-b');
@@ -50,24 +48,11 @@ const ctxOriginal = canvasOriginal.getContext('2d', { willReadFrequently: true }
 const canvasDecoded = document.getElementById('canvas-decoded');
 const ctxDecoded = canvasDecoded.getContext('2d', { willReadFrequently: true });
 
-const segStartPxInput = document.getElementById('seg-start-px');
-const segEndPxInput = document.getElementById('seg-end-px');
-
-const segStepR = document.getElementById('seg-step-r');
-const segStepG = document.getElementById('seg-step-g');
-const segStepB = document.getElementById('seg-step-b');
-
-const segBankInput = document.getElementById('seg-bank');
-const streamListDiv = document.getElementById('stream-list');
-const btnAddSegment = document.getElementById('btn-add-segment');
-
 const btnAutoStep = document.getElementById('btn-auto-step');
-const autoMinInput = document.getElementById('auto-min-step');
-const autoMaxInput = document.getElementById('auto-max-step');
+const historyListDiv = document.getElementById('history-list');
 
-// --- HILFSFUNKTION FÜR SCHRITTWEITEN ---
-function getEffectiveSegments() {
-    if (userSegments.length > 0) return userSegments;
+// --- HILFSFUNKTION: GLOBALER STEP ---
+function getGlobalSegment() {
     return [{
         absEnd: totalPixels,
         waitPixels: totalPixels,
@@ -81,11 +66,10 @@ function getEffectiveSegments() {
 }
 
 // --- INIT UI ---
-// --- INIT UI ---
 setupCanvasEvents(
     () => ({ w: currentImgW, h: currentImgH }),
     () => ({
-        original: (showEdgeOverlay && cachedEdgeImageData) ? cachedEdgeImageData : originalImageData,
+        original: originalImageData, 
         decoded: decodedImageData
     })
 );
@@ -135,11 +119,68 @@ function updateProgressDetail(phase, current, total) {
 function refreshDecodedImage() {
     if (!latestCommandArray || !currentImgW) return;
     let config = HAM_CONFIGS[currentFormat];
-    let decodedPixels = decodeStream(latestCommandArray, currentImgW, currentImgH, globalPaletteRAM, getEffectiveSegments(), config);
+    let decodedPixels = decodeStream(latestCommandArray, currentImgW, currentImgH, globalPaletteRAM, getGlobalSegment(), config);
     ctxDecoded.putImageData(new ImageData(decodedPixels, currentImgW, currentImgH), 0, 0);
     decodedImageData = ctxDecoded.getImageData(0, 0, currentImgW, currentImgH);
-    triggerCanvasHighlight();
 }
+
+// --- HISTORY LOGIK ---
+function renderHistory() {
+    if (!historyListDiv) return;
+    if (encodeHistory.length === 0) { 
+        historyListDiv.innerHTML = "<i>Noch keine Einträge.</i>"; 
+        return; 
+    }
+    
+    let html = "";
+    encodeHistory.forEach((h, idx) => {
+        html += `<div class="stream-tag" onclick="loadHistoryItem(${idx})" title="Klicken zum Wiederherstellen">
+            [#${idx + 1}] ${h.format} | ${h.strategy} | S:[${h.step.r},${h.step.g},${h.step.b}] | ${h.time}ms
+        </div>`;
+    });
+    historyListDiv.innerHTML = html;
+}
+
+window.loadHistoryItem = function(idx) {
+    let h = encodeHistory[idx];
+    if (!h) return;
+    
+    // UI-Elemente wiederherstellen
+    currentFormat = h.format;
+    if (formatSelect) formatSelect.value = h.format;
+    if (encodeStrategySelect) encodeStrategySelect.value = h.strategy;
+    if (encodeMetricSelect) encodeMetricSelect.value = h.metric;
+    if (hamStepR) hamStepR.value = h.step.r;
+    if (hamStepG) hamStepG.value = h.step.g;
+    if (hamStepB) hamStepB.value = h.step.b;
+    if (palBankSelect) palBankSelect.value = h.bank;
+    handleFormatChange();
+    
+    // Palette & Daten wiederherstellen
+    globalPaletteRAM.set(h.palette);
+    updateBankPickers();
+    
+    latestPackedData = h.packedData;
+    latestCommandArray = h.commandArray;
+    
+    // Canvas aktualisieren (Nutzt die echte Deep-Copy der Pixeldaten)
+    ctxDecoded.putImageData(h.decodedImageData, 0, 0);
+    decodedImageData = h.decodedImageData;
+    
+    // Eigene Funktion für Farben zählen, um UI aktuell zu halten
+    let set = new Set();
+    let dData = decodedImageData.data;
+    for (let i = 0; i < dData.length; i += 4) { 
+        set.add((dData[i] << 16) | (dData[i+1] << 8) | dData[i+2]); 
+    }
+    
+    updateStatusTextDimAndColors(set.size, h.stats);
+    let statusEl = document.getElementById('status-text');
+    if (statusEl) statusEl.innerText = `✅ Verlauf [#${idx + 1}] geladen!`;
+    
+    if (btnSave) btnSave.disabled = false; 
+    if (btnAnalysis) btnAnalysis.disabled = false;
+};
 
 // --- PALETTEN & FORMAT UI ---
 function updateBankPickers() {
@@ -176,7 +217,9 @@ function populateBankDropdown() {
     palBankSelect.innerHTML = "";
     let f = formatSelect ? formatSelect.value : "HAM12";
     let config = HAM_CONFIGS[f] || HAM_CONFIGS["HAM12"];
-    let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : (f === "HAM8" ? 64 : 16);
+    
+    // Nutze den Wert aus der Config, Fallback auf 16 falls nicht definiert
+    let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : 16;
     let maxBänke = slotsPerBank > 0 ? Math.floor(256 / slotsPerBank) : 1;
 
     for(let b = 0; b < maxBänke; b++) {
@@ -185,7 +228,6 @@ function populateBankDropdown() {
         opt.innerText = `Bank ${b} (${b * slotsPerBank}-${(b + 1) * slotsPerBank - 1})`;
         palBankSelect.appendChild(opt);
     }
-    if (segBankInput) segBankInput.max = Math.max(0, maxBänke - 1);
     updateBankPickers();
 }
 
@@ -200,14 +242,16 @@ function handleFormatChange() {
     if (hamStepG) hamStepG.disabled = false; 
     if (hamStepB) hamStepB.disabled = false;
     
-    if (segStepR) segStepR.disabled = false; 
-    if (segStepG) segStepG.disabled = false; 
-    if (segStepB) segStepB.disabled = false;
-    
-    if (segBankInput) segBankInput.disabled = !isPalFormat;
-
     if(isPalFormat) populateBankDropdown();
-    updateStatusTextDimAndColors(decodedImageData ? countUniqueColors(decodedImageData.data) : 0);
+    
+    if (decodedImageData) {
+        let set = new Set();
+        let dData = decodedImageData.data;
+        for (let i = 0; i < dData.length; i += 4) { 
+            set.add((dData[i] << 16) | (dData[i+1] << 8) | dData[i+2]); 
+        }
+        updateStatusTextDimAndColors(set.size);
+    }
 }
 
 function handleStrategyVisibility() {
@@ -222,20 +266,10 @@ if (formatSelect) formatSelect.addEventListener('change', handleFormatChange);
 if (encodeStrategySelect) encodeStrategySelect.addEventListener('change', handleStrategyVisibility);
 handleStrategyVisibility();
 
-if (palBankSelect) palBankSelect.addEventListener('change', () => { if (segBankInput) segBankInput.value = palBankSelect.value; updateBankPickers(); });
-if (segBankInput) segBankInput.addEventListener('input', () => { if (palBankSelect) palBankSelect.value = segBankInput.value; updateBankPickers(); });
+if (palBankSelect) palBankSelect.addEventListener('change', () => { updateBankPickers(); });
 
 // --- BILD LADEN ---
-function countUniqueColors(imgData) {
-    let set = new Set();
-    for (let i = 0; i < imgData.length; i += 4) { 
-        set.add((imgData[i] << 16) | (imgData[i+1] << 8) | imgData[i+2]); 
-    }
-    return set.size;
-}
-
 if (btnLoad) btnLoad.addEventListener('click', () => { if(fileImg) fileImg.click(); });
-// --- BILD LADEN (Mit Alpha-Entfernung & schwarzem Hintergrund) ---
 if (fileImg) fileImg.addEventListener('change', (e) => {
     let file = e.target.files[0]; 
     if (!file) return;
@@ -267,7 +301,12 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
             originalImageData = tempCtx.getImageData(0, 0, currentImgW, currentImgH);
             ctxOriginal.putImageData(originalImageData, 0, 0);
 
-            originalColorsCount = countUniqueColors(originalImageData.data);
+            // Zähle originale Farben
+            let set = new Set();
+            for (let i = 0; i < originalImageData.data.length; i += 4) { 
+                set.add((originalImageData.data[i] << 16) | (originalImageData.data[i+1] << 8) | originalImageData.data[i+2]); 
+            }
+            originalColorsCount = set.size;
 
             updateStatusTextDimAndColors(0);
             canvasDecoded.width = currentImgW; 
@@ -276,17 +315,7 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
             decodedImageData = null;
             latestCommandArray = null;
             
-            editingSegmentIndex = -1;
-            
-            let startInp = document.getElementById('seg-start-px');
-            let endInp = document.getElementById('seg-end-px');
-            if (startInp) startInp.value = 0; 
-            if (endInp) endInp.value = totalPixels; 
-            
-            userSegments = [];
-            if (btnAddSegment) btnAddSegment.innerText = "Hinzufügen";
-            
-            updateStreamUI(); 
+            renderHistory(); 
             handleFormatChange();
 
             if (btnEncode) btnEncode.disabled = false; 
@@ -301,154 +330,11 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
             if(statusText) statusText.innerText = "Bild geladen (Alpha entfernt).";
             
             setZoomMode('fit', currentImgW, currentImgH);
-            
-            showEdgeOverlay = false;
-            if(btnToggleEdges) {
-                btnToggleEdges.classList.remove('active');
-                btnToggleEdges.style.backgroundColor = '#6c757d';
-            }
-            cachedEdgeImageData = null;
         }
         img.src = ev.target.result;
     }
     reader.readAsDataURL(file);
 });
-
-// --- SEGMENT STREAM LOGIK ---
-function triggerCanvasHighlight() {
-    if (!originalImageData || !currentImgW) return;
-    
-    let startInput = document.getElementById('seg-start-px');
-    let endInput = document.getElementById('seg-end-px');
-    
-    let sPx = startInput ? (parseInt(startInput.value) || 0) : 0;
-    let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
-    
-    let activeBaseImage = (showEdgeOverlay && cachedEdgeImageData) ? cachedEdgeImageData : originalImageData;
-    
-    redrawCanvasWithHighlight(activeBaseImage, decodedImageData, currentImgW, currentImgH, sPx, ePx, totalPixels);
-}
-
-if (btnAddSegment) btnAddSegment.addEventListener('click', () => {
-    if (!totalPixels) return;
-    let startInput = document.getElementById('seg-start-px');
-    let endInput = document.getElementById('seg-end-px');
-    
-    let startPx = startInput ? (parseInt(startInput.value) || 0) : 0;
-    let endPx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
-    
-    let step = { 
-        r: segStepR ? (parseInt(segStepR.value) || 4) : 4, 
-        g: segStepG ? (parseInt(segStepG.value) || 4) : 4, 
-        b: segStepB ? (parseInt(segStepB.value) || 4) : 4 
-    };
-    let bank = segBankInput ? (parseInt(segBankInput.value) || 0) : 0;
-
-    if (endPx <= 0 || endPx > totalPixels) { alert("Ungültiges End-Pixel!"); return; }
-
-    if (editingSegmentIndex >= 0) {
-        userSegments[editingSegmentIndex].absEnd = endPx;
-        userSegments[editingSegmentIndex].bank = bank;
-        userSegments[editingSegmentIndex].step = step;
-        editingSegmentIndex = -1;
-        btnAddSegment.innerText = "Hinzufügen";
-    } else {
-        let existIdx = userSegments.findIndex(s => s.absEnd === endPx);
-        if (existIdx >= 0) {
-            userSegments[existIdx].bank = bank;
-            userSegments[existIdx].step = step;
-        } else {
-            userSegments.push({ absEnd: endPx, waitPixels: 0, bank: bank, step: step });
-        }
-    }
-
-    userSegments.sort((a, b) => a.absEnd - b.absEnd);
-    for(let i = 0; i < userSegments.length; i++) {
-        let pEnd = i === 0 ? 0 : userSegments[i - 1].absEnd;
-        userSegments[i].waitPixels = userSegments[i].absEnd - pEnd;
-    }
-
-    let lastEnd = userSegments.length > 0 ? userSegments[userSegments.length - 1].absEnd : 0;
-    if (startInput) startInput.value = lastEnd;
-    if (endInput) endInput.value = totalPixels;
-    
-    updateStreamUI(); 
-    triggerCanvasHighlight();
-});
-
-window.editSegment = function(idx) {
-    editingSegmentIndex = idx;
-    let s = userSegments[idx];
-    let prevEnd = idx === 0 ? 0 : userSegments[idx - 1].absEnd;
-    
-    let startInput = document.getElementById('seg-start-px');
-    let endInput = document.getElementById('seg-end-px');
-    if (startInput) startInput.value = prevEnd;
-    if (endInput) endInput.value = s.absEnd;
-    if (segBankInput) segBankInput.value = s.bank;
-    
-    if (segStepR) segStepR.value = s.step.r; 
-    if (segStepG) segStepG.value = s.step.g; 
-    if (segStepB) segStepB.value = s.step.b;
-    
-    if (palBankSelect) palBankSelect.value = s.bank;
-    updateBankPickers();
-    if (btnAddSegment) btnAddSegment.innerText = "Aktualisieren";
-    triggerCanvasHighlight();
-};
-
-window.deleteSegment = function(e, idx) {
-    e.stopPropagation();
-    userSegments.splice(idx, 1);
-    for(let i = 0; i < userSegments.length; i++) {
-        let pEnd = i === 0 ? 0 : userSegments[i - 1].absEnd;
-        userSegments[i].waitPixels = userSegments[i].absEnd - pEnd;
-    }
-    editingSegmentIndex = -1;
-    if (btnAddSegment) btnAddSegment.innerText = "Hinzufügen";
-    
-    let lastEnd = userSegments.length > 0 ? userSegments[userSegments.length - 1].absEnd : 0;
-    let startInput = document.getElementById('seg-start-px');
-    let endInput = document.getElementById('seg-end-px');
-    if (startInput) startInput.value = lastEnd;
-    if (endInput) endInput.value = totalPixels;
-    
-    updateStreamUI(); 
-    triggerCanvasHighlight();
-};
-
-let btnClearSegs = document.getElementById('btn-clear-segments');
-if (btnClearSegs) btnClearSegs.addEventListener('click', () => {
-    userSegments = []; 
-    editingSegmentIndex = -1;
-    if (btnAddSegment) btnAddSegment.innerText = "Hinzufügen";
-    let startInput = document.getElementById('seg-start-px');
-    let endInput = document.getElementById('seg-end-px');
-    if (startInput) startInput.value = 0; 
-    if (endInput) endInput.value = totalPixels;
-    updateStreamUI(); 
-    triggerCanvasHighlight();
-});
-
-let segEndInputEl = document.getElementById('seg-end-px');
-if (segEndInputEl) segEndInputEl.addEventListener('input', triggerCanvasHighlight);
-
-function updateStreamUI() {
-    if (!streamListDiv) return;
-    if (userSegments.length === 0) { 
-        streamListDiv.innerHTML = "<i>Keine Segmente.</i>"; 
-        return; 
-    }
-    let html = "";
-    userSegments.forEach((s, idx) => {
-        let prevEnd = idx === 0 ? 0 : userSegments[idx - 1].absEnd;
-        html += `<div style="display:flex; justify-content:space-between; margin-bottom:2px; background:#eee; padding:2px 4px;">
-            <span>[#${idx + 1}] ${prevEnd}&rarr;${s.absEnd} (B:${s.bank}, S:[${s.step.r},${s.step.g},${s.step.b}])</span>
-            <span><a href="#" onclick="editSegment(${idx})">✏️</a> <a href="#" onclick="deleteSegment(event, ${idx})">❌</a></span>
-        </div>`;
-    });
-    streamListDiv.innerHTML = html;
-}
 
 // --- KERN-ENCODER & DECODER ---
 if (btnEncode) btnEncode.addEventListener('click', async () => {
@@ -479,7 +365,7 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
 
     let encodeResult = await encodeStream(
         originalImageData.data, currentImgW, currentImgH, currentFormat, 
-        getEffectiveSegments(), globalPaletteRAM, strategy, metric, max_depth, 
+        getGlobalSegment(), globalPaletteRAM, strategy, metric, max_depth, 
         (phase, current, total) => updateProgressDetail(phase, current, total),
         0, 0, hybridPercent
     );
@@ -492,80 +378,64 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
     await new Promise(r => setTimeout(r, 20));
     
     let decStart = Date.now();
-    let decodedPixels = decodeStream(latestCommandArray, currentImgW, currentImgH, globalPaletteRAM, getEffectiveSegments(), config);
+    let decodedPixels = decodeStream(latestCommandArray, currentImgW, currentImgH, globalPaletteRAM, getGlobalSegment(), config);
     
-    ctxDecoded.putImageData(new ImageData(decodedPixels, currentImgW, currentImgH), 0, 0);
-    decodedImageData = ctxDecoded.getImageData(0, 0, currentImgW, currentImgH);
+    decodedImageData = new ImageData(decodedPixels, currentImgW, currentImgH);
+    ctxDecoded.putImageData(decodedImageData, 0, 0);
     
     let decTime = Date.now() - decStart;
 
-    updateStatusTextDimAndColors(countUniqueColors(decodedPixels), stats);
+    let set = new Set();
+    for (let i = 0; i < decodedPixels.length; i += 4) { 
+        set.add((decodedPixels[i] << 16) | (decodedPixels[i+1] << 8) | decodedPixels[i+2]); 
+    }
+
+    updateStatusTextDimAndColors(set.size, stats);
     let progressEl = document.getElementById('progress');
     if(progressEl) progressEl.value = 100; 
     
     let statusEl = document.getElementById('status-text');
     if(statusEl) statusEl.innerText = `✅ Fertig! (Modus: ${currentFormat}, Renderzeit: ${decTime}ms)`;
-    triggerCanvasHighlight();
+    
+    // In die History aufnehmen
+    encodeHistory.push({
+        format: currentFormat,
+        strategy: strategy,
+        metric: metric,
+        step: { ...getGlobalSegment()[0].step },
+        bank: getGlobalSegment()[0].bank,
+        palette: new Uint8Array(globalPaletteRAM),
+        packedData: latestPackedData,
+        commandArray: latestCommandArray,
+        decodedImageData: decodedImageData,
+        stats: stats,
+        time: decTime
+    });
+    
+    if (encodeHistory.length > 10) encodeHistory.shift();
+    renderHistory();
 
     btnLoad.disabled = false; btnEncode.disabled = false; if(btnSave) btnSave.disabled = false; 
     if(btnBuilder) btnBuilder.disabled = false; if(btnAnalysis) btnAnalysis.disabled = false;
 });
 
 // --- ANALYSIS MODAL ---
-window.splitAtPixel = function(pixelIdx) {
-    let targetPx = Math.max(0, pixelIdx - 1);
-    let modal = document.getElementById('analysis-modal');
-    if (modal) modal.style.display = 'none';
-    
-    let start = 0;
-    for(let i = 0; i < userSegments.length; i++) {
-        if (targetPx < userSegments[i].absEnd) { start = i === 0 ? 0 : userSegments[i - 1].absEnd; break; }
-    }
-    if (targetPx >= (userSegments.length > 0 ? userSegments[userSegments.length - 1].absEnd : 0)) {
-        start = userSegments.length > 0 ? userSegments[userSegments.length - 1].absEnd : 0;
-    }
-    
-    editingSegmentIndex = -1;
-    if (btnAddSegment) btnAddSegment.innerText = "Hinzufügen";
-    let startInput = document.getElementById('seg-start-px');
-    let endInput = document.getElementById('seg-end-px');
-    if (startInput) startInput.value = start;
-    if (endInput) endInput.value = targetPx;
-    triggerCanvasHighlight();
-}
 window.centerOnCoordinate = function(x, y) { centerOnCoordinate(x, y, currentImgW, currentImgH); }
 
 if (btnAnalysis) btnAnalysis.addEventListener('click', () => {
     if(!latestPackedData || !currentImgW) { alert("Bitte lade und codiere zuerst ein Bild."); return; }
     
-    let startInput = document.getElementById('seg-start-px');
-    let endInput = document.getElementById('seg-end-px');
-    let sPx = startInput ? (parseInt(startInput.value) || 0) : 0;
-    let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
-    
-    const stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, sPx, ePx);
-    
-    let anaStart = document.getElementById('ana-seg-start');
-    if (anaStart) anaStart.innerText = sPx;
-    let anaEnd = document.getElementById('ana-seg-end');
-    if (anaEnd) anaEnd.innerText = ePx;
+    const stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels);
     
     let avgMseDisplay = document.getElementById('avg-mse-display');
     if (avgMseDisplay) {
         avgMseDisplay.innerText = `⌀ RGB: ${stats.global.avgRgb.toFixed(2)} | ⌀ YUV: ${stats.global.avgYuv.toFixed(2)}`;
         avgMseDisplay.style.display = 'inline';
     }
-    
-    let anaSegAvg = document.getElementById('ana-seg-avg');
-    if (anaSegAvg) anaSegAvg.innerHTML = `<b>⌀ RGB MSE:</b> ${stats.segment.avgRgb.toFixed(2)} &nbsp;|&nbsp; <b>⌀ YUV MSE:</b> ${stats.segment.avgYuv.toFixed(2)}`;
 
     let renderTop5 = (list) => list.map((e, i) => `<div>#${i + 1}: Px ${e.pixelIdx} (${e.details}) | MSE: ${Math.round(e.mse)} 
-        | <a href="#" onclick="centerOnCoordinate(${e.x}, ${e.y})">Zentrieren</a>
-        | <a href="#" style="color:red;" onclick="splitAtPixel(${e.pixelIdx})">Trennen</a></div>`).join('');
+        | <a href="#" onclick="centerOnCoordinate(${e.x}, ${e.y})">Zentrieren</a></div>`).join('');
 
-    let anaSegTop5 = document.getElementById('analysis-seg-top5');
-    if (anaSegTop5) anaSegTop5.innerHTML = renderTop5(stats.segment.top5) || "<i>Keine Fehler.</i>";
-    
     let anaTop5 = document.getElementById('analysis-top5');
     if (anaTop5) anaTop5.innerHTML = renderTop5(stats.global.top5);
 
@@ -655,11 +525,6 @@ function refreshBuilderUI() {
 }
 
 function runBuilderAnalysis() {
-    let startInput = document.getElementById('seg-start-px');
-    let endInput = document.getElementById('seg-end-px');
-    let sPx = startInput ? (parseInt(startInput.value) || 0) : 0;
-    let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
-    
     let stepVal = { 
         r: hamStepR ? (parseInt(hamStepR.value) || 4) : 4, 
         g: hamStepG ? (parseInt(hamStepG.value) || 4) : 4, 
@@ -669,7 +534,7 @@ function runBuilderAnalysis() {
     let bMetric = builderMetricSelect ? builderMetricSelect.value : 'yuv_weight';
 
     let results = simulateBuilderEncode(
-        sPx, ePx, originalImageData.data, currentImgW, 
+        0, totalPixels, originalImageData.data, currentImgW, 
         Array.from({length: 256}, (_, i) => [globalPaletteRAM[i * 3], globalPaletteRAM[i * 3 + 1], globalPaletteRAM[i * 3 + 2]]), 
         currentBuilderSlot, stepVal, currentFormat, bMetric
     );
@@ -694,7 +559,7 @@ function runBuilderAnalysis() {
     
     let statusEl = document.getElementById('builder-status');
     if (statusEl) {
-        statusEl.innerText = `Analysiert Slot ${currentBuilderSlot} (Segment Px ${sPx} bis ${ePx})`;
+        statusEl.innerText = `Analysiert Slot ${currentBuilderSlot} (Gesamtbild)`;
     }
 }
 
@@ -727,18 +592,16 @@ let btnBuildAuto = document.getElementById('btn-builder-auto');
 if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     if (!currentImgW) { alert("Bitte lade zuerst ein Bild!"); return; }
     
-    let startInput = document.getElementById('seg-start-px');
-    let endInput = document.getElementById('seg-end-px');
-    let sPx = startInput ? (parseInt(startInput.value) || 0) : 0;
-    let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
-    
     let bankIdx = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
     let config = HAM_CONFIGS[currentFormat];
-    let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : (currentFormat === "HAM8" ? 64 : 16);
+    
+    // Dynamische Ermittlung der Slot-Anzahl direkt aus der Konfiguration
+    let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : 16;
     let startSlot = bankIdx * slotsPerBank;
 
     let statusEl = document.getElementById('builder-status');
     
+    // Bank komplett leeren für den Neufart
     for (let i = 0; i < slotsPerBank; i++) {
         let currentSlot = startSlot + i;
         globalPaletteRAM[currentSlot * 3] = 0;
@@ -752,28 +615,25 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     let bMetric = builderMetricSelect ? builderMetricSelect.value : 'yuv_weight';
     let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
 
+    // Iteriert nun exakt über alle Slots (z.B. 16 bei HAM05, 32 bei HAM06)
     for (let i = 0; i < slotsPerBank; i++) {
         let currentSlot = startSlot + i;
-        if (statusEl) statusEl.innerText = `Optimiere Slot ${currentSlot} (${i + 1}/${slotsPerBank}) durch echten Codec...`;
-        await new Promise(r => setTimeout(r, 20)); 
+        if (statusEl) statusEl.innerText = `Fülle Slot ${currentSlot} (${i + 1}/${slotsPerBank})...`;
+        await new Promise(r => setTimeout(r, 10)); 
 
         let encodeResult = await encodeStream(
             originalImageData.data, currentImgW, currentImgH, currentFormat, 
-            getEffectiveSegments(), globalPaletteRAM, strategy, bMetric, max_depth, 
-            null, sPx, ePx
+            getGlobalSegment(), globalPaletteRAM, strategy, bMetric, max_depth, 
+            null, 0, totalPixels
         );
         
-        let decodedPixels = decodeStream(encodeResult.commandArray, currentImgW, currentImgH, globalPaletteRAM, getEffectiveSegments(), config);
-        
+        let decodedPixels = decodeStream(encodeResult.commandArray, currentImgW, currentImgH, globalPaletteRAM, getGlobalSegment(), config);
         ctxDecoded.putImageData(new ImageData(decodedPixels, currentImgW, currentImgH), 0, 0);
-        triggerCanvasHighlight();
-        await new Promise(r => setTimeout(r, 10));
 
         let errorMap = new Map();
         let histMap = new Map();
-        let end = Math.min(totalPixels, ePx);
 
-        for (let p = sPx; p < end; p++) {
+        for (let p = 0; p < totalPixels; p++) {
             let idx = p * 4;
             let r1 = originalImageData.data[idx], g1 = originalImageData.data[idx+1], b1 = originalImageData.data[idx+2];
             let r2 = decodedPixels[idx], g2 = decodedPixels[idx+1], b2 = decodedPixels[idx+2];
@@ -789,26 +649,27 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
             errorMap.set(hex, (errorMap.get(hex) || 0) + err);
         }
 
-        let worstHex = "#000000";
-        let maxScore = -1;
+        let bestHex = "#000000";
+        let maxImpact = -1;
 
         for (let [hex, count] of histMap.entries()) {
-            let avgErr = errorMap.get(hex) / count;
-            let totalError = errorMap.get(hex); 
-            if (avgErr > 2 && totalError > maxScore) {
-                maxScore = totalError;
-                worstHex = hex;
+            let totalError = errorMap.get(hex);
+            let impact = count * totalError; 
+            
+            if (impact > maxImpact && totalError > 1.0) {
+                maxImpact = impact;
+                bestHex = hex;
             }
         }
 
-        if (maxScore === -1 && histMap.size > 0) {
+        if (maxImpact === -1 && histMap.size > 0) {
             let maxCount = -1;
             for (let [hex, count] of histMap.entries()) {
-                if (count > maxCount) { maxCount = count; worstHex = hex; }
+                if (count > maxCount) { maxCount = count; bestHex = hex; }
             }
         }
 
-        let [wr, wg, wb] = hexToRgb(worstHex);
+        let [wr, wg, wb] = hexToRgb(bestHex);
         globalPaletteRAM[currentSlot * 3] = wr;
         globalPaletteRAM[currentSlot * 3 + 1] = wg;
         globalPaletteRAM[currentSlot * 3 + 2] = wb;
@@ -823,14 +684,14 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
 
     let finalEncode = await encodeStream(
         originalImageData.data, currentImgW, currentImgH, currentFormat, 
-        getEffectiveSegments(), globalPaletteRAM, strategy, bMetric, max_depth, 
+        getGlobalSegment(), globalPaletteRAM, strategy, bMetric, max_depth, 
         null, 0, totalPixels
     );
     
     latestCommandArray = finalEncode.commandArray;
     refreshDecodedImage();
     
-    if (statusEl) statusEl.innerText = `Bank ${bankIdx} erfolgreich iterativ optimiert!`;
+    if (statusEl) statusEl.innerText = `Bank ${bankIdx} erfolgreich vollständig belegt!`;
 });
 
 // --- AUTO SCHRITTWEITEN LOGIK ---
@@ -853,23 +714,19 @@ if (btnAutoStep) btnAutoStep.addEventListener('click', async () => {
     
     let recEl = document.getElementById('auto-step-recommendation');
     if (recEl) recEl.innerText = "";
-
-    let startInput = document.getElementById('seg-start-px');
-    let endInput = document.getElementById('seg-end-px');
-    let sPx = startInput ? (parseInt(startInput.value) || 0) : 0;
-    let ePx = endInput ? (parseInt(endInput.value) || totalPixels) : totalPixels;
     
-    let strategy = encodeStrategySelect ? encodeStrategySelect.value : 'both';
+    // ERZWINGE GREEDY (both, depth 1) FÜR SCHNELLE SIMULATION
+    let strategy = 'both'; 
+    let max_depth = 1; 
     let metric = encodeMetricSelect ? encodeMetricSelect.value : 'yuv_weight';
-    let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
 
     let pal = Array.from({length: 256}, (_, i) => [globalPaletteRAM[i * 3], globalPaletteRAM[i * 3 + 1], globalPaletteRAM[i * 3 + 2]]);
 
     async function evaluateStep(r, g, b) {
-        return await runSimulationWithStrategy(sPx, ePx, originalImageData.data, currentImgW, pal, {r, g, b}, strategy, metric, max_depth, currentFormat);
+        return await runSimulationWithStrategy(0, totalPixels, originalImageData.data, currentImgW, pal, {r, g, b}, strategy, metric, max_depth, currentFormat);
     }
 
-    let bestUniformYuv = Infinity;
+    let bestScore = Infinity;
     let bestStep = { r: minStep, g: minStep, b: minStep };
     let initialStats = null;
 
@@ -878,8 +735,9 @@ if (btnAutoStep) btnAutoStep.addEventListener('click', async () => {
         await new Promise(res => setTimeout(res, 10));
 
         let res = await evaluateStep(s, s, s);
-        if (res.avgYuv < bestUniformYuv) {
-            bestUniformYuv = res.avgYuv;
+        
+        if (res.score < bestScore) {
+            bestScore = res.score;
             bestStep = { r: s, g: s, b: s };
             initialStats = res;
         }
@@ -896,7 +754,6 @@ if (btnAutoStep) btnAutoStep.addEventListener('click', async () => {
     }
 
     let channels = ['r', 'g', 'b'];
-    let bestYuv = bestUniformYuv;
     let finalStats = initialStats;
 
     for (let ch of channels) {
@@ -912,8 +769,8 @@ if (btnAutoStep) btnAutoStep.addEventListener('click', async () => {
                 let testMinus = { ...bestStep };
                 testMinus[ch] = currentVal - 1;
                 let resMinus = await evaluateStep(testMinus.r, testMinus.g, testMinus.b);
-                if (resMinus.avgYuv < bestYuv) {
-                    bestYuv = resMinus.avgYuv;
+                if (resMinus.score < bestScore) {
+                    bestScore = resMinus.score;
                     bestStep = testMinus;
                     finalStats = resMinus;
                     improved = true;
@@ -925,8 +782,8 @@ if (btnAutoStep) btnAutoStep.addEventListener('click', async () => {
                 let testPlus = { ...bestStep };
                 testPlus[ch] = currentVal + 1;
                 let resPlus = await evaluateStep(testPlus.r, testPlus.g, testPlus.b);
-                if (resPlus.avgYuv < bestYuv) {
-                    bestYuv = resPlus.avgYuv;
+                if (resPlus.score < bestScore) {
+                    bestScore = resPlus.score;
                     bestStep = testPlus;
                     finalStats = resPlus;
                     improved = true;
@@ -946,7 +803,7 @@ if (btnAutoStep) btnAutoStep.addEventListener('click', async () => {
     }
 
     if (recEl) {
-        recEl.innerText = `🏆 Koordinatenabstieg beendet! Bestes Ergebnis: RGB [${bestStep.r}, ${bestStep.g}, ${bestStep.b}] (YUV: ${bestYuv.toFixed(2)})`;
+        recEl.innerText = `🏆 Koordinatenabstieg beendet! Bestes Ergebnis: RGB [${bestStep.r}, ${bestStep.g}, ${bestStep.b}]`;
     }
     if (statusEl) statusEl.innerText = "Berechnung abgeschlossen.";
 });
@@ -956,20 +813,11 @@ window.applyAutoStep = function(r, g, b) {
     if (hamStepG) hamStepG.value = g; 
     if (hamStepB) hamStepB.value = b;
     
-    if (segStepR) segStepR.value = r; 
-    if (segStepG) segStepG.value = g; 
-    if (segStepB) segStepB.value = b;
-    
-    if (editingSegmentIndex >= 0) {
-        userSegments[editingSegmentIndex].step = { r, g, b };
-        updateStreamUI();
-    }
-    
     let modal = document.getElementById('auto-step-modal');
     if (modal) modal.style.display = 'none';
 };
 
-let btnAutoClose = document.getElementById('btn-auto-step-close');
+let btnAutoClose = document.getElementById('auto-step-close');
 if (btnAutoClose) btnAutoClose.addEventListener('click', () => {
     let modal = document.getElementById('auto-step-modal');
     if (modal) modal.style.display = 'none';
@@ -994,86 +842,3 @@ if (btnSave) btnSave.addEventListener('click', () => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 });
-
-// --- KANTEN-OVERLAY LOGIK ---
-let showEdgeOverlay = false;
-let cachedEdgeImageData = null;
-let lastLow = 30;
-let lastHigh = 100;
-
-const btnToggleEdges = document.getElementById('btn-toggle-edges');
-const cannyLowInput = document.getElementById('canny-low');
-const cannyHighInput = document.getElementById('canny-high');
-
-function updateEdgeOverlay() {
-    if (!originalImageData) return;
-    
-    let currentLow = cannyLowInput ? (parseInt(cannyLowInput.value) || 30) : 30;
-    let currentHigh = cannyHighInput ? (parseInt(cannyHighInput.value) || 100) : 100;
-    
-    if (currentLow !== lastLow || currentHigh !== lastHigh || !cachedEdgeImageData) {
-        lastLow = currentLow;
-        lastHigh = currentHigh;
-
-        let rawMask = computeEdgeMask(originalImageData, currentImgW, currentImgH, currentLow, currentHigh);
-        let contours = extractContours(rawMask, currentImgW, currentImgH, 10);
-        
-        let combined = new ImageData(new Uint8ClampedArray(originalImageData.data), currentImgW, currentImgH);
-        let outD = combined.data;
-        for (let i = 0; i < outD.length; i += 4) {
-            outD[i] = outD[i] * 0.3;     
-            outD[i+1] = outD[i+1] * 0.3; 
-            outD[i+2] = outD[i+2] * 0.3; 
-        }
-        
-        contours.forEach((line) => {
-            let r = Math.floor(Math.random() * 155) + 100;
-            let g = Math.floor(Math.random() * 155) + 100;
-            let b = Math.floor(Math.random() * 155) + 100;
-
-            line.forEach(point => {
-                let idx = (point.y * currentImgW + point.x) * 4;
-                outD[idx]     = r;
-                outD[idx + 1] = g;
-                outD[idx + 2] = b;
-                outD[idx + 3] = 255;
-            });
-        });
-
-        cachedEdgeImageData = combined;
-    }
-    
-    ctxOriginal.putImageData(cachedEdgeImageData, 0, 0);
-    triggerCanvasHighlight();
-}
-
-if (btnToggleEdges) {
-    btnToggleEdges.addEventListener('click', () => {
-        if (!originalImageData) {
-            alert("Bitte lade zuerst ein Bild!");
-            return;
-        }
-
-        showEdgeOverlay = !showEdgeOverlay;
-        btnToggleEdges.classList.toggle('active', showEdgeOverlay);
-        btnToggleEdges.style.backgroundColor = showEdgeOverlay ? '#17a2b8' : '#6c757d';
-
-        if (showEdgeOverlay) {
-            updateEdgeOverlay();
-        } else {
-            ctxOriginal.putImageData(originalImageData, 0, 0);
-            triggerCanvasHighlight();
-        }
-    });
-}
-
-if (cannyLowInput) {
-    cannyLowInput.addEventListener('input', () => {
-        if (showEdgeOverlay) updateEdgeOverlay();
-    });
-}
-if (cannyHighInput) {
-    cannyHighInput.addEventListener('input', () => {
-        if (showEdgeOverlay) updateEdgeOverlay();
-    });
-}

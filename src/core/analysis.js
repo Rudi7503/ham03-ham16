@@ -63,6 +63,7 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
 }
 
 // Schnelle Simulation für den Auto-Step-Algorithmus (blockiert UI nicht mehr)
+// Schnelle Simulation für den Auto-Step-Algorithmus (mit Subsampling und Score)
 export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palette, stepVal, strategy, metric, max_depth, format) {
     let imgH = origData.length / (imgW * 4);
     
@@ -72,18 +73,17 @@ export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palett
     // Simuliere Kodierung
     let encodeResult = await encodeStream(origData, imgW, imgH, format, segs, palette, strategy, metric, max_depth, null, sPx, ePx);
     
-    // Berechne Fehler nur auf dem generierten Segment
     let config = HAM_CONFIGS[format];
     let decoded = decodeStream(encodeResult.commandArray, imgW, imgH, palette, segs, config);
     
     let yuvSum = 0, rgbSum = 0, maxYuv = 0, count = 0;
     
-    for (let i = sPx; i < ePx; i++) {
+    // SUBSAMPLING: Berechne Fehler nur für jeden 2. Pixel (50% schneller)
+    for (let i = sPx; i < ePx; i += 2) {
         let idx = i * 4;
         let r1 = origData[idx], g1 = origData[idx+1], b1 = origData[idx+2];
         let r2 = decoded[idx], g2 = decoded[idx+1], b2 = decoded[idx+2];
         
-        // NEU: Berücksichtige die ausgewählte Metrik für die Statistik-Berechnung
         let yDist = 0;
         if (metric === 'yuv_weight') {
             yDist = get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
@@ -99,5 +99,16 @@ export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palett
         count++;
     }
 
-    return { avgRgb: rgbSum/count, avgYuv: yuvSum/count, maxYuv };
+    let avgRgb = rgbSum / count;
+    let avgYuv = yuvSum / count;
+
+    // DAS OPTISCHE MAXIMUM: Score-Berechnung
+    // Wir bestrafen große Schrittweiten und harte Ausreißer (Banding)
+    let alpha = 0.2; // Strafe für YUV-Ausreißer
+    let beta = 0.5;  // Strafe für zu große Schrittweiten-Summe
+    let stepPenalty = stepVal.r + stepVal.g + stepVal.b;
+
+    let score = avgYuv + (alpha * maxYuv) + (beta * stepPenalty);
+
+    return { avgRgb, avgYuv, maxYuv, score };
 }

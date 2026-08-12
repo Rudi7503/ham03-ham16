@@ -72,3 +72,12 @@ export function unpack_nbit(d, n, c) {
     }
     return w;
 }
+
+// Zählt die eindeutigen Farben in einem RGBA-ImageData-Array
+export function countUniqueColors(imgData) {
+    let set = new Set();
+    for (let i = 0; i < imgData.length; i += 4) { 
+        set.add((imgData[i] << 16) | (imgData[i+1] << 8) | imgData[i+2]); 
+    }
+    return set.size;
+}

@@ -158,14 +158,6 @@
         <div id="avg-mse-display" style="display:none;">⌀ RGB: 0.0 | ⌀ YUV: 0.0</div>
     </div>
 
-    <div class="control-group" style="display:inline-flex; align-items:center;">
-    <button id="btn-toggle-edges" style="background:o6c757d; color:white; margin-right:8px;">Canny-Overlay</button>
-    <label style="font-size:11px; margin-right:4px;">Low:</label>
-    <input type="number" id="canny-low" value="30" min="5" max="500" style="width:50px; margin-right:8px;" title="Canny Low Threshold">
-    <label style="font-size:11px; margin-right:4px;">High:</label>
-    <input type="number" id="canny-high" value="100" min="10" max="1000" style="width:50px;" title="Canny High Threshold">
-    </div>
-
     <div class="status-container">
         <div class="status-row">
             <span id="img-dim-text">Größe: - | Farben: - | Modus: -</span>
@@ -177,32 +169,12 @@
     <input type="file" id="file-img" accept="image/png, image/jpeg, image/bmp, image/webp" style="display: none;">
 </div>
 
-<!-- Counter Register / Segment Stream Panel -->
-<div id="stream-panel">
-    <span style="font-weight:bold; color:#4dabf7;">Counter Segmente:</span>
-    <div class="control-group">
-        <label>Von Pixel:</label>
-        <input type="number" id="seg-start-px" value="0" readonly style="background:#333; color:#aaa; width:65px;">
+<!-- History Panel (Ersetzt das alte Segment-Panel) -->
+<div id="history-panel" style="background: #181a1c; padding: 8px 20px; border-bottom: 1px solid #444; display: flex; gap: 15px; align-items: center; font-size: 11px;">
+    <span style="font-weight:bold; color:#ffc107;">Verlauf (Letzte 10):</span>
+    <div id="history-list" style="display: flex; gap: 5px; flex-wrap: wrap; max-height: 35px; overflow-y: auto; align-items: center;">
+        <i>Noch keine Einträge.</i>
     </div>
-    <div class="control-group">
-        <label>Bis Pixel:</label>
-        <input type="number" id="seg-end-px" value="0" style="width:65px;">
-    </div>
-    <div class="control-group" id="seg-step-group">
-        <label>Schritt:</label>
-        <div style="display:flex; gap:2px;">
-            <input type="number" id="seg-step-r" value="4" min="1" max="128" style="width:38px; color:#ff6b6b;" title="Rot">
-            <input type="number" id="seg-step-g" value="4" min="1" max="128" style="width:38px; color:#28a745;" title="Grün">
-            <input type="number" id="seg-step-b" value="4" min="1" max="128" style="width:38px; color:#4dabf7;" title="Blau">
-        </div>
-    </div>
-    <div class="control-group" id="seg-bank-group">
-        <label>Bank:</label>
-        <input type="number" id="seg-bank" value="0" min="0" max="31">
-    </div>
-    <button id="btn-add-segment" style="background:#28a745; color:#fff;">In Liste übernehmen</button>
-    <button id="btn-clear-segments" style="background:#dc3545; color:#fff;">Reset</button>
-    <div id="stream-list"><i>Keine Segmente definiert (Nutzt Standard für Gesamtbild).</i></div>
 </div>
 
 <div id="image-area">
@@ -258,17 +230,11 @@
    </div>
 </div>
 
-<!-- Fehler-Analyse Modal -->
+<!-- Fehler-Analyse Modal (Bereinigt) -->
 <div id="analysis-modal" class="modal-overlay">
    <div class="modal-content" style="width: 850px;">
       <h3 style="margin-top:0;">Fehler- & Histogramm-Analyse</h3>
       
-      <div style="background:#2b2f33; padding:10px; border-radius:6px; border:1px solid #4dabf7; margin-bottom:15px;">
-          <h4 style="margin:0 0 8px 0; color:#4dabf7;">Aktuelles Segment (Px <span id="ana-seg-start"></span> bis <span id="ana-seg-end"></span>)</h4>
-          <div id="ana-seg-avg" style="font-size:12px; margin-bottom:8px;"></div>
-          <div id="analysis-seg-top5" style="background:#111; padding:8px; border-radius:4px; font-size:12px;"></div>
-      </div>
-
       <h4 style="margin:10px 0 5px 0; color:#ffc107;">Gesamtbild: Top 5 Max MSE Abweichungen</h4>
       <div id="analysis-top5" style="background:#111; padding:8px; border-radius:4px; font-size:12px;"></div>
       
