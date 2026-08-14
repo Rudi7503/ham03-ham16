@@ -1,5 +1,3 @@
-// src/codecs/configs.js
-
 export const HAM_CONFIGS = {
     "HAM04": {
         name: "HAM04",
@@ -48,5 +46,14 @@ export const HAM_CONFIGS = {
         maxAnchor: 0,
         hasTurbo: true,
         channels: { r: [1, -1], g: [1, -1], b: [1, -1] }
+    },
+    "HAM_16BIT": {
+        name: "HAM_16BIT",
+        isPaletted: true,
+        isMixed: true,                     // Aktiviert den Pixel-zu-Pixel Formatwechsel
+        sequence: ["HAM06", "HAM04", "HAM06"],
+        slotsPerBank: 32,                  // Das Maximum (HAM06 benötigt 32 Slots)
+        maxAnchor: 31,
+        hasTurbo: true
     }
 };

@@ -1,5 +1,3 @@
-// src/ui/canvas-view.js
-
 export const viewState = { mode: 'fit', panX: 0, panY: 0, startX: 0, startY: 0, panning: false };
 
 export function getScaleFactor(mode, imgW, imgH, viewportElement) {
@@ -82,8 +80,6 @@ export function centerOnCoordinate(x, y, imgW, imgH) {
     updateView(imgW, imgH);
 }
 
-
-
 export function setupCanvasEvents(getDimensionsFn, getImageDataFn) {
     const mousePosText = document.getElementById('mouse-pos-text');
     const viewOriginal = document.getElementById('pane-left');
@@ -122,7 +118,7 @@ export function setupCanvasEvents(getDimensionsFn, getImageDataFn) {
                         let r1 = data.original.data[idx];
                         let g1 = data.original.data[idx + 1];
                         let b1 = data.original.data[idx + 2];
-                        let a1 = data.original.data[idx + 3]; // Alpha-Wert (0 - 255)
+                        let a1 = data.original.data[idx + 3];
 
                         text += ` | Orig: RGBA(${r1},${g1},${b1},${Math.round((a1/255)*100)}%)`;
                         if (data.decoded) {

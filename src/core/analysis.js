@@ -1,6 +1,5 @@
-// src/core/analysis.js
 import { HAM_CONFIGS } from '../codecs/configs.js';
-import { get_rgb_dist, get_yuv_dist, get_yuv_dist_weight, rgbToHex } from '../codecs/utils.js';
+import { get_rgb_dist, get_rgb_abs_dist, get_yuv_dist, get_yuv_dist_weight, get_yuv_dist_weight_heavy, get_redmean_dist, get_oklab_dist, rgbToHex } from '../codecs/utils.js';
 import { decodeStream } from './decoder.js';
 import { encodeStream } from './engine-stream.js';
 export const errorBins = [0, 5, 10, 20, 50, 100];
@@ -62,15 +61,11 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
     return stats;
 }
 
-// Schnelle Simulation für den Auto-Step-Algorithmus (blockiert UI nicht mehr)
-// Schnelle Simulation für den Auto-Step-Algorithmus (mit Subsampling und Score)
-export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palette, stepVal, strategy, metric, max_depth, format) {
+export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palette, stepVal, strategy, metric, max_depth, format, currentOffset = 0) {
     let imgH = origData.length / (imgW * 4);
     
-    // Wir nutzen den echten Encoder im Fast-Forward Modus
-    let segs = [{ absEnd: origData.length / 4, waitPixels: origData.length / 4, bank: 0, step: stepVal }];
+    let segs = [{ absEnd: origData.length / 4, waitPixels: origData.length / 4, offset: currentOffset, step: stepVal }];
     
-    // Simuliere Kodierung
     let encodeResult = await encodeStream(origData, imgW, imgH, format, segs, palette, strategy, metric, max_depth, null, sPx, ePx);
     
     let config = HAM_CONFIGS[format];
@@ -78,17 +73,26 @@ export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palett
     
     let yuvSum = 0, rgbSum = 0, maxYuv = 0, count = 0;
     
-    // SUBSAMPLING: Berechne Fehler nur für jeden 2. Pixel (50% schneller)
     for (let i = sPx; i < ePx; i += 2) {
         let idx = i * 4;
         let r1 = origData[idx], g1 = origData[idx+1], b1 = origData[idx+2];
         let r2 = decoded[idx], g2 = decoded[idx+1], b2 = decoded[idx+2];
         
         let yDist = 0;
-        if (metric === 'yuv_weight') {
+        if (metric === 'oklab') {
+            yDist = get_oklab_dist(r1, g1, b1, r2, g2, b2);
+        } else if (metric === 'redmean') {
+            yDist = get_redmean_dist(r1, g1, b1, r2, g2, b2);
+        } else if (metric === 'yuv_weight_heavy') {
+            yDist = get_yuv_dist_weight_heavy(r1, g1, b1, r2, g2, b2);
+        } else if (metric === 'yuv_weight') {
             yDist = get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
-        } else {
+        } else if (metric === 'yuv') {
             yDist = get_yuv_dist(r1, g1, b1, r2, g2, b2);
+        } else if (metric === 'rgb') {
+            yDist = get_rgb_dist(r1, g1, b1, r2, g2, b2);
+        } else {
+            yDist = get_rgb_abs_dist(r1, g1, b1, r2, g2, b2);
         }
         
         let rDist = get_rgb_dist(r1, g1, b1, r2, g2, b2);
@@ -102,10 +106,8 @@ export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palett
     let avgRgb = rgbSum / count;
     let avgYuv = yuvSum / count;
 
-    // DAS OPTISCHE MAXIMUM: Score-Berechnung
-    // Wir bestrafen große Schrittweiten und harte Ausreißer (Banding)
-    let alpha = 0.2; // Strafe für YUV-Ausreißer
-    let beta = 0.5;  // Strafe für zu große Schrittweiten-Summe
+    let alpha = 0.2;
+    let beta = 0.5;  
     let stepPenalty = stepVal.r + stepVal.g + stepVal.b;
 
     let score = avgYuv + (alpha * maxYuv) + (beta * stepPenalty);

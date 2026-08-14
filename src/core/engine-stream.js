@@ -1,6 +1,5 @@
-// src/core/engine-stream.js
 import { HAM_CONFIGS } from '../codecs/configs.js';
-import { clamp, get_yuv_dist, get_yuv_dist_weight, get_rgb_dist } from '../codecs/utils.js';
+import { clamp, get_yuv_dist, get_yuv_dist_weight, get_rgb_dist, get_yuv_dist_weight_heavy, get_rgb_abs_dist, get_redmean_dist, get_oklab_dist } from '../codecs/utils.js';
 
 export async function encodeStream(origData, imgW, imgH, format, userSegments, globalPaletteRAM, strategy, metric, max_depth, progressCallback, startOverride=0, endOverride=0, hybridPercent=5.0) {
     let totalPixels = imgW * imgH;
@@ -8,7 +7,7 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
     
     let activeCmds = [...userSegments];
     if (activeCmds.length === 0) {
-        activeCmds.push({ absEnd: totalPixels, waitPixels: totalPixels, bank: 0, step: {r:4, g:4, b:4} });
+        activeCmds.push({ absEnd: totalPixels, waitPixels: totalPixels, offset: 0, step: {r:4, g:4, b:4} });
     }
 
     let simStart = startOverride || 0;
@@ -22,9 +21,8 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
     let pixelStates = new Array(totalPixels);
     
     let stats = { anchorCount: 0, deltaCount: 0, turboCount: 0 };
-    let slotsPerBank = config.slotsPerBank || 0;
 
-    function findBestBranch(x, y, c_acc, d, max_d, currentBank, currentStep) {
+    function findBestBranch(x, y, c_acc, d, max_d, currentOffset, currentStep) {
         if (d === max_d || x >= imgW) return { cost: 0, cmd: null, r: c_acc.r, g: c_acc.g, b: c_acc.b };
 
         let pIdx = y * imgW + x;
@@ -32,19 +30,27 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
         let tr = origData[origIdx], tg = origData[origIdx + 1], tb = origData[origIdx + 2];
         let branches = [];
 
+        let effFormat = format;
+        let effConfig = config;
+        if (config.isMixed) {
+            let seqIdx = x % config.sequence.length;
+            effFormat = config.sequence[seqIdx];
+            effConfig = HAM_CONFIGS[effFormat];
+        }
+
         if (currentStrategy !== 'delta_only') {
-            if (config.isPaletted) {
-                let startSlot = currentBank * slotsPerBank;
-                for (let i = 0; i < slotsPerBank; i++) {
-                    let slotIdx = startSlot + i;
-                    let r = globalPaletteRAM[slotIdx * 3], g = globalPaletteRAM[slotIdx * 3 + 1], b = globalPaletteRAM[slotIdx * 3 + 2];
+            if (effConfig.isPaletted) {
+                let slotsForPixel = effConfig.slotsPerBank;
+                for (let i = 0; i < slotsForPixel; i++) {
+                    let absoluteSlot = (currentOffset + i) % 256;
+                    let r = globalPaletteRAM[absoluteSlot * 3], g = globalPaletteRAM[absoluteSlot * 3 + 1], b = globalPaletteRAM[absoluteSlot * 3 + 2];
                     branches.push({ cmd: { isAnchor: true, anchorIdx: i }, r, g, b });
                 }
-            } else if (format === "HAM16") {
+            } else if (effFormat === "HAM16") {
                 let r5 = Math.round(tr / 255 * 31), g5 = Math.round(tg / 255 * 31), b5 = Math.round(tb / 255 * 31);
                 let ar = r5 << 3, ag = g5 << 3, ab = b5 << 3;
                 branches.push({ cmd: { isAnchor: true, format: "HAM16", r: ar, g: ag, b: ab, r5, g5, b5 }, r: ar, g: ag, b: ab });
-            } else if (format === "HAM12") {
+            } else if (effFormat === "HAM12") {
                 let r3 = tr >> 5, g4 = tg >> 4, b3 = tb >> 5;
                 for (let b10 of [0, 1]) {
                     let ar = (((r3 << 1) | b10) << 4) | ((r3 << 1) | b10);
@@ -56,33 +62,33 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
         }
 
         if (currentStrategy !== 'anchor_only') {
-            let multipliers = config.hasTurbo ? [0, 1] : [0];
+            let multipliers = effConfig.hasTurbo ? [0, 1] : [0];
             for (let t of multipliers) {
                 let m = t ? 4 : 1;
                 let sr = currentStep.r * m, sg = currentStep.g * m, sb = currentStep.b * m;
 
-                if (config.isPaletted) {
-                    for (let ri = 0; ri < config.channels.r.length; ri++) {
-                        for (let gi = 0; gi < config.channels.g.length; gi++) {
-                            for (let bi = 0; bi < config.channels.b.length; bi++) {
+                if (effConfig.isPaletted) {
+                    for (let ri = 0; ri < effConfig.channels.r.length; ri++) {
+                        for (let gi = 0; gi < effConfig.channels.g.length; gi++) {
+                            for (let bi = 0; bi < effConfig.channels.b.length; bi++) {
                                 branches.push({ 
                                     cmd: { isAnchor: false, isTurbo: (m === 4), rIndex: ri, gIndex: gi, bIndex: bi }, 
-                                    r: clamp(c_acc.r + config.channels.r[ri] * sr, 0, 255), 
-                                    g: clamp(c_acc.g + config.channels.g[gi] * sg, 0, 255), 
-                                    b: clamp(c_acc.b + config.channels.b[bi] * sb, 0, 255) 
+                                    r: clamp(c_acc.r + effConfig.channels.r[ri] * sr, 0, 255), 
+                                    g: clamp(c_acc.g + effConfig.channels.g[gi] * sg, 0, 255), 
+                                    b: clamp(c_acc.b + effConfig.channels.b[bi] * sb, 0, 255) 
                                 });
                             }
                         }
                     }
                 } else {
                     let diffR = tr - c_acc.r, diffG = tg - c_acc.g, diffB = tb - c_acc.b;
-                    if (format === "HAM16") {
+                    if (effFormat === "HAM16") {
                         let dr = clamp(Math.round(diffR / sr), -8, 7), dg = clamp(Math.round(diffG / sg), -16, 15), db = clamp(Math.round(diffB / sb), -16, 15);
                         branches.push({ 
                             cmd: { isAnchor: false, format: "HAM16", isTurbo: (m===4), dr, dg, db }, 
                             r: clamp(c_acc.r + dr * sr, 0, 255), g: clamp(c_acc.g + dg * sg, 0, 255), b: clamp(c_acc.b + db * sb, 0, 255) 
                         });
-                    } else if (format === "HAM12") {
+                    } else if (effFormat === "HAM12") {
                         let dr = clamp(Math.round(diffR / sr), -4, 3), dg = clamp(Math.round(diffG / sg), -8, 7), db = clamp(Math.round(diffB / sb), -4, 3);
                         branches.push({ 
                             cmd: { isAnchor: false, format: "HAM12", isTurbo: (m===4), dr, dg, db }, 
@@ -98,12 +104,16 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
         let evaluatedBranches = branches.length > 200 ? branches.slice(0, 200) : branches;
 
         for (let b of evaluatedBranches) {
-            let next_res = findBestBranch(x + 1, y, { r: b.r, g: b.g, b: b.b }, d + 1, max_d, currentBank, currentStep);
+            let next_res = findBestBranch(x + 1, y, { r: b.r, g: b.g, b: b.b }, d + 1, max_d, currentOffset, currentStep);
             
             let dist = 0;
-            if (metric === 'yuv_weight') dist = get_yuv_dist_weight(tr, tg, tb, b.r, b.g, b.b);
+            if (metric === 'oklab') dist = get_oklab_dist(tr, tg, tb, b.r, b.g, b.b);
+            else if (metric === 'redmean') dist = get_redmean_dist(tr, tg, tb, b.r, b.g, b.b);
+            else if (metric === 'yuv_weight_heavy') dist = get_yuv_dist_weight_heavy(tr, tg, tb, b.r, b.g, b.b);
+            else if (metric === 'yuv_weight') dist = get_yuv_dist_weight(tr, tg, tb, b.r, b.g, b.b);
             else if (metric === 'yuv') dist = get_yuv_dist(tr, tg, tb, b.r, b.g, b.b);
-            else dist = get_rgb_dist(tr, tg, tb, b.r, b.g, b.b);
+            else if (metric === 'rgb') dist = get_rgb_dist(tr, tg, tb, b.r, b.g, b.b);
+            else dist = get_rgb_abs_dist(tr, tg, tb, b.r, b.g, b.b);
 
             let total = dist + next_res.cost;
 
@@ -122,14 +132,15 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
         while (cmd_idx < activeCmds.length && startPx >= activeCmds[cmd_idx].absEnd) cmd_idx++;
         
         for (let i = startPx; i < endPx; i++) {
-            let currentBank = activeCmds[cmd_idx] ? activeCmds[cmd_idx].bank : 0;
+            let currentOffset = activeCmds[cmd_idx] ? (activeCmds[cmd_idx].offset || 0) : 0;
             let currentStep = activeCmds[cmd_idx] ? activeCmds[cmd_idx].step : {r:4, g:4, b:4};
             
             if (i >= simStart && i < simEnd) {
-                let best = findBestBranch(i % imgW, Math.floor(i / imgW), acc, 0, depth, currentBank, currentStep);
+                let best = findBestBranch(i % imgW, Math.floor(i / imgW), acc, 0, depth, currentOffset, currentStep);
                 commandArray[i] = best.cmd;
                 acc = { r: best.r, g: best.g, b: best.b };
                 pixelStates[i] = acc;
+                
             } else {
                 commandArray[i] = { isAnchor: true, anchorIdx: 0 };
                 pixelStates[i] = acc;
@@ -145,10 +156,8 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
         return acc;
     }
 
-    // --- PHASE 1 ---
     await encodeSpan(0, totalPixels, { r: 127, g: 127, b: 127 }, isHybrid ? 1 : max_depth, false);
 
-    // --- PHASE 2 & 3 (Fehleranalyse & Lookahead) ---
     if (isHybrid) {
         if (progressCallback) progressCallback(`Phase 2: Fehlerstatistik (Suche Top ${hybridPercent}%)`, 0, 1);
         await new Promise(r => setTimeout(r, 10)); 
@@ -166,10 +175,14 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
                 let st = pixelStates[i];
                 let err = 0;
                 
-                if (metric === 'yuv_weight') err = get_yuv_dist_weight(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
+                if (metric === 'oklab') err = get_oklab_dist(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
+                else if (metric === 'redmean') err = get_redmean_dist(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
+                else if (metric === 'yuv_weight') err = get_yuv_dist_weight(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
                 else if (metric === 'yuv') err = get_yuv_dist(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
-                else err = get_rgb_dist(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
-                
+                else if (metric === 'yuv_weight_heavy') err = get_yuv_dist_weight_heavy(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
+                else if (metric === 'rgb') err = get_rgb_dist(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
+                else err = get_rgb_abs_dist(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
+
                 blockError += err;
             }
             
@@ -178,10 +191,7 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
             blockStart = blockEnd;
         }
 
-        // Sortieren nach dem schlimmsten Fehler
         allBlocks.sort((a, b) => b.err - a.err);
-        
-        // Exakt X Prozent der Blöcke auswählen
         let targetCount = Math.ceil(allBlocks.length * (hybridPercent / 100));
         let badBlocks = allBlocks.slice(0, targetCount);
         
@@ -208,6 +218,39 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
 
 function packCommandsToBinary(commands, format) {
     let rawWords = [];
+    
+    // NEU: HAM_16BIT Packing (Packt immer 3 Befehle in ein 16-Bit-Wort)
+    if (format === "HAM_16BIT") {
+        for (let i = 0; i < commands.length; i += 3) {
+            let c0 = commands[i], c1 = commands[i+1], c2 = commands[i+2];
+            let v0 = 0, v1 = 0, v2 = 0;
+            
+            if (c0) {
+                if (c0.isAnchor) v0 = 32 | (c0.anchorIdx & 31);
+                else v0 = ((c0.isTurbo?1:0)<<4) | ((c0.rIndex||0)<<3) | ((c0.gIndex||0)<<1) | (c0.bIndex||0);
+            }
+            if (c1) {
+                if (c1.isAnchor) v1 = 8 | (c1.anchorIdx & 7);
+                else v1 = (((c1.rIndex||0)>0?1:0)<<2) | (((c1.gIndex||0)>0?1:0)<<1) | ((c1.bIndex||0)>0?1:0);
+            }
+            if (c2) {
+                if (c2.isAnchor) v2 = 32 | (c2.anchorIdx & 31);
+                else v2 = ((c2.isTurbo?1:0)<<4) | ((c2.rIndex||0)<<3) | ((c2.gIndex||0)<<1) | (c2.bIndex||0);
+            }
+
+            // Pack: v0 (6 bits) | v1 (4 bits) | v2 (6 bits) = 16 Bits
+            let w = ((v0 & 63) << 10) | ((v1 & 15) << 6) | (v2 & 63);
+            rawWords.push(w);
+        }
+        let out = new Uint8Array(rawWords.length * 2);
+        for (let i = 0; i < rawWords.length; i++) {
+            out[i * 2] = rawWords[i] >> 8;
+            out[i * 2 + 1] = rawWords[i] & 255;
+        }
+        return out;
+    }
+
+    // Reguläres Packing
     for (let cmd of commands) {
         let w = 0;
         if (format === "HAM04") {
@@ -231,6 +274,7 @@ function packCommandsToBinary(commands, format) {
         }
         rawWords.push(w);
     }
+    
     if (format === "HAM16" || format === "HAM12") {
         let out = new Uint8Array(rawWords.length * 2);
         for (let i = 0; i < rawWords.length; i++) {

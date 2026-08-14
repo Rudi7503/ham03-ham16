@@ -1,33 +1,27 @@
-// src/core/decoder.js
 import { clamp } from '../codecs/utils.js';
+import { HAM_CONFIGS } from '../codecs/configs.js'; // <-- Dieser Import hat gefehlt!
 
-/**
- * Universeller Decoder für alle Formate (HAM04 bis HAM08_PAL sowie 12/16).
- * Verarbeitet ein Command-Array unter Berücksichtigung von Stream-Segmenten und Bänken.
- */
 export function decodeStream(commandArray, imgW, imgH, globalPaletteRAM, userSegments, config) {
     let totalPixels = imgW * imgH;
     let out = new Uint8ClampedArray(totalPixels * 4);
     let acc_r = 127, acc_g = 127, acc_b = 127;
 
-    // Segmente für den Stream normalisieren
     let activeCmds = [...userSegments];
     if (activeCmds.length === 0) {
-        activeCmds.push({ absEnd: totalPixels, waitPixels: totalPixels, bank: 0, step: {r:4, g:4, b:4} });
+        activeCmds.push({ absEnd: totalPixels, waitPixels: totalPixels, offset: 0, step: {r:4, g:4, b:4} });
     } else if (activeCmds[activeCmds.length - 1].absEnd < totalPixels) {
         let last = activeCmds[activeCmds.length - 1];
         activeCmds.push({ 
             absEnd: totalPixels, 
             waitPixels: totalPixels - last.absEnd, 
-            bank: last.bank, 
+            offset: last.offset, 
             step: last.step 
         });
     }
 
-    let slotsPerBank = config.slotsPerBank || 8;
     let wait_counter = 0;
     let cmd_idx = 0;
-    let currentBank = activeCmds[0].bank;
+    let currentOffset = activeCmds[0].offset || 0;
     let currentStep = activeCmds[0].step;
 
     for (let i = 0; i < commandArray.length; i++) {
@@ -35,23 +29,30 @@ export function decodeStream(commandArray, imgW, imgH, globalPaletteRAM, userSeg
             wait_counter = 0;
             cmd_idx++;
             if (cmd_idx < activeCmds.length) {
-                currentBank = activeCmds[cmd_idx].bank;
+                currentOffset = activeCmds[cmd_idx].offset || 0;
                 currentStep = activeCmds[cmd_idx].step;
             }
         }
 
         let cmd = commandArray[i];
+        let effConfig = config;
+        
+        // Entschlüsselt Mixed Formate (z.B. HAM_16BIT) per X-Koordinate
+        if (config.isMixed) {
+            let x = i % imgW;
+            let seqIdx = x % config.sequence.length;
+            effConfig = HAM_CONFIGS[config.sequence[seqIdx]];
+        }
 
         if (cmd.isAnchor) {
-            if (config.isPaletted) {
-                // Bank-Umschaltung: Berechnet den absoluten Slot im 256er RAM
-                let absoluteSlot = (currentBank * slotsPerBank) + (cmd.anchorIdx || 0);
+            if (effConfig.isPaletted) {
+                // Liest Offset + Index, mit 256-Limit-Wrap
+                let absoluteSlot = (currentOffset + (cmd.anchorIdx || 0)) % 256;
                 let off = absoluteSlot * 3;
                 acc_r = globalPaletteRAM[off];
                 acc_g = globalPaletteRAM[off + 1];
                 acc_b = globalPaletteRAM[off + 2];
             } else if (cmd.r !== undefined) {
-                // Direkter RGB-Anker für feste Modi (HAM12/HAM16)
                 acc_r = cmd.r; 
                 acc_g = cmd.g; 
                 acc_b = cmd.b;
@@ -67,9 +68,9 @@ export function decodeStream(commandArray, imgW, imgH, globalPaletteRAM, userSeg
                 acc_g = clamp(acc_g + (cmd.dg || 0) * sg, 0, 255);
                 acc_b = clamp(acc_b + (cmd.db || 0) * sb, 0, 255);
             } else {
-                let dr = config.channels.r[cmd.rIndex || 0] || 0;
-                let dg = config.channels.g[cmd.gIndex || 0] || 0;
-                let db = config.channels.b[cmd.bIndex || 0] || 0;
+                let dr = effConfig.channels.r[cmd.rIndex || 0] || 0;
+                let dg = effConfig.channels.g[cmd.gIndex || 0] || 0;
+                let db = effConfig.channels.b[cmd.bIndex || 0] || 0;
 
                 acc_r = clamp(acc_r + dr * sr, 0, 255);
                 acc_g = clamp(acc_g + dg * sg, 0, 255);

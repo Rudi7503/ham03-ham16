@@ -1,11 +1,10 @@
-// src/main.js
 import { setZoomMode, updateView, centerOnCoordinate, setupCanvasEvents, viewState } from './ui/canvas-view.js';
 import { encodeStream } from './core/engine-stream.js';
 import { decodeStream } from './core/decoder.js';
 import { HAM_CONFIGS } from './codecs/configs.js';
 import { computeDetailedAnalysis, runSimulationWithStrategy, errorBins } from './core/analysis.js';
 import { simulateBuilderEncode } from './core/builder.js';
-import { hexToRgb, rgbToHex, countUniqueColors, get_yuv_dist, get_yuv_dist_weight, get_rgb_dist } from './codecs/utils.js';
+import { hexToRgb, rgbToHex, countUniqueColors, get_yuv_dist, get_yuv_dist_weight, get_yuv_dist_weight_heavy, get_rgb_dist, get_rgb_abs_dist, get_redmean_dist, get_oklab_dist } from './codecs/utils.js';
 
 // --- GLOBALE STATES ---
 let currentImgW = 0, currentImgH = 0, totalPixels = 0;
@@ -17,9 +16,8 @@ let latestPackedData = null;
 let latestCommandArray = null;
 
 let globalPaletteRAM = new Uint8Array(256 * 3);
-let currentBuilderSlot = 0;
+let currentBuilderSlot = 0; // RELATIV ZUM OFFSET!
 
-// NEU: History-Array für die letzten 10 Codier-Durchgänge
 let encodeHistory = [];
 
 // --- DOM ELEMENTE ---
@@ -33,7 +31,7 @@ const encodeStrategySelect = document.getElementById('encode-strategy');
 const encodeMetricSelect = document.getElementById('encode-metric');
 
 const paletteBox = document.getElementById('palette-box');
-const palBankSelect = document.getElementById('pal-bank-select');
+const palOffsetInput = document.getElementById('pal-offset-input');
 const paletteContainer = document.getElementById('palette-pickers-container');
 
 const btnLoad = document.getElementById('btn-load');
@@ -56,7 +54,7 @@ function getGlobalSegment() {
     return [{
         absEnd: totalPixels,
         waitPixels: totalPixels,
-        bank: palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0,
+        offset: palOffsetInput ? (parseInt(palOffsetInput.value) || 0) : 0,
         step: {
             r: hamStepR ? (parseInt(hamStepR.value) || 4) : 4,
             g: hamStepG ? (parseInt(hamStepG.value) || 4) : 4,
@@ -145,7 +143,6 @@ window.loadHistoryItem = function(idx) {
     let h = encodeHistory[idx];
     if (!h) return;
     
-    // UI-Elemente wiederherstellen
     currentFormat = h.format;
     if (formatSelect) formatSelect.value = h.format;
     if (encodeStrategySelect) encodeStrategySelect.value = h.strategy;
@@ -153,21 +150,18 @@ window.loadHistoryItem = function(idx) {
     if (hamStepR) hamStepR.value = h.step.r;
     if (hamStepG) hamStepG.value = h.step.g;
     if (hamStepB) hamStepB.value = h.step.b;
-    if (palBankSelect) palBankSelect.value = h.bank;
+    if (palOffsetInput) palOffsetInput.value = h.offset;
     handleFormatChange();
     
-    // Palette & Daten wiederherstellen
     globalPaletteRAM.set(h.palette);
-    updateBankPickers();
+    updatePalettePickers();
     
     latestPackedData = h.packedData;
     latestCommandArray = h.commandArray;
     
-    // Canvas aktualisieren (Nutzt die echte Deep-Copy der Pixeldaten)
     ctxDecoded.putImageData(h.decodedImageData, 0, 0);
     decodedImageData = h.decodedImageData;
     
-    // Eigene Funktion für Farben zählen, um UI aktuell zu halten
     let set = new Set();
     let dData = decodedImageData.data;
     for (let i = 0; i < dData.length; i += 4) { 
@@ -183,52 +177,32 @@ window.loadHistoryItem = function(idx) {
 };
 
 // --- PALETTEN & FORMAT UI ---
-function updateBankPickers() {
+function updatePalettePickers() {
     if (!paletteContainer) return;
     paletteContainer.innerHTML = "";
     let f = formatSelect ? formatSelect.value : "HAM12";
     let config = HAM_CONFIGS[f] || HAM_CONFIGS["HAM12"];
     let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : (f === "HAM8" ? 64 : 16);
-    let currentBank = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
-    let startSlot = currentBank * slotsPerBank;
+    let currentOffset = palOffsetInput ? (parseInt(palOffsetInput.value) || 0) : 0;
 
     for(let i = 0; i < slotsPerBank; i++) {
-        let slotIdx = startSlot + i;
-        let r = globalPaletteRAM[slotIdx * 3], g = globalPaletteRAM[slotIdx * 3 + 1], b = globalPaletteRAM[slotIdx * 3 + 2];
+        let absoluteSlot = (currentOffset + i) % 256;
+        let r = globalPaletteRAM[absoluteSlot * 3], g = globalPaletteRAM[absoluteSlot * 3 + 1], b = globalPaletteRAM[absoluteSlot * 3 + 2];
         
         let input = document.createElement('input');
         input.type = 'color'; 
         input.className = 'palette-picker';
         input.value = rgbToHex(r, g, b);
-        input.title = `Slot ${slotIdx}`;
+        input.title = `Slot ${i} (RAM: ${absoluteSlot})`;
         input.addEventListener('input', (e) => {
             let [nr, ng, nb] = hexToRgb(e.target.value);
-            globalPaletteRAM[slotIdx * 3] = nr; 
-            globalPaletteRAM[slotIdx * 3 + 1] = ng; 
-            globalPaletteRAM[slotIdx * 3 + 2] = nb;
+            globalPaletteRAM[absoluteSlot * 3] = nr; 
+            globalPaletteRAM[absoluteSlot * 3 + 1] = ng; 
+            globalPaletteRAM[absoluteSlot * 3 + 2] = nb;
             refreshDecodedImage();
         });
         paletteContainer.appendChild(input);
     }
-}
-
-function populateBankDropdown() {
-    if (!palBankSelect) return;
-    palBankSelect.innerHTML = "";
-    let f = formatSelect ? formatSelect.value : "HAM12";
-    let config = HAM_CONFIGS[f] || HAM_CONFIGS["HAM12"];
-    
-    // Nutze den Wert aus der Config, Fallback auf 16 falls nicht definiert
-    let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : 16;
-    let maxBänke = slotsPerBank > 0 ? Math.floor(256 / slotsPerBank) : 1;
-
-    for(let b = 0; b < maxBänke; b++) {
-        let opt = document.createElement('option');
-        opt.value = b;
-        opt.innerText = `Bank ${b} (${b * slotsPerBank}-${(b + 1) * slotsPerBank - 1})`;
-        palBankSelect.appendChild(opt);
-    }
-    updateBankPickers();
 }
 
 function handleFormatChange() {
@@ -242,7 +216,7 @@ function handleFormatChange() {
     if (hamStepG) hamStepG.disabled = false; 
     if (hamStepB) hamStepB.disabled = false;
     
-    if(isPalFormat) populateBankDropdown();
+    if(isPalFormat) updatePalettePickers();
     
     if (decodedImageData) {
         let set = new Set();
@@ -265,8 +239,10 @@ function handleStrategyVisibility() {
 if (formatSelect) formatSelect.addEventListener('change', handleFormatChange);
 if (encodeStrategySelect) encodeStrategySelect.addEventListener('change', handleStrategyVisibility);
 handleStrategyVisibility();
-
-if (palBankSelect) palBankSelect.addEventListener('change', () => { updateBankPickers(); });
+if (palOffsetInput) {
+    palOffsetInput.addEventListener('change', () => { updatePalettePickers(); });
+    palOffsetInput.addEventListener('input', () => { updatePalettePickers(); });
+}
 
 // --- BILD LADEN ---
 if (btnLoad) btnLoad.addEventListener('click', () => { if(fileImg) fileImg.click(); });
@@ -284,24 +260,18 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
             canvasOriginal.width = currentImgW; 
             canvasOriginal.height = currentImgH;
             
-            // 1. Temporäres Canvas für den Hintergrund-Ausgleich erstellen
             let tempCanvas = document.createElement('canvas');
             tempCanvas.width = currentImgW;
             tempCanvas.height = currentImgH;
             let tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
             
-            // 2. Hintergrundfarbe festlegen (Schwarz) und füllen
             tempCtx.fillStyle = '#000000';
             tempCtx.fillRect(0, 0, currentImgW, currentImgH);
-            
-            // 3. Bild darüber zeichnen (Transparenzen verschmelzen mit dem schwarzen Hintergrund)
             tempCtx.drawImage(img, 0, 0);
             
-            // 4. Bereinigte Bilddaten ohne Alpha-Probleme übernehmen
             originalImageData = tempCtx.getImageData(0, 0, currentImgW, currentImgH);
             ctxOriginal.putImageData(originalImageData, 0, 0);
 
-            // Zähle originale Farben
             let set = new Set();
             for (let i = 0; i < originalImageData.data.length; i += 4) { 
                 set.add((originalImageData.data[i] << 16) | (originalImageData.data[i+1] << 8) | originalImageData.data[i+2]); 
@@ -347,7 +317,7 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
         globalPaletteRAM[0] = originalImageData.data[0];
         globalPaletteRAM[1] = originalImageData.data[1];
         globalPaletteRAM[2] = originalImageData.data[2];
-        updateBankPickers();
+        updatePalettePickers();
     }
 
     let decLabel = document.getElementById('decoded-label');
@@ -357,7 +327,7 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
     if(btnBuilder) btnBuilder.disabled = true; if(btnAnalysis) btnAnalysis.disabled = true;
 
     let strategy = encodeStrategySelect ? encodeStrategySelect.value : "both";
-    let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
+    let metric = encodeMetricSelect ? encodeMetricSelect.value : "oklab";
     let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
     
     let hypPercentInp = document.getElementById('hybrid-percent');
@@ -397,13 +367,12 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
     let statusEl = document.getElementById('status-text');
     if(statusEl) statusEl.innerText = `✅ Fertig! (Modus: ${currentFormat}, Renderzeit: ${decTime}ms)`;
     
-    // In die History aufnehmen
     encodeHistory.push({
         format: currentFormat,
         strategy: strategy,
         metric: metric,
         step: { ...getGlobalSegment()[0].step },
-        bank: getGlobalSegment()[0].bank,
+        offset: getGlobalSegment()[0].offset,
         palette: new Uint8Array(globalPaletteRAM),
         packedData: latestPackedData,
         commandArray: latestCommandArray,
@@ -429,7 +398,7 @@ if (btnAnalysis) btnAnalysis.addEventListener('click', () => {
     
     let avgMseDisplay = document.getElementById('avg-mse-display');
     if (avgMseDisplay) {
-        avgMseDisplay.innerText = `⌀ RGB: ${stats.global.avgRgb.toFixed(2)} | ⌀ YUV: ${stats.global.avgYuv.toFixed(2)}`;
+        avgMseDisplay.innerText = `⌀ RGB: ${stats.global.avgRgb.toFixed(2)} | ⌀ Metrik: ${stats.global.avgYuv.toFixed(2)}`;
         avgMseDisplay.style.display = 'inline';
     }
 
@@ -458,9 +427,6 @@ if (btnAnaClose) btnAnaClose.addEventListener('click', () => {
 });
 
 // --- BUILDER MODAL LOGIK ---
-let builderMetricSelect = document.getElementById('builder-metric');
-if (builderMetricSelect) builderMetricSelect.addEventListener('change', runBuilderAnalysis);
-
 if (btnBuilder) btnBuilder.addEventListener('click', () => {
     if (!currentImgW) { alert("Bitte lade zuerst ein Bild!"); return; }
     let f = formatSelect ? formatSelect.value : "HAM12";
@@ -473,8 +439,7 @@ if (btnBuilder) btnBuilder.addEventListener('click', () => {
     let bFmt = document.getElementById('b-fmt');
     if (bFmt) bFmt.innerText = f;
     
-    let bankIdx = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
-    currentBuilderSlot = bankIdx * config.slotsPerBank;
+    currentBuilderSlot = 0;
 
     let modal = document.getElementById('builder-modal');
     if (modal) modal.style.display = 'block';
@@ -482,16 +447,15 @@ if (btnBuilder) btnBuilder.addEventListener('click', () => {
 });
 
 function refreshBuilderUI() {
-    let bankIdx = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
+    let currentOffset = palOffsetInput ? (parseInt(palOffsetInput.value) || 0) : 0;
     let bankTitle = document.getElementById('b-bank-title');
-    if (bankTitle) bankTitle.innerText = `Bank ${bankIdx}`;
+    if (bankTitle) bankTitle.innerText = `Offset ${currentOffset}`;
     
     let f = formatSelect ? formatSelect.value : "HAM12";
     let config = HAM_CONFIGS[f];
     if (!config) return;
     
     let slotsPerBank = config.slotsPerBank ? config.slotsPerBank : (f === "HAM8" ? 64 : 16);
-    let startSlot = bankIdx * slotsPerBank;
     
     let previewContainer = document.getElementById('builder-palette-preview');
     if (!previewContainer) return;
@@ -499,24 +463,24 @@ function refreshBuilderUI() {
     previewContainer.innerHTML = "";
     
     for (let i = 0; i < slotsPerBank; i++) {
-        let slotIdx = startSlot + i;
-        let r = globalPaletteRAM[slotIdx * 3], g = globalPaletteRAM[slotIdx * 3 + 1], b = globalPaletteRAM[slotIdx * 3 + 2];
+        let absoluteSlot = (currentOffset + i) % 256;
+        let r = globalPaletteRAM[absoluteSlot * 3], g = globalPaletteRAM[absoluteSlot * 3 + 1], b = globalPaletteRAM[absoluteSlot * 3 + 2];
         let slotDiv = document.createElement('div');
         slotDiv.className = 'builder-slot';
         slotDiv.style.width = '24px';
         slotDiv.style.height = '24px';
         slotDiv.style.backgroundColor = rgbToHex(r, g, b);
         
-        if (slotIdx === currentBuilderSlot) {
+        if (i === currentBuilderSlot) {
             slotDiv.style.border = '3px solid #007bff';
         } else {
             slotDiv.style.border = '1px solid #000';
         }
         
         slotDiv.style.cursor = 'pointer';
-        slotDiv.title = `Slot ${slotIdx}`;
+        slotDiv.title = `Slot ${i} (RAM: ${absoluteSlot})`;
         slotDiv.addEventListener('click', () => {
-            currentBuilderSlot = slotIdx;
+            currentBuilderSlot = i;
             refreshBuilderUI();
         });
         previewContainer.appendChild(slotDiv);
@@ -531,12 +495,20 @@ function runBuilderAnalysis() {
         b: hamStepB ? (parseInt(hamStepB.value) || 4) : 4 
     };
 
-    let bMetric = builderMetricSelect ? builderMetricSelect.value : 'yuv_weight';
+    let bMetric = encodeMetricSelect ? encodeMetricSelect.value : 'oklab';
+    
+    let metricLabel = document.getElementById('builder-current-metric-label');
+    if (metricLabel && encodeMetricSelect) {
+        let selectedText = encodeMetricSelect.options[encodeMetricSelect.selectedIndex].text;
+        metricLabel.innerHTML = `Metrik: <b style="color:#ffc107;">${selectedText}</b>`;
+    }
 
+    let currentOffset = palOffsetInput ? (parseInt(palOffsetInput.value) || 0) : 0;
+    
     let results = simulateBuilderEncode(
         0, totalPixels, originalImageData.data, currentImgW, 
         Array.from({length: 256}, (_, i) => [globalPaletteRAM[i * 3], globalPaletteRAM[i * 3 + 1], globalPaletteRAM[i * 3 + 2]]), 
-        currentBuilderSlot, stepVal, currentFormat, bMetric
+        currentBuilderSlot, stepVal, currentFormat, bMetric, currentOffset
     );
 
     let mseListEl = document.getElementById('builder-mse-list');
@@ -559,25 +531,29 @@ function runBuilderAnalysis() {
     
     let statusEl = document.getElementById('builder-status');
     if (statusEl) {
-        statusEl.innerText = `Analysiert Slot ${currentBuilderSlot} (Gesamtbild)`;
+        let absoluteSlot = (currentOffset + currentBuilderSlot) % 256;
+        statusEl.innerText = `Analysiere Slot ${currentBuilderSlot} (RAM: ${absoluteSlot})`;
     }
 }
 
 window.assignColorToSlot = function(hex) {
     let [r, g, b] = hexToRgb(hex);
-    globalPaletteRAM[currentBuilderSlot * 3] = r;
-    globalPaletteRAM[currentBuilderSlot * 3 + 1] = g;
-    globalPaletteRAM[currentBuilderSlot * 3 + 2] = b;
     
-    let bankIdx = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
+    let currentOffset = palOffsetInput ? (parseInt(palOffsetInput.value) || 0) : 0;
+    let absoluteSlot = (currentOffset + currentBuilderSlot) % 256;
+    
+    globalPaletteRAM[absoluteSlot * 3] = r;
+    globalPaletteRAM[absoluteSlot * 3 + 1] = g;
+    globalPaletteRAM[absoluteSlot * 3 + 2] = b;
+    
     let config = HAM_CONFIGS[currentFormat];
     let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : (currentFormat === "HAM8" ? 64 : 16);
-    let maxSlot = (bankIdx * slotsPerBank) + slotsPerBank - 1;
-    if (currentBuilderSlot < maxSlot) {
+    
+    if (currentBuilderSlot < slotsPerBank - 1) {
         currentBuilderSlot++;
     }
     
-    updateBankPickers();
+    updatePalettePickers();
     refreshBuilderUI();
     refreshDecodedImage();
 }
@@ -592,33 +568,29 @@ let btnBuildAuto = document.getElementById('btn-builder-auto');
 if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     if (!currentImgW) { alert("Bitte lade zuerst ein Bild!"); return; }
     
-    let bankIdx = palBankSelect ? (parseInt(palBankSelect.value) || 0) : 0;
+    let currentOffset = palOffsetInput ? (parseInt(palOffsetInput.value) || 0) : 0;
     let config = HAM_CONFIGS[currentFormat];
-    
-    // Dynamische Ermittlung der Slot-Anzahl direkt aus der Konfiguration
     let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : 16;
-    let startSlot = bankIdx * slotsPerBank;
 
     let statusEl = document.getElementById('builder-status');
     
     // Bank komplett leeren für den Neufart
     for (let i = 0; i < slotsPerBank; i++) {
-        let currentSlot = startSlot + i;
-        globalPaletteRAM[currentSlot * 3] = 0;
-        globalPaletteRAM[currentSlot * 3 + 1] = 0;
-        globalPaletteRAM[currentSlot * 3 + 2] = 0;
+        let absoluteSlot = (currentOffset + i) % 256;
+        globalPaletteRAM[absoluteSlot * 3] = 0;
+        globalPaletteRAM[absoluteSlot * 3 + 1] = 0;
+        globalPaletteRAM[absoluteSlot * 3 + 2] = 0;
     }
-    updateBankPickers();
+    updatePalettePickers();
     refreshBuilderUI();
 
     let strategy = encodeStrategySelect ? encodeStrategySelect.value : 'both';
-    let bMetric = builderMetricSelect ? builderMetricSelect.value : 'yuv_weight';
+    let bMetric = encodeMetricSelect ? encodeMetricSelect.value : 'oklab';
     let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
 
-    // Iteriert nun exakt über alle Slots (z.B. 16 bei HAM05, 32 bei HAM06)
     for (let i = 0; i < slotsPerBank; i++) {
-        let currentSlot = startSlot + i;
-        if (statusEl) statusEl.innerText = `Fülle Slot ${currentSlot} (${i + 1}/${slotsPerBank})...`;
+        let absoluteSlot = (currentOffset + i) % 256;
+        if (statusEl) statusEl.innerText = `Fülle Slot ${i} (RAM: ${absoluteSlot})...`;
         await new Promise(r => setTimeout(r, 10)); 
 
         let encodeResult = await encodeStream(
@@ -633,6 +605,7 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
         let errorMap = new Map();
         let histMap = new Map();
 
+        // Fehler akkumulieren
         for (let p = 0; p < totalPixels; p++) {
             let idx = p * 4;
             let r1 = originalImageData.data[idx], g1 = originalImageData.data[idx+1], b1 = originalImageData.data[idx+2];
@@ -642,40 +615,70 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
             histMap.set(hex, (histMap.get(hex) || 0) + 1);
             
             let err = 0;
-            if (bMetric === 'yuv_weight') err = get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
+            if (bMetric === 'oklab') err = get_oklab_dist(r1, g1, b1, r2, g2, b2);
+            else if (bMetric === 'redmean') err = get_redmean_dist(r1, g1, b1, r2, g2, b2);
+            else if (bMetric === 'yuv_weight_heavy') err = get_yuv_dist_weight_heavy(r1, g1, b1, r2, g2, b2);
+            else if (bMetric === 'yuv_weight') err = get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
             else if (bMetric === 'yuv') err = get_yuv_dist(r1, g1, b1, r2, g2, b2);
-            else err = get_rgb_dist(r1, g1, b1, r2, g2, b2);
+            else if (bMetric === 'rgb') err = get_rgb_dist(r1, g1, b1, r2, g2, b2);
+            else err = get_rgb_abs_dist(r1, g1, b1, r2, g2, b2);
             
-            errorMap.set(hex, (errorMap.get(hex) || 0) + err);
+            errorMap.set(hex, (errorMap.get(hex) || 0) + err); // totalError ist hier die SUMME aller Fehler
         }
 
         let bestHex = "#000000";
         let maxImpact = -1;
 
+        // KORREKTUR: impact-Berechnung repariert
         for (let [hex, count] of histMap.entries()) {
-            let totalError = errorMap.get(hex);
-            let impact = count * totalError; 
+            let totalError = errorMap.get(hex); // Echte Summe der Fehler = Echter Einfluss auf den globalen MSE
+            let avgError = totalError / count;  // Durchschnittlicher Fehler pro Pixel dieser Farbe
             
-            if (impact > maxImpact && totalError > 1.0) {
+            let impact = totalError; // Kein Quadrat mehr!
+            
+            // Nimmt nur Farben auf, die im Schnitt einen spürbaren Fehler haben
+            if (impact > maxImpact && avgError > 1.5) {
                 maxImpact = impact;
                 bestHex = hex;
             }
         }
 
+        // KORREKTUR: Duplikat-Erkennung im Fallback
         if (maxImpact === -1 && histMap.size > 0) {
             let maxCount = -1;
             for (let [hex, count] of histMap.entries()) {
-                if (count > maxCount) { maxCount = count; bestHex = hex; }
+                let [r,g,b] = hexToRgb(hex);
+                let isDup = false;
+                // Prüfen, ob die Farbe in den bisherigen Slots schon existiert
+                for (let s = 0; s < i; s++) {
+                    let aSlot = (currentOffset + s) % 256;
+                    if (globalPaletteRAM[aSlot*3] === r && globalPaletteRAM[aSlot*3+1] === g && globalPaletteRAM[aSlot*3+2] === b) {
+                        isDup = true; break;
+                    }
+                }
+                
+                if (!isDup && count > maxCount) { 
+                    maxCount = count; 
+                    bestHex = hex; 
+                }
+            }
+            
+            // Wenn wirklich alle Farben des Bildes schon in der Palette sind, nimm einfach die häufigste
+            if (maxCount === -1) {
+                let mC = -1;
+                for (let [hex, count] of histMap.entries()) {
+                    if (count > mC) { mC = count; bestHex = hex; }
+                }
             }
         }
 
         let [wr, wg, wb] = hexToRgb(bestHex);
-        globalPaletteRAM[currentSlot * 3] = wr;
-        globalPaletteRAM[currentSlot * 3 + 1] = wg;
-        globalPaletteRAM[currentSlot * 3 + 2] = wb;
+        globalPaletteRAM[absoluteSlot * 3] = wr;
+        globalPaletteRAM[absoluteSlot * 3 + 1] = wg;
+        globalPaletteRAM[absoluteSlot * 3 + 2] = wb;
         
-        currentBuilderSlot = currentSlot;
-        updateBankPickers();
+        currentBuilderSlot = i;
+        updatePalettePickers();
         refreshBuilderUI();
     }
 
@@ -691,7 +694,7 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     latestCommandArray = finalEncode.commandArray;
     refreshDecodedImage();
     
-    if (statusEl) statusEl.innerText = `Bank ${bankIdx} erfolgreich vollständig belegt!`;
+    if (statusEl) statusEl.innerText = `Offset ab ${currentOffset} erfolgreich vollständig belegt!`;
 });
 
 // --- AUTO SCHRITTWEITEN LOGIK ---
@@ -715,15 +718,15 @@ if (btnAutoStep) btnAutoStep.addEventListener('click', async () => {
     let recEl = document.getElementById('auto-step-recommendation');
     if (recEl) recEl.innerText = "";
     
-    // ERZWINGE GREEDY (both, depth 1) FÜR SCHNELLE SIMULATION
     let strategy = 'both'; 
     let max_depth = 1; 
-    let metric = encodeMetricSelect ? encodeMetricSelect.value : 'yuv_weight';
+    let metric = encodeMetricSelect ? encodeMetricSelect.value : 'oklab';
 
     let pal = Array.from({length: 256}, (_, i) => [globalPaletteRAM[i * 3], globalPaletteRAM[i * 3 + 1], globalPaletteRAM[i * 3 + 2]]);
+    let currentOffset = palOffsetInput ? (parseInt(palOffsetInput.value) || 0) : 0;
 
     async function evaluateStep(r, g, b) {
-        return await runSimulationWithStrategy(0, totalPixels, originalImageData.data, currentImgW, pal, {r, g, b}, strategy, metric, max_depth, currentFormat);
+        return await runSimulationWithStrategy(0, totalPixels, originalImageData.data, currentImgW, pal, {r, g, b}, strategy, metric, max_depth, currentFormat, currentOffset);
     }
 
     let bestScore = Infinity;
