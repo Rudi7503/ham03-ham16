@@ -16,8 +16,9 @@
         input[type="number"] { width: 45px; text-align: center; }
         input:disabled, select:disabled { background: #555 !important; color: #aaa !important; cursor: not-allowed; }
         
-        button { padding: 6px 10px; font-size: 12px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
-        #btn-load { background-color: #007bff; color: white; } #btn-load:hover { background-color: #0069d9; }
+        button, .btn-label { padding: 6px 10px; font-size: 12px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer; transition: background 0.2s; display: inline-block; box-sizing: border-box; }
+        .btn-label-primary { background-color: #007bff; color: white; } .btn-label-primary:hover { background-color: #0069d9; }
+        .btn-label-success { background-color: #20c997; color: white; } .btn-label-success:hover { background-color: #1aa179; }
         #btn-encode { background-color: #28a745; color: white; } #btn-encode:hover { background-color: #218838; }
         #btn-encode:disabled, #btn-save:disabled, #btn-builder:disabled, #btn-analysis:disabled { background-color: #555; cursor: not-allowed; color: #888; }
         #btn-save { background-color: #ffc107; color: black; } #btn-save:hover { background-color: #e0a800; }
@@ -35,8 +36,6 @@
         #stream-list { display: flex; gap: 5px; flex-wrap: wrap; max-height: 35px; overflow-y: auto; align-items: center; }
         .stream-tag { background: #2b2f33; border: 1px solid #555; padding: 2px 6px; border-radius: 3px; font-size: 10px; display: flex; align-items: center; gap: 5px; cursor: pointer; transition: background 0.2s; }
         .stream-tag:hover { background: #3c4043; border-color: #777; }
-        .stream-tag-del { color: #ff6b6b; margin-left: 5px; padding: 0 3px; cursor: pointer; font-weight: bold; }
-        .stream-tag-del:hover { color: #ff4d4d; transform: scale(1.1); }
 
         .status-container { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 260px; border-left: 2px solid #555; padding-left: 10px; }
         progress { width: 100%; height: 6px; } 
@@ -53,15 +52,11 @@
         /* Modals */
         .modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:1000; justify-content:center; align-items:center; }
         .modal-content { background:#1e2124; padding:20px; border-radius:8px; width:750px; max-height:90vh; overflow-y:auto; color:white; border: 1px solid #444; }
-        .swatch-btn { display:inline-block; width:22px; height:22px; border:1px solid #fff; cursor:pointer; border-radius:4px; flex-shrink:0; }
-        .swatch-row { display:flex; align-items:center; gap:8px; margin-bottom:5px; background:#111; padding:3px 6px; border-radius:4px; }
         .builder-slot { width:20px; height:20px; border:1px solid #444; border-radius:3px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-size:9px; font-weight:bold; }
         
         table.analysis-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 10px; }
         table.analysis-table th, table.analysis-table td { border: 1px solid #444; padding: 4px 6px; text-align: center; }
         table.analysis-table th { background: #2b2f33; }
-        .error-link { color: #4dabf7; cursor: pointer; text-decoration: underline; }
-        .error-link:hover { color: #74c0fc; }
         #avg-mse-display { font-size: 11px; color: #ffc107; font-weight: bold; background: #111; padding: 4px 8px; border-radius: 4px; border: 1px solid #444; }
     </style>
 </head>
@@ -70,7 +65,9 @@
 <div id="top-bar">
     <h2>HAM LAB</h2>
     <div class="control-group">
-        <button id="btn-load">1. Bild laden</button>
+        <!-- Labels als direkte Trigger für sicheres Laden -->
+        <label for="file-img" class="btn-label btn-label-primary" title="Originalbild (PNG/JPG) laden">1. Bild laden</label>
+        <label for="file-bin" class="btn-label btn-label-success" title="Gepacktes HAM-File laden">.ham laden</label>
         <button id="btn-encode" disabled>2. Codieren</button>
         <button id="btn-save" disabled>3. Speichern</button>
     </div>
@@ -85,7 +82,12 @@
             <option value="HAM08_PAL">HAM08</option>
             <option value="HAM12" selected>HAM12</option>
             <option value="HAM16">HAM16</option>
-            <option value="HAM_16BIT">HAM 16-Bit (6/4/6)</option> 
+            <option value="HAM_16BIT">HAM 16-Bit (6/4/6)</option>
+            <option value="HAM_32BIT_A">HAM 32-Bit A (6/4/4/6/4/4/4)</option>
+            <option value="HAM_32BIT_B">HAM 32-Bit B (5/4/5/4/5/4/5)</option>
+            <option value="HAM_32BIT_C">HAM 32-Bit C (6/4/5/4/5/4/4)</option>
+            <option value="HAM_32BIT_D">HAM 32-Bit D (5/5/5/5/4/4/4)</option>
+            <option value="HAM_32BIT_E">HAM 32-Bit E (8/8/8/8)</option>
         </select>
     </div>
 
@@ -172,6 +174,7 @@
         <div class="status-row"><span id="status-text">Warte auf Bild...</span></div>
     </div>
     <input type="file" id="file-img" accept="image/png, image/jpeg, image/bmp, image/webp" style="display: none;">
+    <input type="file" id="file-bin" accept=".ham" style="display: none;">
 </div>
 
 <!-- History Panel -->
@@ -194,6 +197,18 @@
       <div id="builder-status" style="color:#aaa; font-size:13px;">Initialisiere...</div>
       <div style="font-size:11px; color:#aaa; margin-top:6px;">Klicke auf einen Slot, um die Farbe direkt zu wählen:</div>
       <div id="builder-palette-preview" style="display:flex; flex-wrap:wrap; gap:3px; margin:6px 0; background:#000; padding:6px; border-radius:4px; max-height:75px; overflow-y:auto;"></div>
+      
+      <div style="display:flex; align-items:center; gap:10px; margin: 10px 0; background:#111; padding:6px 10px; border-radius:4px; border:1px solid #444;">
+          <label style="font-size:11px; color:#ccc;">Optimierungs-Fokus:</label>
+          <select id="builder-mode-select" style="padding:4px; font-size:11px; background:#222; color:#fff; border:1px solid #555;">
+              <option value="only_avg">Nur Durchschnitts-MSE</option>
+              <option value="ratio_1_3">Verhältnis 1/4 (Durchschnitt) : 3/4 (Einzelfehler)</option>
+              <option value="ratio_half" selected>Verhältnis 1/2 : 1/2 (Ausgewogen)</option>
+              <option value="ratio_3_1">Verhältnis 3/4 (Durchschnitt) : 1/4 (Einzelfehler)</option>
+              <option value="only_max">Nur Einzelfehler (Max-MSE)</option>
+          </select>
+      </div>
+
       <div style="display:flex; gap:15px; margin-top:12px;">
           <div style="flex:1;"><h4 style="margin:0 0 6px 0; color:#ff6b6b; font-size:13px;">Top 5 Fehler im Gesamtbild</h4><div id="builder-mse-list"></div></div>
           <div style="flex:1;"><h4 style="margin:0 0 6px 0; color:#4dabf7; font-size:13px;">Top 5 Bild-Histogramm</h4><div id="builder-hist-list"></div></div>

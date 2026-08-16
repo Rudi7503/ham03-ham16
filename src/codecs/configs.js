@@ -50,10 +50,55 @@ export const HAM_CONFIGS = {
     "HAM_16BIT": {
         name: "HAM_16BIT",
         isPaletted: true,
-        isMixed: true,                     // Aktiviert den Pixel-zu-Pixel Formatwechsel
+        isMixed: true,
         sequence: ["HAM06", "HAM04", "HAM06"],
-        slotsPerBank: 32,                  // Das Maximum (HAM06 benötigt 32 Slots)
+        slotsPerBank: 32,
         maxAnchor: 31,
+        hasTurbo: true
+    },
+    "HAM_32BIT_A": {
+        name: "HAM_32BIT_A",
+        isPaletted: true,
+        isMixed: true,
+        sequence: ["HAM06", "HAM04", "HAM04", "HAM06", "HAM04", "HAM04", "HAM04"],
+        slotsPerBank: 32, // Wegen HAM06
+        maxAnchor: 31,
+        hasTurbo: true
+    },
+    "HAM_32BIT_B": {
+        name: "HAM_32BIT_B",
+        isPaletted: true,
+        isMixed: true,
+        sequence: ["HAM05", "HAM04", "HAM05", "HAM04", "HAM05", "HAM04", "HAM05"],
+        slotsPerBank: 16, // Wegen HAM05
+        maxAnchor: 15,
+        hasTurbo: true
+    },
+    "HAM_32BIT_C": {
+        name: "HAM_32BIT_C",
+        isPaletted: true,
+        isMixed: true,
+        sequence: ["HAM06", "HAM04", "HAM05", "HAM04", "HAM05", "HAM04", "HAM04"],
+        slotsPerBank: 32, // Wegen HAM06
+        maxAnchor: 31,
+        hasTurbo: true
+    },
+    "HAM_32BIT_D": {
+        name: "HAM_32BIT_D",
+        isPaletted: true,
+        isMixed: true,
+        sequence: ["HAM05", "HAM05", "HAM05", "HAM05", "HAM04", "HAM04", "HAM04"],
+        slotsPerBank: 16, // Wegen HAM05
+        maxAnchor: 15,
+        hasTurbo: true
+    },
+    "HAM_32BIT_E": {
+        name: "HAM_32BIT_E",
+        isPaletted: true,
+        isMixed: true,
+        sequence: ["HAM08_PAL", "HAM08_PAL", "HAM08_PAL", "HAM08_PAL"],
+        slotsPerBank: 128, // Wegen HAM08_PAL
+        maxAnchor: 127,
         hasTurbo: true
     }
 };

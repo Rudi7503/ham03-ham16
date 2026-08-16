@@ -216,41 +216,70 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
     return { commandArray, packedData, stats };
 }
 
-function packCommandsToBinary(commands, format) {
-    let rawWords = [];
-    
-    // NEU: HAM_16BIT Packing (Packt immer 3 Befehle in ein 16-Bit-Wort)
-    if (format === "HAM_16BIT") {
-        for (let i = 0; i < commands.length; i += 3) {
-            let c0 = commands[i], c1 = commands[i+1], c2 = commands[i+2];
-            let v0 = 0, v1 = 0, v2 = 0;
-            
-            if (c0) {
-                if (c0.isAnchor) v0 = 32 | (c0.anchorIdx & 31);
-                else v0 = ((c0.isTurbo?1:0)<<4) | ((c0.rIndex||0)<<3) | ((c0.gIndex||0)<<1) | (c0.bIndex||0);
-            }
-            if (c1) {
-                if (c1.isAnchor) v1 = 8 | (c1.anchorIdx & 7);
-                else v1 = (((c1.rIndex||0)>0?1:0)<<2) | (((c1.gIndex||0)>0?1:0)<<1) | ((c1.bIndex||0)>0?1:0);
-            }
-            if (c2) {
-                if (c2.isAnchor) v2 = 32 | (c2.anchorIdx & 31);
-                else v2 = ((c2.isTurbo?1:0)<<4) | ((c2.rIndex||0)<<3) | ((c2.gIndex||0)<<1) | (c2.bIndex||0);
-            }
+// Hilfsfunktion: Ermittelt den Binärwert und die Bit-Breite eines einzelnen Befehls
+function getCmdVal(cmd, format) {
+    let v = 0, bits = 0;
+    if (format === "HAM04") {
+        bits = 4;
+        if (cmd.isAnchor) v = 8 | (cmd.anchorIdx & 7);
+        else v = (((cmd.rIndex||0)>0?1:0)<<2) | (((cmd.gIndex||0)>0?1:0)<<1) | ((cmd.bIndex||0)>0?1:0);
+    } else if (format === "HAM05") {
+        bits = 5;
+        if (cmd.isAnchor) v = 16 | (cmd.anchorIdx & 15);
+        else v = (((cmd.isTurbo?1:0)<<3) | ((cmd.rIndex||0)<<2) | ((cmd.gIndex||0)<<1) | (cmd.bIndex||0));
+    } else if (format === "HAM06") {
+        bits = 6;
+        if (cmd.isAnchor) v = 32 | (cmd.anchorIdx & 31);
+        else v = (((cmd.isTurbo?1:0)<<4) | ((cmd.rIndex||0)<<3) | ((cmd.gIndex||0)<<1) | (cmd.bIndex||0));
+    } else if (format === "HAM08_PAL") {
+        bits = 8;
+        if (cmd.isAnchor) v = 128 | (cmd.anchorIdx & 127);
+        else v = (((cmd.isTurbo?1:0)<<6) | ((cmd.rIndex||0)<<4) | ((cmd.gIndex||0)<<2) | (cmd.bIndex||0));
+    }
+    return { v, bits };
+}
 
-            // Pack: v0 (6 bits) | v1 (4 bits) | v2 (6 bits) = 16 Bits
-            let w = ((v0 & 63) << 10) | ((v1 & 15) << 6) | (v2 & 63);
-            rawWords.push(w);
+function packCommandsToBinary(commands, format) {
+    let config = HAM_CONFIGS[format];
+    
+    // Universeller Bit-Stream Packer für ALLE Mischformate (16-Bit, 32-Bit A-E)
+    if (config && config.isMixed) {
+        let bitStream = [];
+        let currentByte = 0;
+        let bitsInByte = 0;
+        
+        for (let i = 0; i < commands.length; i++) {
+            let seqIdx = i % config.sequence.length;
+            let fmt = config.sequence[seqIdx];
+            let cmd = commands[i] || { isAnchor: true, anchorIdx: 0 };
+            
+            let { v, bits } = getCmdVal(cmd, fmt);
+            
+            // Bits einzeln von MSB zu LSB in den Stream schieben
+            for (let b = bits - 1; b >= 0; b--) {
+                let bit = (v >> b) & 1;
+                currentByte = (currentByte << 1) | bit;
+                bitsInByte++;
+                
+                if (bitsInByte === 8) {
+                    bitStream.push(currentByte);
+                    currentByte = 0;
+                    bitsInByte = 0;
+                }
+            }
         }
-        let out = new Uint8Array(rawWords.length * 2);
-        for (let i = 0; i < rawWords.length; i++) {
-            out[i * 2] = rawWords[i] >> 8;
-            out[i * 2 + 1] = rawWords[i] & 255;
+        
+        // Letztes Byte auffüllen, falls es nicht voll wurde
+        if (bitsInByte > 0) {
+            currentByte = currentByte << (8 - bitsInByte);
+            bitStream.push(currentByte);
         }
-        return out;
+        
+        return new Uint8Array(bitStream);
     }
 
-    // Reguläres Packing
+    // Reguläres Packing für Standard-Formate
+    let rawWords = [];
     for (let cmd of commands) {
         let w = 0;
         if (format === "HAM04") {
@@ -284,4 +313,140 @@ function packCommandsToBinary(commands, format) {
         return out;
     }
     return new Uint8Array(rawWords);
+}
+
+// --- NEU: UNPACKER LOGIK FÜR LADE-FUNKTION ---
+// --- UNPACKER LOGIK FÜR LADE-FUNKTION ---
+export function unpackBinaryToCommands(packedData, format, totalPixels) {
+    let config = HAM_CONFIGS[format];
+    let commands = new Array(totalPixels);
+
+    function parseCmdVal(v, fmt) {
+        if (fmt === "HAM04") {
+            if (v & 8) return { isAnchor: true, format: fmt, anchorIdx: v & 7 };
+            return { isAnchor: false, format: fmt, rIndex: (v>>2)&1, gIndex: (v>>1)&1, bIndex: v&1 };
+        } else if (fmt === "HAM05") {
+            // HAM05: 5-Bit Wert. 
+            // Entsprechend dem Encoder: Wenn Bit 4 (16) gesetzt ist, ist es ein Anker, 
+            // ansonsten ein Delta-Befehl.
+            if (v & 16) {
+                return { isAnchor: true, format: fmt, anchorIdx: v & 15 };
+            }
+            return { 
+                isAnchor: false, 
+                format: fmt, 
+                isTurbo: ((v >> 3) & 1) === 1, 
+                rIndex: (v >> 2) & 1, 
+                gIndex: (v >> 1) & 1, 
+                bIndex: v & 1 
+            };
+        } else if (fmt === "HAM06") {
+            if (v & 32) return { isAnchor: true, format: fmt, anchorIdx: v & 31 };
+            return { isAnchor: false, format: fmt, isTurbo: ((v>>4)&1)===1, rIndex: (v>>3)&1, gIndex: (v>>1)&3, bIndex: v&1 };
+        } else if (fmt === "HAM08_PAL") {
+            if (v & 128) return { isAnchor: true, format: fmt, anchorIdx: v & 127 };
+            return { isAnchor: false, format: fmt, isTurbo: ((v>>6)&1)===1, rIndex: (v>>4)&3, gIndex: (v>>2)&3, bIndex: v&3 };
+        } else if (fmt === "HAM12") {
+            if (v & 0x800) {
+                return { 
+                    isAnchor: true, 
+                    format: fmt, 
+                    b10: (v >> 10) & 1, 
+                    r3: (v >> 7) & 7, 
+                    g4: (v >> 3) & 15, 
+                    b3: v & 7,
+                    r: (((v >> 7) & 7) << 5) | (((v >> 10) & 1) ? 31 : 0),
+                    g: ((v >> 3) & 15) << 4,
+                    b: ((v & 7) << 5) | (((v >> 10) & 1) ? 31 : 0)
+                };
+            }
+            let rawDr = (v >> 7) & 7; 
+            let dr = (rawDr & 4) ? rawDr - 8 : rawDr;
+            let rawDg = (v >> 3) & 15; 
+            let dg = (rawDg & 8) ? rawDg - 16 : rawDg;
+            let rawDb = v & 7; 
+            let db = (rawDb & 4) ? rawDb - 8 : rawDb;
+            
+            return { 
+                isAnchor: false, 
+                format: fmt, 
+                isTurbo: ((v >> 10) & 1) === 1, 
+                dr, 
+                dg, 
+                db 
+            };
+        } else if (fmt === "HAM16") {
+            if (v & 0x8000) {
+                return { 
+                    isAnchor: true, 
+                    format: fmt, 
+                    r5: (v >> 10) & 31, 
+                    g5: (v >> 5) & 31, 
+                    b5: v & 31 
+                };
+            }
+            let rawDr = (v >> 10) & 15; let dr = rawDr >= 8 ? rawDr - 16 : rawDr;
+            let rawDg = (v >> 5) & 31; let dg = rawDg >= 16 ? rawDg - 32 : rawDg;
+            let rawDb = v & 31; let db = rawDb >= 16 ? db - 32 : db;
+            return { 
+                isAnchor: false, 
+                format: fmt, 
+                isTurbo: ((v >> 14) & 1) === 1, 
+                dr, 
+                dg, 
+                db 
+            };
+        }
+        return { isAnchor: true, format: fmt, anchorIdx: 0 };
+    }
+
+    if (config && config.isMixed) {
+        let bitPos = 0;
+        function readBits(numBits) {
+            let val = 0;
+            for (let i = 0; i < numBits; i++) {
+                let byteIdx = Math.floor(bitPos / 8);
+                let bitIdx = 7 - (bitPos % 8);
+                if (byteIdx >= packedData.length) return 0;
+                let bit = (packedData[byteIdx] >> bitIdx) & 1;
+                val = (val << 1) | bit;
+                bitPos++;
+            }
+            return val;
+        }
+
+        for (let i = 0; i < totalPixels; i++) {
+            let seqIdx = i % config.sequence.length;
+            let fmt = config.sequence[seqIdx];
+            let bits = 0;
+            if(fmt==="HAM04") bits=4;
+            else if(fmt==="HAM05") bits=5;
+            else if(fmt==="HAM06") bits=6;
+            else if(fmt==="HAM08_PAL") bits=8;
+            
+            let v = readBits(bits);
+            commands[i] = parseCmdVal(v, fmt);
+        }
+    } else {
+        if (format === "HAM16" || format === "HAM12") {
+            for (let i = 0; i < totalPixels; i++) {
+                if (i*2+1 >= packedData.length) {
+                    commands[i] = { isAnchor: true, format: format, anchorIdx: 0 };
+                    continue;
+                }
+                let v = (packedData[i*2] << 8) | packedData[i*2+1];
+                commands[i] = parseCmdVal(v, format);
+            }
+        } else {
+            for (let i = 0; i < totalPixels; i++) {
+                if (i >= packedData.length) {
+                    commands[i] = { isAnchor: true, format: format, anchorIdx: 0 };
+                    continue;
+                }
+                let v = packedData[i];
+                commands[i] = parseCmdVal(v, format);
+            }
+        }
+    }
+    return commands;
 }

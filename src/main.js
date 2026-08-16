@@ -1,11 +1,17 @@
 import { setZoomMode, updateView, centerOnCoordinate, setupCanvasEvents, viewState } from './ui/canvas-view.js';
-import { encodeStream } from './core/engine-stream.js';
+import { encodeStream, unpackBinaryToCommands } from './core/engine-stream.js';
 import { decodeStream } from './core/decoder.js';
 import { HAM_CONFIGS } from './codecs/configs.js';
 import { computeDetailedAnalysis, runSimulationWithStrategy, errorBins } from './core/analysis.js';
 import { simulateBuilderEncode } from './core/builder.js';
 import { hexToRgb, rgbToHex, countUniqueColors, get_yuv_dist, get_yuv_dist_weight, get_yuv_dist_weight_heavy, get_rgb_dist, get_rgb_abs_dist, get_redmean_dist, get_oklab_dist } from './codecs/utils.js';
 
+
+// Test-Hook für die Konsole
+window.DEBUG_CANVAS = () => {
+    console.log("Decoded ImageData:", decodedImageData);
+    console.log("Erste 20 Pixel (RGBA):", decodedImageData ? Array.from(decodedImageData.data.slice(0, 20)) : "Kein Bild");
+};
 // --- GLOBALE STATES ---
 let currentImgW = 0, currentImgH = 0, totalPixels = 0;
 let originalColorsCount = 0;
@@ -34,12 +40,13 @@ const paletteBox = document.getElementById('palette-box');
 const palOffsetInput = document.getElementById('pal-offset-input');
 const paletteContainer = document.getElementById('palette-pickers-container');
 
-const btnLoad = document.getElementById('btn-load');
 const btnEncode = document.getElementById('btn-encode');
 const btnSave = document.getElementById('btn-save');
 const btnBuilder = document.getElementById('btn-builder');
 const btnAnalysis = document.getElementById('btn-analysis');
+
 const fileImg = document.getElementById('file-img');
+const fileBin = document.getElementById('file-bin');
 
 const canvasOriginal = document.getElementById('canvas-original');
 const ctxOriginal = canvasOriginal.getContext('2d', { willReadFrequently: true });
@@ -245,7 +252,6 @@ if (palOffsetInput) {
 }
 
 // --- BILD LADEN ---
-if (btnLoad) btnLoad.addEventListener('click', () => { if(fileImg) fileImg.click(); });
 if (fileImg) fileImg.addEventListener('change', (e) => {
     let file = e.target.files[0]; 
     if (!file) return;
@@ -323,7 +329,7 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
     let decLabel = document.getElementById('decoded-label');
     if (decLabel) decLabel.innerText = `DEKODIERT (${currentFormat})`;
     
-    btnLoad.disabled = true; btnEncode.disabled = true; if(btnSave) btnSave.disabled = true; 
+    btnEncode.disabled = true; if(btnSave) btnSave.disabled = true; 
     if(btnBuilder) btnBuilder.disabled = true; if(btnAnalysis) btnAnalysis.disabled = true;
 
     let strategy = encodeStrategySelect ? encodeStrategySelect.value : "both";
@@ -384,7 +390,7 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
     if (encodeHistory.length > 10) encodeHistory.shift();
     renderHistory();
 
-    btnLoad.disabled = false; btnEncode.disabled = false; if(btnSave) btnSave.disabled = false; 
+    btnEncode.disabled = false; if(btnSave) btnSave.disabled = false; 
     if(btnBuilder) btnBuilder.disabled = false; if(btnAnalysis) btnAnalysis.disabled = false;
 });
 
@@ -564,6 +570,7 @@ if (btnBuildCancel) btnBuildCancel.addEventListener('click', () => {
     if (modal) modal.style.display = 'none';
 });
 
+// --- DER NEUE AUTO-BUILDER (TOURNAMENT + RATIO) ---
 let btnBuildAuto = document.getElementById('btn-builder-auto');
 if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     if (!currentImgW) { alert("Bitte lade zuerst ein Bild!"); return; }
@@ -572,9 +579,31 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     let config = HAM_CONFIGS[currentFormat];
     let slotsPerBank = (config && config.slotsPerBank) ? config.slotsPerBank : 16;
 
+    let modeSelect = document.getElementById('builder-mode-select');
+    let mode = modeSelect ? modeSelect.value : 'ratio_half';
+
+    let avgSlotsCount = slotsPerBank;
+    let maxSlotsCount = 0;
+
+    if (mode === 'only_avg') {
+        avgSlotsCount = slotsPerBank;
+        maxSlotsCount = 0;
+    } else if (mode === 'only_max') {
+        avgSlotsCount = 0;
+        maxSlotsCount = slotsPerBank;
+    } else if (mode === 'ratio_1_3') {
+        avgSlotsCount = Math.round(slotsPerBank * 0.25);
+        maxSlotsCount = slotsPerBank - avgSlotsCount;
+    } else if (mode === 'ratio_half') {
+        avgSlotsCount = Math.floor(slotsPerBank / 2);
+        maxSlotsCount = slotsPerBank - avgSlotsCount;
+    } else if (mode === 'ratio_3_1') {
+        avgSlotsCount = Math.round(slotsPerBank * 0.75);
+        maxSlotsCount = slotsPerBank - avgSlotsCount;
+    }
+
     let statusEl = document.getElementById('builder-status');
     
-    // Bank komplett leeren für den Neufart
     for (let i = 0; i < slotsPerBank; i++) {
         let absoluteSlot = (currentOffset + i) % 256;
         globalPaletteRAM[absoluteSlot * 3] = 0;
@@ -588,9 +617,12 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     let bMetric = encodeMetricSelect ? encodeMetricSelect.value : 'oklab';
     let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
 
-    for (let i = 0; i < slotsPerBank; i++) {
-        let absoluteSlot = (currentOffset + i) % 256;
-        if (statusEl) statusEl.innerText = `Fülle Slot ${i} (RAM: ${absoluteSlot})...`;
+    let bestDecodedCache = null;
+    let slotIdxPointer = 0;
+
+    for (let i = 0; i < avgSlotsCount; i++) {
+        let absoluteSlot = (currentOffset + slotIdxPointer) % 256;
+        if (statusEl) statusEl.innerText = `[Durchschnitt] Analysiere Slot ${slotIdxPointer}...`;
         await new Promise(r => setTimeout(r, 10)); 
 
         let encodeResult = await encodeStream(
@@ -600,12 +632,10 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
         );
         
         let decodedPixels = decodeStream(encodeResult.commandArray, currentImgW, currentImgH, globalPaletteRAM, getGlobalSegment(), config);
-        ctxDecoded.putImageData(new ImageData(decodedPixels, currentImgW, currentImgH), 0, 0);
 
         let errorMap = new Map();
         let histMap = new Map();
 
-        // Fehler akkumulieren
         for (let p = 0; p < totalPixels; p++) {
             let idx = p * 4;
             let r1 = originalImageData.data[idx], g1 = originalImageData.data[idx+1], b1 = originalImageData.data[idx+2];
@@ -623,63 +653,116 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
             else if (bMetric === 'rgb') err = get_rgb_dist(r1, g1, b1, r2, g2, b2);
             else err = get_rgb_abs_dist(r1, g1, b1, r2, g2, b2);
             
-            errorMap.set(hex, (errorMap.get(hex) || 0) + err); // totalError ist hier die SUMME aller Fehler
+            errorMap.set(hex, (errorMap.get(hex) || 0) + err); 
         }
 
-        let bestHex = "#000000";
-        let maxImpact = -1;
+        let candidates = [];
+        let sortedByImpact = Array.from(histMap.keys()).map(hex => ({hex, impact: errorMap.get(hex)})).sort((a,b) => b.impact - a.impact);
+        if(sortedByImpact.length > 0) candidates.push(sortedByImpact[0].hex);
+        
+        let sortedByCount = Array.from(histMap.keys())
+            .filter(hex => (errorMap.get(hex) / histMap.get(hex)) > 1.5)
+            .map(hex => ({hex, count: histMap.get(hex)}))
+            .sort((a,b) => b.count - a.count);
+            
+        if(sortedByCount.length > 0 && sortedByCount[0].hex !== candidates[0]) {
+            candidates.push(sortedByCount[0].hex);
+        }
+        if (candidates.length === 0) candidates.push(sortedByImpact[0]?.hex || "#000000");
 
-        // KORREKTUR: impact-Berechnung repariert
-        for (let [hex, count] of histMap.entries()) {
-            let totalError = errorMap.get(hex); // Echte Summe der Fehler = Echter Einfluss auf den globalen MSE
-            let avgError = totalError / count;  // Durchschnittlicher Fehler pro Pixel dieser Farbe
+        let bestCandidateHex = candidates[0];
+        let bestGlobalScore = Infinity;
+        
+        for (let c = 0; c < candidates.length; c++) {
+            let hex = candidates[c];
+            let [tr, tg, tb] = hexToRgb(hex);
+            globalPaletteRAM[absoluteSlot * 3] = tr;
+            globalPaletteRAM[absoluteSlot * 3 + 1] = tg;
+            globalPaletteRAM[absoluteSlot * 3 + 2] = tb;
             
-            let impact = totalError; // Kein Quadrat mehr!
+            let testEncode = await encodeStream(
+                originalImageData.data, currentImgW, currentImgH, currentFormat, 
+                getGlobalSegment(), globalPaletteRAM, strategy, bMetric, max_depth, 
+                null, 0, totalPixels
+            );
+            let testDecoded = decodeStream(testEncode.commandArray, currentImgW, currentImgH, globalPaletteRAM, getGlobalSegment(), config);
             
-            // Nimmt nur Farben auf, die im Schnitt einen spürbaren Fehler haben
-            if (impact > maxImpact && avgError > 1.5) {
-                maxImpact = impact;
-                bestHex = hex;
+            let currentScore = 0;
+            for (let p = 0; p < totalPixels; p++) {
+                let idx = p * 4;
+                let r1 = originalImageData.data[idx], g1 = originalImageData.data[idx+1], b1 = originalImageData.data[idx+2];
+                let r2 = testDecoded[idx], g2 = testDecoded[idx+1], b2 = testDecoded[idx+2];
+                currentScore += get_yuv_dist(r1, g1, b1, r2, g2, b2);
+            }
+            
+            if (currentScore < bestGlobalScore) {
+                bestGlobalScore = currentScore;
+                bestCandidateHex = hex;
+                bestDecodedCache = testDecoded;
             }
         }
 
-        // KORREKTUR: Duplikat-Erkennung im Fallback
-        if (maxImpact === -1 && histMap.size > 0) {
-            let maxCount = -1;
-            for (let [hex, count] of histMap.entries()) {
-                let [r,g,b] = hexToRgb(hex);
-                let isDup = false;
-                // Prüfen, ob die Farbe in den bisherigen Slots schon existiert
-                for (let s = 0; s < i; s++) {
-                    let aSlot = (currentOffset + s) % 256;
-                    if (globalPaletteRAM[aSlot*3] === r && globalPaletteRAM[aSlot*3+1] === g && globalPaletteRAM[aSlot*3+2] === b) {
-                        isDup = true; break;
-                    }
-                }
-                
-                if (!isDup && count > maxCount) { 
-                    maxCount = count; 
-                    bestHex = hex; 
-                }
-            }
-            
-            // Wenn wirklich alle Farben des Bildes schon in der Palette sind, nimm einfach die häufigste
-            if (maxCount === -1) {
-                let mC = -1;
-                for (let [hex, count] of histMap.entries()) {
-                    if (count > mC) { mC = count; bestHex = hex; }
-                }
-            }
-        }
-
-        let [wr, wg, wb] = hexToRgb(bestHex);
+        let [wr, wg, wb] = hexToRgb(bestCandidateHex);
         globalPaletteRAM[absoluteSlot * 3] = wr;
         globalPaletteRAM[absoluteSlot * 3 + 1] = wg;
         globalPaletteRAM[absoluteSlot * 3 + 2] = wb;
         
-        currentBuilderSlot = i;
+        currentBuilderSlot = slotIdxPointer;
         updatePalettePickers();
         refreshBuilderUI();
+        if (bestDecodedCache) ctxDecoded.putImageData(new ImageData(bestDecodedCache, currentImgW, currentImgH), 0, 0);
+        
+        slotIdxPointer++;
+    }
+
+    for (let i = 0; i < maxSlotsCount; i++) {
+        let absoluteSlot = (currentOffset + slotIdxPointer) % 256;
+        if (statusEl) statusEl.innerText = `[Einzelfehler] Analysiere Slot ${slotIdxPointer} (Max-MSE)...`;
+        await new Promise(r => setTimeout(r, 10)); 
+
+        let encodeResult = await encodeStream(
+            originalImageData.data, currentImgW, currentImgH, currentFormat, 
+            getGlobalSegment(), globalPaletteRAM, strategy, bMetric, max_depth, 
+            null, 0, totalPixels
+        );
+        let decodedPixels = decodeStream(encodeResult.commandArray, currentImgW, currentImgH, globalPaletteRAM, getGlobalSegment(), config);
+
+        let maxPixelErrors = [];
+        for (let p = 0; p < totalPixels; p++) {
+            let idx = p * 4;
+            let r1 = originalImageData.data[idx], g1 = originalImageData.data[idx+1], b1 = originalImageData.data[idx+2];
+            let r2 = decodedPixels[idx], g2 = decodedPixels[idx+1], b2 = decodedPixels[idx+2];
+            
+            let err = get_yuv_dist(r1, g1, b1, r2, g2, b2);
+            maxPixelErrors.push({ r: r1, g: g1, b: b1, err });
+        }
+
+        maxPixelErrors.sort((a, b) => b.err - a.err);
+
+        let worstColorHex = "#000000";
+        if (maxPixelErrors.length > 0) {
+            worstColorHex = rgbToHex(maxPixelErrors[0].r, maxPixelErrors[0].g, maxPixelErrors[0].b);
+        }
+
+        let [tr, tg, tb] = hexToRgb(worstColorHex);
+        globalPaletteRAM[absoluteSlot * 3] = tr;
+        globalPaletteRAM[absoluteSlot * 3 + 1] = tg;
+        globalPaletteRAM[absoluteSlot * 3 + 2] = tb;
+
+        let testEncode = await encodeStream(
+            originalImageData.data, currentImgW, currentImgH, currentFormat, 
+            getGlobalSegment(), globalPaletteRAM, strategy, bMetric, max_depth, 
+            null, 0, totalPixels
+        );
+        let testDecoded = decodeStream(testEncode.commandArray, currentImgW, currentImgH, globalPaletteRAM, getGlobalSegment(), config);
+
+        currentBuilderSlot = slotIdxPointer;
+        updatePalettePickers();
+        refreshBuilderUI();
+        bestDecodedCache = testDecoded;
+        if (bestDecodedCache) ctxDecoded.putImageData(new ImageData(bestDecodedCache, currentImgW, currentImgH), 0, 0);
+        
+        slotIdxPointer++;
     }
 
     if (statusEl) statusEl.innerText = "Erstelle finales Bild...";
@@ -694,7 +777,7 @@ if (btnBuildAuto) btnBuildAuto.addEventListener('click', async () => {
     latestCommandArray = finalEncode.commandArray;
     refreshDecodedImage();
     
-    if (statusEl) statusEl.innerText = `Offset ab ${currentOffset} erfolgreich vollständig belegt!`;
+    if (statusEl) statusEl.innerText = `Palette ab Offset ${currentOffset} nach gewähltem Verhältnis optimiert!`;
 });
 
 // --- AUTO SCHRITTWEITEN LOGIK ---
@@ -826,22 +909,207 @@ if (btnAutoClose) btnAutoClose.addEventListener('click', () => {
     if (modal) modal.style.display = 'none';
 });
 
-// --- BILD/DATEN SPEICHERN ---
+// ============================================================================
+// HILFSFUNKTION: HAM-DATEI ERZEUGEN (V3 MIT ENDIANNESS)
+// ============================================================================
+function generateHamFile(isLittleEndian) {
+    let formatBytes = new TextEncoder().encode(currentFormat);
+    let step = getGlobalSegment()[0].step;
+    let offset = getGlobalSegment()[0].offset;
+
+    // Header V3 Layout:
+    // 0-3: Magic ("HAM!")
+    // 4: Version (3)
+    // 5: Endian-Flag (0 = Little Endian, 1 = Big Endian)
+    // 6-7: Width (16-Bit)
+    // 8-9: Height (16-Bit)
+    // 10: Format-String-Länge
+    let headerSize = 11 + formatBytes.length + 4 + 768; 
+    let buffer = new ArrayBuffer(headerSize + latestPackedData.length);
+    let view = new DataView(buffer);
+    let u8 = new Uint8Array(buffer);
+    
+    u8.set([72, 65, 77, 33], 0);          
+    view.setUint8(4, 3); 
+    view.setUint8(5, isLittleEndian ? 0 : 1); 
+    
+    // Width & Height mit spezifischer Endianness für das Zielsystem schreiben
+    view.setUint16(6, currentImgW, isLittleEndian); 
+    view.setUint16(8, currentImgH, isLittleEndian); 
+    view.setUint8(10, formatBytes.length); 
+    
+    let pointer = 11;
+    
+    u8.set(formatBytes, pointer);
+    pointer += formatBytes.length;
+    
+    view.setUint8(pointer++, step.r);
+    view.setUint8(pointer++, step.g);
+    view.setUint8(pointer++, step.b);
+    view.setUint8(pointer++, offset);
+    
+    u8.set(globalPaletteRAM, pointer);
+    pointer += 768;
+    
+    // Payload (Pixeldaten): Der JS-Encoder schreibt die Bit-Sequenzen nativ 
+    // als Big-Endian Stream. Diese bleiben intakt, da Retro-Systeme den 
+    // Stream meist genau so (High-Byte first) auslesen.
+    u8.set(latestPackedData, pointer);
+    
+    return new Blob([buffer], { type: 'application/octet-stream' });
+}
+
+// ============================================================================
+// BILD/DATEN SPEICHERN (MIT BENUTZERDEFINIERTEM NAMEN)
+// ============================================================================
 if (btnSave) btnSave.addEventListener('click', () => {
     if (!latestPackedData) {
         alert("Es gibt keine kodierten Daten zum Speichern. Bitte zuerst kodieren!");
         return;
     }
     
-    const blob = new Blob([latestPackedData], { type: 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    
-    a.href = url;
-    a.download = `ham_encoded_${currentFormat.toLowerCase()}.bin`;
-    
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    let defaultName = `ship_${currentFormat.toLowerCase()}`;
+    let customName = prompt("Bitte Dateinamen eingeben (ohne Endung):", defaultName);
+    if (!customName) return;
+
+    let triggerDownload = (blob, suffix) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${customName}_${suffix}.ham`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    // Little-Endian Version speichern
+    let blobLE = generateHamFile(true);
+    triggerDownload(blobLE, "LE");
+
+    // Big-Endian Version speichern
+    setTimeout(() => {
+        let blobBE = generateHamFile(false);
+        triggerDownload(blobBE, "BE");
+    }, 300);
+});
+
+// ============================================================================
+// LADE-FUNKTION FÜR CODIERTE DATEN (SMARTER V3 LOADER)
+// ============================================================================
+if (fileBin) fileBin.addEventListener('change', (e) => {
+    let file = e.target.files[0];
+    if (!file) return;
+    let reader = new FileReader();
+    reader.onload = function(ev) {
+        let buffer = ev.target.result;
+        let u8 = new Uint8Array(buffer);
+        let view = new DataView(buffer);
+
+        try {
+            console.log("=== HAM LADE-ROUTINE ===", file.name);
+
+            // Signatur prüfen
+            if (u8.length < 14 || u8[0] !== 72 || u8[1] !== 65 || u8[2] !== 77 || u8[3] !== 33) {
+                throw new Error("Keine gültige HAM! Signatur.");
+            }
+            
+            let version = view.getUint8(4);
+            let isLittleEndian = true;
+            let pointer = 5;
+            let w, h, formatLen;
+
+            // Dynamisches Header-Parsing basierend auf der Version
+            if (version === 3) {
+                isLittleEndian = view.getUint8(5) === 0;
+                w = view.getUint16(6, isLittleEndian);
+                h = view.getUint16(8, isLittleEndian);
+                formatLen = view.getUint8(10);
+                pointer = 11;
+            } else if (version === 2) {
+                w = view.getUint16(5, true); // V2 war fix LE
+                h = view.getUint16(7, true);
+                formatLen = view.getUint8(9);
+                pointer = 10;
+            } else {
+                throw new Error(`Nicht unterstützte Dateiversion: v${version}. Bitte neu codieren!`);
+            }
+
+            let formatBytes = u8.slice(pointer, pointer + formatLen);
+            let fmt = new TextDecoder().decode(formatBytes);
+            pointer += formatLen;
+            
+            let sR = view.getUint8(pointer++);
+            let sG = view.getUint8(pointer++);
+            let sB = view.getUint8(pointer++);
+            let pOff = view.getUint8(pointer++);
+            
+            let palSlice = u8.slice(pointer, pointer + 768);
+            globalPaletteRAM.fill(0); 
+            globalPaletteRAM.set(palSlice);
+            pointer += 768;
+            
+            let payload = u8.slice(pointer);
+            
+            let endianText = isLittleEndian ? "Little-Endian" : "Big-Endian";
+            console.log(`[Erfolg] Header (v${version}): ${w}x${h}, Format: ${fmt}, ${endianText}, Steps: R${sR}/G${sG}/B${sB}, Offset: ${pOff}`);
+
+            currentImgW = w;
+            currentImgH = h;
+            currentFormat = fmt;
+            totalPixels = w * h;
+            latestPackedData = payload;
+
+            // UI Synchronisieren
+            if (hamStepR) hamStepR.value = sR;
+            if (hamStepG) hamStepG.value = sG;
+            if (hamStepB) hamStepB.value = sB;
+            if (palOffsetInput) palOffsetInput.value = pOff;
+            if (formatSelect) formatSelect.value = fmt;
+
+            handleFormatChange();
+            updatePalettePickers();
+
+            canvasOriginal.width = w;
+            canvasOriginal.height = h;
+            ctxOriginal.clearRect(0, 0, w, h);
+            canvasDecoded.width = w;
+            canvasDecoded.height = h;
+            ctxDecoded.clearRect(0, 0, w, h);
+            
+            latestCommandArray = unpackBinaryToCommands(latestPackedData, currentFormat, totalPixels);
+
+            let loadedSegment = [{
+                absEnd: totalPixels,
+                waitPixels: totalPixels,
+                offset: pOff,
+                step: { r: sR, g: sG, b: sB }
+            }];
+
+            let config = HAM_CONFIGS[currentFormat];
+            let decodedPixels = decodeStream(latestCommandArray, w, h, globalPaletteRAM, loadedSegment, config);
+            
+            decodedImageData = new ImageData(decodedPixels, w, h);
+            ctxDecoded.putImageData(decodedImageData, 0, 0);
+            
+            let set = new Set();
+            for (let i = 0; i < decodedPixels.length; i += 4) { 
+                set.add((decodedPixels[i] << 16) | (decodedPixels[i+1] << 8) | decodedPixels[i+2]); 
+            }
+            
+            updateStatusTextDimAndColors(set.size);
+            let statusText = document.getElementById('status-text');
+            if(statusText) statusText.innerText = `HAM v${version} geladen: ${fmt} (${w}x${h}) [${endianText}]!`;
+            setZoomMode('fit', w, h);
+            
+            if (btnAnalysis) btnAnalysis.disabled = false;
+            if (btnSave) btnSave.disabled = false;
+            if (btnBuilder) btnBuilder.disabled = false;
+            
+        } catch (error) {
+            console.error("Ladefehler:", error);
+            alert("Fehler: " + error.message);
+        }
+    };
+    reader.readAsArrayBuffer(file);
 });
