@@ -1,104 +1,56 @@
 export const HAM_CONFIGS = {
-    "HAM04": {
-        name: "HAM04",
-        isPaletted: true,
-        slotsPerBank: 8,
-        maxAnchor: 7,
-        hasTurbo: false,
-        channels: { r: [1, -1], g: [1, -1], b: [1, -1] }
-    },
-    "HAM05": {
-        name: "HAM05",
-        isPaletted: true,
-        slotsPerBank: 16,
-        maxAnchor: 15,
-        hasTurbo: true,
-        channels: { r: [1, -1], g: [1, -1], b: [1, -1] }
-    },
-    "HAM06": {
-        name: "HAM06",
-        isPaletted: true,
-        slotsPerBank: 32,
-        maxAnchor: 31,
-        hasTurbo: true,
-        channels: { r: [1, -1], g: [1, 2, -2, -1], b: [1, -1] }
-    },
-    "HAM08_PAL": {
-        name: "HAM08_PAL",
-        isPaletted: true,
-        slotsPerBank: 128,
-        maxAnchor: 127,
-        hasTurbo: true,
-        channels: { r: [1, 2, -2, -1], g: [1, 2, -2, -1], b: [1, 2, -2, -1] }
-    },
     "HAM12": {
-        name: "HAM12",
         isPaletted: false,
-        slotsPerBank: 0,
-        maxAnchor: 0,
+        isMixed: false,
         hasTurbo: true,
-        channels: { r: [1, -1], g: [1, -1], b: [1, -1] }
+        bits: 12
     },
     "HAM16": {
-        name: "HAM16",
         isPaletted: false,
-        slotsPerBank: 0,
-        maxAnchor: 0,
+        isMixed: false,
         hasTurbo: true,
-        channels: { r: [1, -1], g: [1, -1], b: [1, -1] }
+        bits: 16
     },
-    "HAM_16BIT": {
-        name: "HAM_16BIT",
+    "HAM_32Bit_44444444": {
         isPaletted: true,
         isMixed: true,
-        sequence: ["HAM06", "HAM04", "HAM06"],
-        slotsPerBank: 32,
-        maxAnchor: 31,
-        hasTurbo: true
+        slotsPerBank: 8, // HAM04 nutzt 3 Anker-Bits = 2^3 = 8 Slots
+        sequence: ["HAM04", "HAM04", "HAM04", "HAM04", "HAM04", "HAM04", "HAM04", "HAM04"] // 8 * 4 = 32 Bit
     },
-    "HAM_32BIT_A": {
-        name: "HAM_32BIT_A",
+    "HAM_32BIT_6446444": {
         isPaletted: true,
         isMixed: true,
-        sequence: ["HAM06", "HAM04", "HAM04", "HAM06", "HAM04", "HAM04", "HAM04"],
-        slotsPerBank: 32, // Wegen HAM06
-        maxAnchor: 31,
-        hasTurbo: true
+        slotsPerBank: 32, // Enthält HAM06 (5 Anker-Bits = 32 Slots) & HAM04 (8 Slots) -> Max Bank 32
+        sequence: ["HAM06", "HAM04", "HAM04", "HAM06", "HAM04", "HAM04", "HAM04"]
     },
-    "HAM_32BIT_B": {
-        name: "HAM_32BIT_B",
+    "HAM_32BIT_5454545": {
         isPaletted: true,
         isMixed: true,
-        sequence: ["HAM05", "HAM04", "HAM05", "HAM04", "HAM05", "HAM04", "HAM05"],
-        slotsPerBank: 16, // Wegen HAM05
-        maxAnchor: 15,
-        hasTurbo: true
+        slotsPerBank: 16, // Enthält HAM05 (4 Anker-Bits = 16 Slots) & HAM04 (8 Slots) -> Max Bank 16
+        sequence: ["HAM05", "HAM04", "HAM05", "HAM04", "HAM05", "HAM04", "HAM05"]
     },
-    "HAM_32BIT_C": {
-        name: "HAM_32BIT_C",
+    "HAM_32BIT_6454544": {
         isPaletted: true,
         isMixed: true,
-        sequence: ["HAM06", "HAM04", "HAM05", "HAM04", "HAM05", "HAM04", "HAM04"],
-        slotsPerBank: 32, // Wegen HAM06
-        maxAnchor: 31,
-        hasTurbo: true
+        slotsPerBank: 32, // Enthält HAM06 (32 Slots), HAM05 (16 Slots), HAM04 (8 Slots) -> Max Bank 32
+        sequence: ["HAM06", "HAM04", "HAM05", "HAM04", "HAM05", "HAM04", "HAM04"]
     },
-    "HAM_32BIT_D": {
-        name: "HAM_32BIT_D",
+    "HAM_32BIT_655655": {
         isPaletted: true,
         isMixed: true,
-        sequence: ["HAM05", "HAM05", "HAM05", "HAM05", "HAM04", "HAM04", "HAM04"],
-        slotsPerBank: 16, // Wegen HAM05
-        maxAnchor: 15,
-        hasTurbo: true
+        slotsPerBank: 32, // Enthält HAM06 (32 Slots) & HAM05 (16 Slots) -> Max Bank 32
+        sequence: ["HAM06", "HAM05", "HAM05", "HAM06", "HAM05", "HAM05"]
     },
-    "HAM_32BIT_E": {
-        name: "HAM_32BIT_E",
+    "HAM_32BIT_86666": {
         isPaletted: true,
         isMixed: true,
-        sequence: ["HAM08_PAL", "HAM08_PAL", "HAM08_PAL", "HAM08_PAL"],
-        slotsPerBank: 128, // Wegen HAM08_PAL
-        maxAnchor: 127,
-        hasTurbo: true
+        slotsPerBank: 128, // Enthält HAM08_PAL (7 Anker-Bits = 128 Slots) & HAM06 (32 Slots) -> Max Bank 128
+        sequence: ["HAM08_PAL", "HAM06", "HAM06", "HAM06", "HAM06"]
+    },
+    "HAM_32BIT_8888": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 128, // Enthält HAM08_PAL (7 Anker-Bits = 128 Slots) -> Max Bank 128
+        sequence: ["HAM08_PAL", "HAM08_PAL", "HAM08_PAL", "HAM08_PAL"]
     }
 };
