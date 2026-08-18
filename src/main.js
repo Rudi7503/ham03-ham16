@@ -4,7 +4,7 @@ import { hexToRgb, rgbToHex } from './codecs/utils.js';
 import { encodeHam12_16, decodeHam12_16, packHam12_16, unpackHam12_16 } from './core/module_ham12_16.js';
 import { encodePaletted, decodePaletted, packPaletted, unpackPaletted } from './core/module_paletted.js';
 import { debugRoundtripHam12_16, debugRoundtripPaletted } from './core/debugger.js';
-import { computeDetailedAnalysis, autoFillPaletteFromImage, errorBins } from './core/analysis.js';
+import { computeDetailedAnalysis, errorBins } from './core/analysis.js';
 
 let currentImgW = 0, currentImgH = 0, totalPixels = 0;
 let originalImageData = null, decodedImageData = null;
@@ -45,6 +45,12 @@ function getGlobalOffset() {
     return parseInt(palOffsetInput.value) || 0;
 }
 
+function ensureSlotZeroBlack() {
+    globalPaletteRAM[0] = 0;
+    globalPaletteRAM[1] = 0;
+    globalPaletteRAM[2] = 0;
+}
+
 function updateStatusTextDimAndColors() {
     let dimTextEl = document.getElementById('img-dim-text');
     if (dimTextEl) dimTextEl.innerText = `Größe: ${currentImgW}x${currentImgH} px | Modus: ${currentFormat}`;
@@ -58,9 +64,9 @@ function updateProgress(phase, current, total) {
     if (sText) sText.innerText = `${phase}: ${pct}%`;
 }
 
-// Hilfsfunktion: Führt die automatische Neu-Codierung im Hintergrund aus und zeigt Status
 async function triggerAutoReencode() {
     if (!originalImageData) return;
+    ensureSlotZeroBlack();
     
     let statusDiv = document.getElementById('builder-instruction') || document.getElementById('builder-status');
     if (statusDiv) {
@@ -85,11 +91,81 @@ async function triggerAutoReencode() {
     btnSave.disabled = false;
 }
 
+async function sortPaletteSlotsByUsage() {
+    if (!originalImageData || !latestCommandArray) {
+        alert("Bitte zuerst das Bild codieren.");
+        return;
+    }
+    let config = HAM_CONFIGS[currentFormat];
+    if (!config || !config.isPaletted) return;
+
+    let slots = config.slotsPerBank || 8;
+    let currentOffset = getGlobalOffset();
+
+    let anchorUsage = new Array(slots).fill(0);
+    for (let cmd of latestCommandArray) {
+        if (cmd && cmd.isAnchor && cmd.anchorIdx !== undefined) {
+            if (cmd.anchorIdx >= 0 && cmd.anchorIdx < slots) {
+                anchorUsage[cmd.anchorIdx]++;
+            }
+        }
+    }
+
+    let slotData = [];
+    for (let i = 0; i < slots; i++) {
+        let absSlot = (currentOffset + i) % 256;
+        let r = globalPaletteRAM[absSlot * 3];
+        let g = globalPaletteRAM[absSlot * 3 + 1];
+        let b = globalPaletteRAM[absSlot * 3 + 2];
+        slotData.push({
+            bankIndex: i,
+            absSlot: absSlot,
+            r: r,
+            g: g,
+            b: b,
+            usage: absSlot === 0 ? Infinity : anchorUsage[i]
+        });
+    }
+
+    let fixedSlots = slotData.filter(s => s.absSlot === 0);
+    let sortableSlots = slotData.filter(s => s.absSlot !== 0);
+
+    sortableSlots.sort((a, b) => b.usage - a.usage);
+
+    let newSlotOrder = [];
+    let sortableIdx = 0;
+    for (let i = 0; i < slots; i++) {
+        let absSlot = (currentOffset + i) % 256;
+        if (absSlot === 0) {
+            newSlotOrder.push(fixedSlots.find(s => s.absSlot === 0));
+        } else {
+            newSlotOrder.push(sortableSlots[sortableIdx++]);
+        }
+    }
+
+    for (let i = 0; i < slots; i++) {
+        let absSlot = (currentOffset + i) % 256;
+        globalPaletteRAM[absSlot * 3]     = newSlotOrder[i].r;
+        globalPaletteRAM[absSlot * 3 + 1] = newSlotOrder[i].g;
+        globalPaletteRAM[absSlot * 3 + 2] = newSlotOrder[i].b;
+    }
+
+    await triggerAutoReencode();
+    handleFormatChange();
+    
+    let bModal = document.getElementById('builder-modal');
+    if (bModal && bModal.style.display === 'block') {
+        btnBuilder.click(); 
+    }
+}
+
 function handleFormatChange() {
     currentFormat = formatSelect.value;
     let config = HAM_CONFIGS[currentFormat];
     let isPalFormat = config && config.isPaletted;
     
+    ensureSlotZeroBlack();
+
     let paletteBox = document.getElementById('palette-box');
     if (paletteBox) paletteBox.style.display = isPalFormat ? 'block' : 'none';
     if (btnBuilder) btnBuilder.disabled = !isPalFormat || !originalImageData;
@@ -106,7 +182,12 @@ function handleFormatChange() {
             input.type = 'color'; input.className = 'palette-picker';
             input.value = rgbToHex(r, g, b);
             input.title = `Slot ${i} (RAM: ${absSlot})`;
+            if (absSlot === 0) {
+                input.disabled = true;
+                input.title = "Slot 0 ist fest auf Schwarz (0,0,0) reserviert.";
+            }
             input.addEventListener('input', async (e) => {
+                if (absSlot === 0) return;
                 let [nr, ng, nb] = hexToRgb(e.target.value);
                 globalPaletteRAM[absSlot * 3] = nr; 
                 globalPaletteRAM[absSlot * 3 + 1] = ng; 
@@ -155,6 +236,7 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
             canvasDecoded.width = currentImgW; canvasDecoded.height = currentImgH;
             ctxDecoded.clearRect(0, 0, currentImgW, currentImgH);
             
+            ensureSlotZeroBlack();
             handleFormatChange();
             updateStatusTextDimAndColors();
             setZoomMode('fit', currentImgW, currentImgH);
@@ -179,6 +261,8 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
     let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
     let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
     let hybridPercent = hypPercentInp ? (parseFloat(hypPercentInp.value) || 5.0) : 5.0;
+
+    ensureSlotZeroBlack();
 
     if (is16BitClass) {
         latestCommandArray = await encodeHam12_16(originalImageData.data, currentImgW, currentImgH, currentFormat, step, strategy, metric, max_depth, updateProgress, 0, 0, hybridPercent);
@@ -256,6 +340,8 @@ if (fileBin) fileBin.addEventListener('change', (e) => {
         totalPixels = currentImgW * currentImgH;
         formatSelect.value = currentFormat;
         
+        ensureSlotZeroBlack();
+
         canvasOriginal.width = currentImgW; canvasOriginal.height = currentImgH;
         canvasDecoded.width = currentImgW; canvasDecoded.height = currentImgH;
         ctxOriginal.clearRect(0, 0, currentImgW, currentImgH);
@@ -298,11 +384,58 @@ if (btnDebugRoundtrip) btnDebugRoundtrip.addEventListener('click', async () => {
 });
 
 // ============================================================================
-// MODAL & BUILDER LOGIC (Exklusive Slot-Zuweisung & automatischer Sprung)
+// DRAG & DROP FÜR MODALS
+// ============================================================================
+let isDraggingModal = false;
+let dragOffsetX = 0, dragOffsetY = 0;
+let currentDraggedElement = null;
+
+function setupDraggable(modalId) {
+    const modal = document.getElementById(modalId);
+    if (!modal) return;
+    const content = modal.querySelector('.modal-content');
+    const header = content ? content.querySelector('h3') : null;
+
+    if (header && content) {
+        header.addEventListener('mousedown', (e) => {
+            isDraggingModal = true;
+            currentDraggedElement = content;
+            let rect = content.getBoundingClientRect();
+            dragOffsetX = e.clientX - rect.left;
+            dragOffsetY = e.clientY - rect.top;
+            
+            content.style.position = 'absolute';
+            content.style.left = rect.left + 'px';
+            content.style.top = rect.top + 'px';
+            content.style.margin = '0';
+            e.preventDefault();
+        });
+    }
+}
+setupDraggable('builder-modal');
+setupDraggable('auto-step-modal');
+setupDraggable('analysis-modal');
+
+window.addEventListener('mousemove', (e) => {
+    if (!isDraggingModal || !currentDraggedElement) return;
+    let newX = e.clientX - dragOffsetX;
+    let newY = e.clientY - dragOffsetY;
+    currentDraggedElement.style.left = newX + 'px';
+    currentDraggedElement.style.top = newY + 'px';
+});
+window.addEventListener('mouseup', () => {
+    isDraggingModal = false;
+    currentDraggedElement = null;
+});
+
+
+// ============================================================================
+// MODAL & BUILDER LOGIC
 // ============================================================================
 const builderModal = document.getElementById('builder-modal');
 const btnBuilderCancel = document.getElementById('btn-builder-cancel');
 const btnBuilderAuto = document.getElementById('btn-builder-auto');
+const btnSortSlots = document.getElementById('btn-sort-slots');
 const autoStepModal = document.getElementById('auto-step-modal');
 const btnAutoStepClose = document.getElementById('btn-auto-step-close');
 const analysisModal = document.getElementById('analysis-modal');
@@ -312,20 +445,26 @@ let selectedTargetSlot = null;
 
 function generateTop10Html(top10Array) {
     return top10Array.length > 0 
-        ? top10Array.map((e, idx) => `
-            <div class="top10-cluster-item" data-r="${e.r2}" data-g="${e.g2}" data-b="${e.b2}" style="font-size:10px; margin-bottom:3px; padding:4px 6px; background:#111; border-radius:3px; border:1px solid #333; cursor:pointer; display:flex; align-items:center; justify-content:space-between;" title="Klicken, um Soll-Farbe in den gewählten Slot zu schreiben">
+        ? top10Array.map((e, idx) => {
+            let sollR = e.r1, sollG = e.g1, sollB = e.b1;
+            let istR = e.r2, istG = e.g2, istB = e.b2;
+            let formattedMse = Math.round(e.mse).toLocaleString('de-DE');
+
+            return `
+            <div class="top10-cluster-item" data-r="${sollR}" data-g="${sollG}" data-b="${sollB}" data-x="${e.x}" data-y="${e.y}" style="font-size:10px; margin-bottom:3px; padding:4px 6px; background:#111; border-radius:3px; border:1px solid #333; cursor:pointer; display:flex; align-items:center; justify-content:space-between;" title="Klicken zum Zentrieren & Zuweisen">
                 <div style="display:flex; align-items:center; gap:6px; pointer-events:none;">
                     <span style="color:#888; font-weight:bold;">#${idx+1}</span>
-                    <div style="width:12px; height:12px; background:rgb(${e.r1},${e.g1},${e.b1}); border:1px solid #668; border-radius:2px;" title="Ist"></div>
+                    <div style="width:12px; height:12px; background:rgb(${istR},${istG},${istB}); border:1px solid #668; border-radius:2px;" title="Ist (Decodiert)"></div>
                     <span>➡</span>
-                    <div style="width:12px; height:12px; background:rgb(${e.r2},${e.g2},${e.b2}); border:1px solid #688; border-radius:2px;" title="Soll"></div>
-                    <span style="color:#ccc;">RGB(${e.r2},${e.g2},${e.b2})</span>
+                    <div style="width:12px; height:12px; background:rgb(${sollR},${sollG},${sollB}); border:1px solid #688; border-radius:2px;" title="Soll (Original)"></div>
+                    <span style="color:#ccc;">RGB(${sollR},${sollG},${sollB})</span>
                 </div>
                 <div style="display:flex; align-items:center; gap:8px; pointer-events:none;">
-                    <span style="color:#4dabf7;">${e.count}x Px</span>
-                    <span style="color:#ff6b6b; font-weight:bold;">MSE: ${e.mse.toFixed(1)}</span>
+                    <span style="color:#4dabf7;">X:${e.x} Y:${e.y} (${e.count}x)</span>
+                    <span style="color:#ff6b6b; font-weight:bold;">MSE: ${formattedMse}</span>
                 </div>
-            </div>`).join('')
+            </div>`;
+        }).join('')
         : '<div style="font-size:11px; color:#aaa; padding:10px;">Keine Abweichungen gefunden.</div>';
 }
 
@@ -344,10 +483,12 @@ function generateHistogramHtml(histArray) {
         : '<div style="font-size:11px; color:#aaa; padding:10px;">Keine Daten.</div>';
 }
 
+if (btnSortSlots) btnSortSlots.addEventListener('click', sortPaletteSlotsByUsage);
+
 if (btnBuilder && builderModal) {
     btnBuilder.addEventListener('click', () => {
         if (!originalImageData) { alert("Bitte zuerst ein Bild laden."); return; }
-        builderModal.style.display = 'flex';
+        builderModal.style.display = 'block'; 
         
         let fmtSpan = document.getElementById('b-fmt');
         let offsetSpan = document.getElementById('b-bank-title');
@@ -366,35 +507,59 @@ if (btnBuilder && builderModal) {
         let slots = config ? (config.slotsPerBank || 8) : 8;
         
         if (!selectedTargetSlot) {
-            selectedTargetSlot = { index: 0, absSlot: currentOffset % 256 };
+            selectedTargetSlot = { index: 1, absSlot: (currentOffset + 1) % 256 };
         }
         
         if (statusDiv) statusDiv.innerHTML = `Bank aktiv (${slots} Slots). <span id='builder-instruction' style='color:#ffc107; font-weight:bold;'>Aktiv: Slot ${selectedTargetSlot.index}. Klicke einen Eintrag zum Zuweisen.</span>`;
         
         if (previewContainer) {
             previewContainer.innerHTML = "";
+            let anchorUsage = new Array(slots).fill(0);
+            if (latestCommandArray) {
+                for (let cmd of latestCommandArray) {
+                    if (cmd && cmd.isAnchor && cmd.anchorIdx !== undefined) {
+                        if (cmd.anchorIdx >= 0 && cmd.anchorIdx < slots) anchorUsage[cmd.anchorIdx]++;
+                    }
+                }
+            }
+
             for (let i = 0; i < slots; i++) {
                 let absSlot = (currentOffset + i) % 256;
                 let r = globalPaletteRAM[absSlot * 3], g = globalPaletteRAM[absSlot * 3 + 1], b = globalPaletteRAM[absSlot * 3 + 2];
+                let usageCount = anchorUsage[i];
                 
+                let slotWrapper = document.createElement('div');
+                slotWrapper.style.cssText = "display:flex; flex-direction:column; align-items:center; font-size:9px; gap:2px;";
+
                 let slotDiv = document.createElement('div');
                 slotDiv.className = 'builder-slot';
                 slotDiv.style.backgroundColor = rgbToHex(r, g, b);
-                slotDiv.title = `Slot ${i} (RAM ${absSlot}): RGB(${r},${g},${b})`;
+                slotDiv.title = `Slot ${i} (RAM ${absSlot}): RGB(${r},${g},${b}) | Genutzt: ${usageCount}x`;
                 slotDiv.innerText = i;
                 
                 if (selectedTargetSlot && selectedTargetSlot.index === i) {
                     slotDiv.style.border = '2px solid #ffc107';
                 }
-                
+
+                let usageLabel = document.createElement('span');
+                usageLabel.style.color = usageCount > 0 ? '#4dabf7' : '#777';
+                usageLabel.innerText = `${usageCount}x`;
+
                 slotDiv.addEventListener('click', () => {
+                    if (i === 0) {
+                        alert("Slot 0 ist fest auf Schwarz reserviert und kann nicht überschrieben werden.");
+                        return;
+                    }
                     document.querySelectorAll('.builder-slot').forEach(s => s.style.border = '1px solid #444');
                     slotDiv.style.border = '2px solid #ffc107';
                     selectedTargetSlot = { index: i, absSlot: absSlot };
                     let instr = document.getElementById('builder-instruction');
                     if (instr) instr.innerHTML = `Slot ${i} ausgewählt. <span style='color:#4dabf7;'>Klicke nun auf einen Eintrag!</span>`;
                 });
-                previewContainer.appendChild(slotDiv);
+                
+                slotWrapper.appendChild(slotDiv);
+                slotWrapper.appendChild(usageLabel);
+                previewContainer.appendChild(slotWrapper);
             }
         }
         
@@ -403,44 +568,53 @@ if (btnBuilder && builderModal) {
         
         async function applyColorToSelectedSlot(r, g, b) {
             if (!selectedTargetSlot) {
-                alert("Bitte zuerst einen Slot auswählen!");
-                return;
+                selectedTargetSlot = { index: 1, absSlot: (currentOffset + 1) % 256 };
             }
             
-           // Exakt diesen Slot im RAM überschreiben
             let absSlot = selectedTargetSlot.absSlot;
+            if (absSlot % 256 === 0) {
+                alert("Slot 0 kann nicht überschrieben werden.");
+                return;
+            }
+
             globalPaletteRAM[absSlot * 3] = r;
             globalPaletteRAM[absSlot * 3 + 1] = g;
             globalPaletteRAM[absSlot * 3 + 2] = b;
             
             await triggerAutoReencode();
             
-            // Nächsten Slot berechnen (Strict + 1)
             let nextIdx = selectedTargetSlot.index + 1;
-            if (nextIdx >= slots) nextIdx = 0; // Wrap-around
-            
+            if (nextIdx >= slots) nextIdx = 1;
             let nextAbsSlot = (currentOffset + nextIdx) % 256;
             selectedTargetSlot = { index: nextIdx, absSlot: nextAbsSlot };
             
-            // Re-render ohne das komplette Modal zuzumachen, falls möglich
-            btnBuilder.click(); 
+            btnBuilder.click();
             handleFormatChange();
         }
 
+        // ==============================================================
+        // FEHLER BEHOBEN: Nur reines "onclick", um Doppelaufrufe zu verhindern!
+        // ==============================================================
         if (mseListDiv && decodedImageData && originalImageData) {
             let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric);
             mseListDiv.innerHTML = generateTop10Html(stats.global.top10);
             
-            mseListDiv.onclick = null;
-            mseListDiv.addEventListener('click', async (ev) => {
+            mseListDiv.onclick = async (ev) => {
                 let item = ev.target.closest('.top10-cluster-item');
                 if (!item) return;
+
+                let targetX = parseInt(item.dataset.x);
+                let targetY = parseInt(item.dataset.y);
+                if (!isNaN(targetX) && !isNaN(targetY)) {
+                    centerOnCoordinate(targetX, targetY, currentImgW, currentImgH);
+                }
+
                 await applyColorToSelectedSlot(
                     parseInt(item.dataset.r),
                     parseInt(item.dataset.g),
                     parseInt(item.dataset.b)
                 );
-            });
+            };
         } else if (mseListDiv) {
             mseListDiv.innerHTML = '<div style="font-size:11px; color:#aaa;">Bitte zuerst Bild codieren für Fehleranalyse.</div>';
         }
@@ -450,8 +624,7 @@ if (btnBuilder && builderModal) {
                 let histData = module.getImageHistogram(originalImageData, currentImgW, currentImgH, step, 10, globalPaletteRAM, currentOffset);
                 histListDiv.innerHTML = generateHistogramHtml(histData);
                 
-                histListDiv.onclick = null;
-                histListDiv.addEventListener('click', async (ev) => {
+                histListDiv.onclick = async (ev) => {
                     let item = ev.target.closest('.hist-color-item');
                     if (!item) return;
                     await applyColorToSelectedSlot(
@@ -459,7 +632,7 @@ if (btnBuilder && builderModal) {
                         parseInt(item.dataset.g),
                         parseInt(item.dataset.b)
                     );
-                });
+                };
             });
         }
     });
@@ -474,16 +647,34 @@ if (btnBuilderCancel && builderModal) {
 
 if (btnBuilderAuto) {
     btnBuilderAuto.addEventListener('click', async () => {
-        if (!originalImageData) return;
+        if (!originalImageData || !decodedImageData) { alert("Bitte zuerst das Bild codieren."); return; }
         let config = HAM_CONFIGS[currentFormat];
         let slots = config ? (config.slotsPerBank || 8) : 8;
         let currentOffset = getGlobalOffset();
         let step = getGlobalStep();
-        
-        autoFillPaletteFromImage(originalImageData, currentImgW, currentImgH, globalPaletteRAM, currentOffset, slots, step);
-        await triggerAutoReencode();
-        
-        alert(`Palette für ${slots} Slots intelligent befüllt und Bild neu codiert!`);
+        let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
+
+        ensureSlotZeroBlack();
+
+        for (let i = 1; i < slots; i++) {
+            let absSlot = (currentOffset + i) % 256;
+            let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric);
+            let topErrors = stats.global.top10;
+
+            if (topErrors.length > 0) {
+                globalPaletteRAM[absSlot * 3] = topErrors[0].r1;
+                globalPaletteRAM[absSlot * 3 + 1] = topErrors[0].g1;
+                globalPaletteRAM[absSlot * 3 + 2] = topErrors[0].b1;
+            } else {
+                globalPaletteRAM[absSlot * 3] = 127;
+                globalPaletteRAM[absSlot * 3 + 1] = 127;
+                globalPaletteRAM[absSlot * 3 + 2] = 127;
+            }
+
+            await triggerAutoReencode();
+        }
+
+        selectedTargetSlot = { index: 1, absSlot: (currentOffset + 1) % 256 };
         btnBuilder.click(); 
         handleFormatChange();
     });
@@ -492,7 +683,7 @@ if (btnBuilderAuto) {
 if (btnAnalysis && analysisModal) {
     btnAnalysis.addEventListener('click', () => {
         if (!decodedImageData || !originalImageData) { alert("Bitte zuerst das Bild codieren."); return; }
-        analysisModal.style.display = 'flex';
+        analysisModal.style.display = 'block'; 
         
         let step = getGlobalStep();
         let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
@@ -502,6 +693,16 @@ if (btnAnalysis && analysisModal) {
         if (top5Div) {
             if (top5Div.previousElementSibling) top5Div.previousElementSibling.innerText = "Gesamtbild: Top 10 Fehler-Cluster";
             top5Div.innerHTML = generateTop10Html(stats.global.top10);
+
+            top5Div.onclick = (ev) => {
+                let item = ev.target.closest('.top10-cluster-item');
+                if (!item) return;
+                let targetX = parseInt(item.dataset.x);
+                let targetY = parseInt(item.dataset.y);
+                if (!isNaN(targetX) && !isNaN(targetY)) {
+                    centerOnCoordinate(targetX, targetY, currentImgW, currentImgH);
+                }
+            };
         }
 
         let histBody = document.getElementById('analysis-histogram-body');
@@ -525,9 +726,3 @@ if (btnAnalysis && analysisModal) {
 
 if (btnAnalysisClose && analysisModal) btnAnalysisClose.addEventListener('click', () => analysisModal.style.display = 'none');
 if (btnAutoStepClose && autoStepModal) btnAutoStepClose.addEventListener('click', () => autoStepModal.style.display = 'none');
-
-window.addEventListener('click', (e) => {
-    if (e.target === builderModal) { builderModal.style.display = 'none'; handleFormatChange(); }
-    if (e.target === autoStepModal) autoStepModal.style.display = 'none';
-    if (e.target === analysisModal) analysisModal.style.display = 'none';
-});

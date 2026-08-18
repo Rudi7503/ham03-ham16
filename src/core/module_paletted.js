@@ -11,7 +11,6 @@ function getMetricDist(metric, r1, g1, b1, r2, g2, b2) {
     return get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
 }
 
-// Sichere Delta-Kanal-Definitionen für alle Paletten-Formate
 const CHANNEL_DEFS = {
     "HAM04": { r: [-1, 1], g: [-1, 1], b: [-1, 1] },
     "HAM05": { r: [-1, 1], g: [-1, 1], b: [-1, 1] },
@@ -31,6 +30,9 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
     let hybrid_depth = isHybrid ? (parseInt(strategy.split('_')[1]) || 3) : max_depth;
     let currentStrategy = isHybrid ? 'both' : strategy;
 
+    // Slot 0 immer erzwingen
+    paletteRAM[0] = 0; paletteRAM[1] = 0; paletteRAM[2] = 0;
+
     function findBestBranch(x, y, c_acc, metric) {
         let pIdx = y * imgW + x;
         let origIdx = pIdx * 4;
@@ -43,7 +45,6 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         let bestCmd = null;
         let bestR, bestG, bestB;
 
-        // 1. ANKER PRÜFEN (Early Exit bei 0)
         let slots = effConfig.slotsPerBank || 8;
         for (let s = 0; s < slots; s++) {
             let absSlot = (offset + s) % 256;
@@ -54,7 +55,6 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
             if (dist < bestDist) { bestDist = dist; bestCmd = { isAnchor: true, format: effFormat, anchorIdx: s }; bestR = r; bestG = g; bestB = b; }
         }
 
-        // 2. DELTAS PRÜFEN (Early Exit bei 0)
         let hasTurbo = effConfig.hasTurbo || false;
         let multipliers = hasTurbo ? [1, 4] : [1];
         let rChan = CHANNEL_DEFS[effFormat]?.r || [-1, 1];

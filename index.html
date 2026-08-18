@@ -53,9 +53,11 @@
         .view-pane canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; box-shadow: 0 0 20px rgba(255,255,255,0.1); image-rendering: pixelated; }
         .divider { width: 2px; height: 25px; background-color: #555; margin: 0 2px; }
 
-        /* Modals */
-        .modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:1000; justify-content:center; align-items:center; }
-        .modal-content { background:#1e2124; padding:20px; border-radius:8px; width:750px; max-height:90vh; overflow-y:auto; color:white; border: 1px solid #444; }
+        /* Modals - Transparent & Verschiebbar */
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: transparent; pointer-events: none; z-index: 1000; }
+        .modal-content { background: #1e2124; padding: 20px; border-radius: 8px; width: 750px; max-height: 90vh; overflow-y: auto; color: white; border: 1px solid #444; pointer-events: auto; position: absolute; top: 80px; left: 100px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); cursor: default; }
+        .modal-content h3 { cursor: move; user-select: none; margin-top: 0; }
+        
         .builder-slot { width:20px; height:20px; border:1px solid #444; border-radius:3px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-size:9px; font-weight:bold; }
         
         table.analysis-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 10px; }
@@ -69,7 +71,6 @@
 <div id="top-bar">
     <h2>HAM LAB</h2>
     <div class="control-group">
-        <!-- Labels als direkte Trigger für sicheres Laden -->
         <label for="file-img" class="btn-label btn-label-primary" title="Originalbild (PNG/JPG) laden">1. Bild laden</label>
         <label for="file-bin" class="btn-label btn-label-success" title="Gepacktes HAM-File laden">.ham laden</label>
         <button id="btn-encode" disabled>2. Codieren</button>
@@ -126,7 +127,6 @@
         </select>
     </div>
 
-   <!-- Schrittweiten-Steuerung (Global) -->
     <div class="control-group" id="ham-step-group">
         <label>Schritt:</label>
         <div style="display:flex; gap:2px;">
@@ -143,7 +143,6 @@
         <button id="btn-auto-step" title="Teste Schrittweitenbereich">Auto</button>
     </div>
 
-    <!-- Paletten-Offset-Steuerung -->
     <div id="palette-box">
         <label title="Startindex im 256er RAM (0-255)">Offset:</label>
         <input type="number" id="pal-offset-input" min="0" max="255" value="0" style="width:40px;">
@@ -179,7 +178,6 @@
     <input type="file" id="file-bin" accept=".ham" style="display: none;">
 </div>
 
-<!-- History Panel -->
 <div id="history-panel" style="background: #181a1c; padding: 8px 20px; border-bottom: 1px solid #444; display: flex; gap: 15px; align-items: center; font-size: 11px;">
     <span style="font-weight:bold; color:#ffc107;">Verlauf (Letzte 10):</span>
     <div id="history-list" style="display: flex; gap: 5px; flex-wrap: wrap; max-height: 35px; overflow-y: auto; align-items: center;">
@@ -192,28 +190,17 @@
     <div class="view-pane" id="pane-right"><div class="pane-label" id="decoded-label">DEKODIERT</div><canvas id="canvas-decoded"></canvas></div>
 </div>
 
-<!-- Builder Modal -->
+<!-- Builder Modal (Absolut und verschiebbar) -->
 <div id="builder-modal" class="modal-overlay">
    <div class="modal-content">
-      <h3 style="margin-top:0;">Optimierer ab <span id="b-bank-title" style="color:#4dabf7;">Offset 0</span> (<span id="b-fmt"></span>)</h3>
+      <h3 title="Zum Verschieben gedrückt halten">Optimierer ab <span id="b-bank-title" style="color:#4dabf7;">Offset 0</span> (<span id="b-fmt"></span>)</h3>
       <div id="builder-status" style="color:#aaa; font-size:13px;">Initialisiere...</div>
       <div style="font-size:11px; color:#aaa; margin-top:6px;">Klicke auf einen Slot, um die Farbe direkt zu wählen:</div>
       <div id="builder-palette-preview" style="display:flex; flex-wrap:wrap; gap:3px; margin:6px 0; background:#000; padding:6px; border-radius:4px; max-height:75px; overflow-y:auto;"></div>
-      
-      <div style="display:flex; align-items:center; gap:10px; margin: 10px 0; background:#111; padding:6px 10px; border-radius:4px; border:1px solid #444;">
-          <label style="font-size:11px; color:#ccc;">Optimierungs-Fokus:</label>
-          <select id="builder-mode-select" style="padding:4px; font-size:11px; background:#222; color:#fff; border:1px solid #555;">
-              <option value="only_avg">Nur Durchschnitts-MSE</option>
-              <option value="ratio_1_3">Verhältnis 1/4 (Durchschnitt) : 3/4 (Einzelfehler)</option>
-              <option value="ratio_half" selected>Verhältnis 1/2 : 1/2 (Ausgewogen)</option>
-              <option value="ratio_3_1">Verhältnis 3/4 (Durchschnitt) : 1/4 (Einzelfehler)</option>
-              <option value="only_max">Nur Einzelfehler (Max-MSE)</option>
-          </select>
-      </div>
 
       <div style="display:flex; gap:15px; margin-top:12px;">
-          <div style="flex:1;"><h4 style="margin:0 0 6px 0; color:#ff6b6b; font-size:13px;">Top 5 Fehler im Gesamtbild</h4><div id="builder-mse-list"></div></div>
-          <div style="flex:1;"><h4 style="margin:0 0 6px 0; color:#4dabf7; font-size:13px;">Top 5 Bild-Histogramm</h4><div id="builder-hist-list"></div></div>
+          <div style="flex:1;"><h4 style="margin:0 0 6px 0; color:#ff6b6b; font-size:13px;">Top 10 Fehler im Gesamtbild</h4><div id="builder-mse-list"></div></div>
+          <div style="flex:1;"><h4 style="margin:0 0 6px 0; color:#4dabf7; font-size:13px;">Top 10 Bild-Histogramm</h4><div id="builder-hist-list"></div></div>
       </div>
       
       <div style="margin-top:15px; display:flex; justify-content:space-between; align-items:center;">
@@ -221,6 +208,7 @@
           
           <div style="display:flex; align-items:center; gap:8px;">
               <span style="font-size:11px; color:#ccc;" id="builder-current-metric-label">Nutzt globale Metrik</span>
+              <button id="btn-sort-slots" style="background:#17a2b8; color:#fff;" title="Sortiert Slots nach Häufigkeit (seltenste rechts)">Slots sortieren</button>
               <button id="btn-builder-auto" style="background:#28a745; color:#fff;">Offset Auto-Füllen</button>
           </div>
       </div>
@@ -230,17 +218,13 @@
 <!-- Auto-Step Result Modal -->
 <div id="auto-step-modal" class="modal-overlay">
    <div class="modal-content" style="width: 700px;">
-      <h3 style="margin-top:0;">Auto-Schrittweiten-Analyse</h3>
+      <h3 title="Zum Verschieben gedrückt halten">Auto-Schrittweiten-Analyse</h3>
       <div id="auto-step-status" style="color:#aaa; font-size:13px; margin-bottom:10px;">Berechne...</div>
       <div style="max-height: 350px; overflow-y: auto;">
           <table class="analysis-table">
               <thead><tr><th>Schrittweite (±)</th><th>⌀ RGB MSE</th><th>⌀ Metrik MSE</th><th>Max Metrik MSE</th><th>Aktion</th></tr></thead>
               <tbody id="auto-step-body"></tbody>
           </table>
-      </div>
-      <div style="margin-top:15px; display:flex; flex-direction:column; gap:8px;">
-          <div style="font-size:11px; color:#ffc107;" id="auto-step-recommendation"></div>
-          <div id="auto-step-range-suggestion" style="font-size:11px;"></div>
       </div>
       <div style="margin-top:10px; text-align:right;"><button id="btn-auto-step-close" style="background:#555; color:#fff;">Schließen</button></div>
    </div>
@@ -249,9 +233,8 @@
 <!-- Fehler-Analyse Modal -->
 <div id="analysis-modal" class="modal-overlay">
    <div class="modal-content" style="width: 850px;">
-      <h3 style="margin-top:0;">Fehler- & Histogramm-Analyse</h3>
-      
-      <h4 style="margin:10px 0 5px 0; color:#ffc107;">Gesamtbild: Top 5 Max MSE Abweichungen</h4>
+      <h3 title="Zum Verschieben gedrückt halten">Fehler- & Histogramm-Analyse</h3>
+      <h4 style="margin:10px 0 5px 0; color:#ffc107;">Gesamtbild: Top 10 Max MSE Abweichungen</h4>
       <div id="analysis-top5" style="background:#111; padding:8px; border-radius:4px; font-size:12px;"></div>
       
       <h4 style="margin:15px 0 5px 0; color:#4dabf7;">Fehler-Histogramm (Gesamtbild)</h4>

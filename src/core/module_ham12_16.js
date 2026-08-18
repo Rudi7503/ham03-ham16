@@ -62,7 +62,6 @@ export async function encodeHam12_16(origData, imgW, imgH, format, stepVal, stra
             }
         }
 
-        // Intelligentes Vorsortieren statt willkürliches "slice"
         for (let b of branches) {
             b.baseCost = getMetricDist(metric, tr, tg, tb, b.r, b.g, b.b);
         }
@@ -160,7 +159,10 @@ export function packHam12_16(commands, format) {
 export function unpackHam12_16(packedData, format, totalPixels) {
     let commands = new Array(totalPixels);
     for (let i = 0; i < totalPixels; i++) {
-        let w = (packedData[i * 2] << 8) | packedData[i * 2 + 1];
+        let b0 = packedData[i * 2] || 0;
+        let b1 = packedData[i * 2 + 1] || 0;
+        let w = (b0 << 8) | b1;
+        
         if (format === "HAM16") {
             if (w & 0x8000) {
                 let r5 = (w >> 10) & 31, g5 = (w >> 5) & 31, b5 = w & 31;
