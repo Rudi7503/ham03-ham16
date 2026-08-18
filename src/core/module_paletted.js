@@ -45,7 +45,9 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         let bestCmd = null;
         let bestR, bestG, bestB;
 
-        let slots = effConfig.slotsPerBank || 8;
+        // Dynamische Ermittlung der Slot-Anzahl (unterstützt 8, 16, 32, 64 etc. voll aus)
+        let slots = effConfig.slotsPerBank || config.slotsPerBank || 8;
+        
         for (let s = 0; s < slots; s++) {
             let absSlot = (offset + s) % 256;
             let r = paletteRAM[absSlot*3], g = paletteRAM[absSlot*3+1], b = paletteRAM[absSlot*3+2];
@@ -80,7 +82,7 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         }
         return { cmd: bestCmd, r: bestR, g: bestG, b: bestB };
     }
-
+    
     async function encodeSpan(startPx, endPx, initialAcc, depth, phaseName) {
         let acc = { ...initialAcc };
         for (let i = startPx; i < endPx; i++) {

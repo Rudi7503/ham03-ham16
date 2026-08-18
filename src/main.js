@@ -99,55 +99,52 @@ async function sortPaletteSlotsByUsage() {
     let config = HAM_CONFIGS[currentFormat];
     if (!config || !config.isPaletted) return;
 
-    let slots = config.slotsPerBank || 8;
     let currentOffset = getGlobalOffset();
 
-    let anchorUsage = new Array(slots).fill(0);
+    // 1. Zähle die Nutzung aller Absolut-Slots im gesamten Befehlsstrom
+    let totalAnchorUsage = new Array(256).fill(0);
     for (let cmd of latestCommandArray) {
         if (cmd && cmd.isAnchor && cmd.anchorIdx !== undefined) {
-            if (cmd.anchorIdx >= 0 && cmd.anchorIdx < slots) {
-                anchorUsage[cmd.anchorIdx]++;
-            }
+            let absSlot = (currentOffset + cmd.anchorIdx) % 256;
+            totalAnchorUsage[absSlot]++;
         }
     }
 
-    let slotData = [];
-    for (let i = 0; i < slots; i++) {
-        let absSlot = (currentOffset + i) % 256;
-        let r = globalPaletteRAM[absSlot * 3];
-        let g = globalPaletteRAM[absSlot * 3 + 1];
-        let b = globalPaletteRAM[absSlot * 3 + 2];
-        slotData.push({
-            bankIndex: i,
-            absSlot: absSlot,
-            r: r,
-            g: g,
-            b: b,
-            usage: absSlot === 0 ? Infinity : anchorUsage[i]
-        });
-    }
+    // 2. Sortiere strikt in festen 8er-Blöcken (0-7, 8-15, 16-23 ...)
+    let blockSize = 8;
+    for (let bankStart = 0; bankStart < 256; bankStart += blockSize) {
+        let blockSlots = [];
 
-    let fixedSlots = slotData.filter(s => s.absSlot === 0);
-    let sortableSlots = slotData.filter(s => s.absSlot !== 0);
-
-    sortableSlots.sort((a, b) => b.usage - a.usage);
-
-    let newSlotOrder = [];
-    let sortableIdx = 0;
-    for (let i = 0; i < slots; i++) {
-        let absSlot = (currentOffset + i) % 256;
-        if (absSlot === 0) {
-            newSlotOrder.push(fixedSlots.find(s => s.absSlot === 0));
-        } else {
-            newSlotOrder.push(sortableSlots[sortableIdx++]);
+        // Sammle exakt 8 Slots für diesen Block
+        for (let i = 0; i < blockSize; i++) {
+            let absSlot = (bankStart + i) % 256;
+            blockSlots.push({
+                absSlot: absSlot,
+                isFixed: (i === 0), // Der erste Slot (lokaler Index 0 des 8er-Blocks) bleibt fix
+                r: globalPaletteRAM[absSlot * 3],
+                g: globalPaletteRAM[absSlot * 3 + 1],
+                b: globalPaletteRAM[absSlot * 3 + 2],
+                usage: totalAnchorUsage[absSlot]
+            });
         }
-    }
 
-    for (let i = 0; i < slots; i++) {
-        let absSlot = (currentOffset + i) % 256;
-        globalPaletteRAM[absSlot * 3]     = newSlotOrder[i].r;
-        globalPaletteRAM[absSlot * 3 + 1] = newSlotOrder[i].g;
-        globalPaletteRAM[absSlot * 3 + 2] = newSlotOrder[i].b;
+        // Trenne den fixen Slot (Index 0) von den 7 sortierbaren Slots des 8er-Blocks
+        let fixedSlot = blockSlots.find(s => s.isFixed);
+        let sortableSlots = blockSlots.filter(s => !s.isFixed);
+
+        // Sortiere die 7 Slots dieses 8er-Blocks absteigend nach Häufigkeit
+        sortableSlots.sort((a, b) => b.usage - a.usage);
+
+        // Baue den 8er-Block wieder zusammen (fixer Slot bleibt an Position 0)
+        let newBlockOrder = [fixedSlot, ...sortableSlots];
+
+        // Schreibe die sortierten Farben zurück in diesen spezifischen 8er-RAM-Bereich
+        for (let i = 0; i < blockSize; i++) {
+            let targetAbsSlot = (bankStart + i) % 256;
+            globalPaletteRAM[targetAbsSlot * 3]     = newBlockOrder[i].r;
+            globalPaletteRAM[targetAbsSlot * 3 + 1] = newBlockOrder[i].g;
+            globalPaletteRAM[targetAbsSlot * 3 + 2] = newBlockOrder[i].b;
+        }
     }
 
     await triggerAutoReencode();
@@ -563,9 +560,6 @@ if (btnBuilder && builderModal) {
             }
         }
         
-        if (mseListDiv && mseListDiv.previousElementSibling) mseListDiv.previousElementSibling.innerText = "Top 10 Fehler-Cluster";
-        if (histListDiv && histListDiv.previousElementSibling) histListDiv.previousElementSibling.innerText = "Top 10 Bild-Histogramm";
-        
         async function applyColorToSelectedSlot(r, g, b) {
             if (!selectedTargetSlot) {
                 selectedTargetSlot = { index: 1, absSlot: (currentOffset + 1) % 256 };
@@ -593,11 +587,27 @@ if (btnBuilder && builderModal) {
         }
 
         // ==============================================================
-        // FEHLER BEHOBEN: Nur reines "onclick", um Doppelaufrufe zu verhindern!
+        // NEU: Bit-Tiefen Spalten nebeneinander rendern
         // ==============================================================
         if (mseListDiv && decodedImageData && originalImageData) {
-            let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric);
-            mseListDiv.innerHTML = generateTop10Html(stats.global.top10);
+            let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config);
+            
+            let bitDepths = Object.keys(stats.global.byBitDepth).sort((a,b) => parseInt(a) - parseInt(b));
+            let html = "";
+            
+            if (bitDepths.length > 0) {
+                for (let b of bitDepths) {
+                    let hint = (b === "4") ? "(untere 8 Slots)" : "(höhere Slots)";
+                    html += `
+                    <div style="flex: 1; min-width: 220px; background:#16181a; border:1px solid #444; border-radius:4px; padding:6px; display:flex; flex-direction:column; max-height: 280px; overflow-y: auto;">
+                        <div style="background:#222; padding:4px; font-weight:bold; color:#ffc107; font-size:11px; text-align:center; margin-bottom:6px; border-radius:3px; border:1px solid #444;">${b}-Bit ${hint}</div>
+                        ${generateTop10Html(stats.global.byBitDepth[b])}
+                    </div>`;
+                }
+            } else {
+                html = `<div style="flex:1;">${generateTop10Html(stats.global.top10)}</div>`;
+            }
+            mseListDiv.innerHTML = html;
             
             mseListDiv.onclick = async (ev) => {
                 let item = ev.target.closest('.top10-cluster-item');
@@ -658,7 +668,7 @@ if (btnBuilderAuto) {
 
         for (let i = 1; i < slots; i++) {
             let absSlot = (currentOffset + i) % 256;
-            let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric);
+            let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config);
             let topErrors = stats.global.top10;
 
             if (topErrors.length > 0) {
@@ -685,13 +695,13 @@ if (btnAnalysis && analysisModal) {
         if (!decodedImageData || !originalImageData) { alert("Bitte zuerst das Bild codieren."); return; }
         analysisModal.style.display = 'block'; 
         
+        let config = HAM_CONFIGS[currentFormat];
         let step = getGlobalStep();
         let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
-        let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric);
+        let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config);
         
         let top5Div = document.getElementById('analysis-top5');
         if (top5Div) {
-            if (top5Div.previousElementSibling) top5Div.previousElementSibling.innerText = "Gesamtbild: Top 10 Fehler-Cluster";
             top5Div.innerHTML = generateTop10Html(stats.global.top10);
 
             top5Div.onclick = (ev) => {

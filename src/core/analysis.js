@@ -1,5 +1,7 @@
 import { HAM_CONFIGS } from '../codecs/configs.js';
 import { get_rgb_dist, get_rgb_abs_dist, get_yuv_dist, get_yuv_dist_weight, get_yuv_dist_weight_heavy, get_redmean_dist, get_oklab_dist } from '../codecs/utils.js';
+import { decodeStream } from './decoder.js';
+import { encodeStream } from './engine-stream.js';
 
 export const errorBins = [0, 5, 10, 20, 50, 100];
 
@@ -27,12 +29,10 @@ export function getImageHistogram(imgData, imgW, imgH, stepVal, topN = 10, palet
     if (paletteRAM) {
         for (let i = 0; i < 256; i++) {
             let r = paletteRAM[i * 3], g = paletteRAM[i * 3 + 1], b = paletteRAM[i * 3 + 2];
-            if (r !== 0 || g !== 0 || b !== 0) {
-                let qr = Math.round(r / clusterRadius) * clusterRadius;
-                let qg = Math.round(g / clusterRadius) * clusterRadius;
-                let qb = Math.round(b / clusterRadius) * clusterRadius;
-                usedColorsSet.add(`${qr},${qg},${qb}`);
-            }
+            let qr = Math.round(r / clusterRadius) * clusterRadius;
+            let qg = Math.round(g / clusterRadius) * clusterRadius;
+            let qb = Math.round(b / clusterRadius) * clusterRadius;
+            usedColorsSet.add(`${qr},${qg},${qb}`);
         }
     }
 
@@ -74,9 +74,10 @@ export function autoFillPaletteFromImage(imgData, imgW, imgH, paletteRAM, offset
     }
 }
 
-export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, endPx, stepVal = {r:4, g:4, b:4}, metric = 'yuv_weight') {
+// NEU: Nimmt config als Parameter an, um Bit-Tiefen zu separieren
+export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, endPx, stepVal = {r:4, g:4, b:4}, metric = 'yuv_weight', config = null) {
     let stats = {
-        global: { top10: [], avgRgb: 0, avgYuv: 0 },
+        global: { top10: [], avgRgb: 0, avgYuv: 0, byBitDepth: {} },
         segment: { top10: [], avgRgb: 0, avgYuv: 0 },
         histogram: { rgbBins: new Array(errorBins.length + 1).fill(0), yuvBins: new Array(errorBins.length + 1).fill(0) }
     };
@@ -86,6 +87,7 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
     let s_count = 0;
 
     let globalErrorMap = new Map();
+    let bitDepthMaps = {}; 
     let segmentErrorMap = new Map();
     let totalPixels = imgW * imgH;
     
@@ -93,26 +95,46 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
 
     for (let i = 0; i < totalPixels; i++) {
         let idx = i * 4;
-        let origR = origData[idx], origG = origData[idx+1], origB = origData[idx+2];
-        let decR = decData[idx], decG = decData[idx+1], decB = decData[idx+2];
+        let r1 = origData[idx], g1 = origData[idx+1], b1 = origData[idx+2];
+        let r2 = decData[idx], g2 = decData[idx+1], b2 = decData[idx+2];
 
-        let rMse = get_rgb_dist(origR, origG, origB, decR, decG, decB);
-        let metricMse = getAnalysisDist(metric, origR, origG, origB, decR, decG, decB);
+        let rMse = get_rgb_dist(r1, g1, b1, r2, g2, b2);
+        let metricMse = getAnalysisDist(metric, r1, g1, b1, r2, g2, b2);
 
         g_rgbSum += rMse;
         g_metricSum += metricMse;
 
+        // Bit-Tiefe für dieses Pixel ermitteln
+        let bits = 8;
+        if (config) {
+            if (config.isMixed && config.sequence) {
+                let x = i % imgW;
+                let seqIdx = x % config.sequence.length;
+                let fmt = config.sequence[seqIdx];
+                bits = (fmt === "HAM04") ? 4 : (fmt === "HAM05") ? 5 : (fmt === "HAM06") ? 6 : (fmt === "HAM08_PAL") ? 8 : 8;
+            } else if (config.bits) {
+                bits = config.bits;
+            }
+        }
+
         if (metricMse > 1) { 
-            let qOrigR = Math.round(origR/clusterRadius)*clusterRadius, qOrigG = Math.round(origG/clusterRadius)*clusterRadius, qOrigB = Math.round(origB/clusterRadius)*clusterRadius;
-            let qDecR = Math.round(decR/clusterRadius)*clusterRadius, qDecG = Math.round(decG/clusterRadius)*clusterRadius, qDecB = Math.round(decB/clusterRadius)*clusterRadius;
+            let qR1 = Math.round(r1/clusterRadius)*clusterRadius, qG1 = Math.round(g1/clusterRadius)*clusterRadius, qB1 = Math.round(b1/clusterRadius)*clusterRadius;
+            let qR2 = Math.round(r2/clusterRadius)*clusterRadius, qG2 = Math.round(g2/clusterRadius)*clusterRadius, qB2 = Math.round(b2/clusterRadius)*clusterRadius;
             
-            let key = `O${qOrigR},${qOrigG},${qOrigB}|D${qDecR},${qDecG},${qDecB}`;
+            let key = `I${qR1},${qG1},${qB1}|S${qR2},${qG2},${qB2}`;
             
+            // Globale Map
             if (!globalErrorMap.has(key)) {
-                // r1/g1/b1 = Soll (Original), r2/g2/b2 = Ist (Decodiert)
-                globalErrorMap.set(key, { r1: origR, g1: origG, b1: origB, r2: decR, g2: decG, b2: decB, mse: metricMse, count: 0, x: i % imgW, y: Math.floor(i / imgW) });
+                globalErrorMap.set(key, { r1, g1, b1, r2, g2, b2, mse: metricMse, count: 0, x: i % imgW, y: Math.floor(i / imgW), bits: bits });
             }
             globalErrorMap.get(key).count++;
+
+            // Bucket Map (für Builder UI Aufschlüsselung)
+            if (!bitDepthMaps[bits]) bitDepthMaps[bits] = new Map();
+            if (!bitDepthMaps[bits].has(key)) {
+                bitDepthMaps[bits].set(key, { r1, g1, b1, r2, g2, b2, mse: metricMse, count: 0, x: i % imgW, y: Math.floor(i / imgW), bits: bits });
+            }
+            bitDepthMaps[bits].get(key).count++;
         }
 
         let rBinIdx = errorBins.findIndex(val => rMse <= val);
@@ -127,13 +149,11 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
             s_count++;
             
             if (metricMse > 1) {
-                let qOrigR = Math.round(origR/clusterRadius)*clusterRadius, qOrigG = Math.round(origG/clusterRadius)*clusterRadius, qOrigB = Math.round(origB/clusterRadius)*clusterRadius;
-                let qDecR = Math.round(decR/clusterRadius)*clusterRadius, qDecG = Math.round(decG/clusterRadius)*clusterRadius, qDecB = Math.round(decB/clusterRadius)*clusterRadius;
-                let key = `O${qOrigR},${qOrigG},${qOrigB}|D${qDecR},${qDecG},${qDecB}`;
+                let qR1 = Math.round(r1/clusterRadius)*clusterRadius, qG1 = Math.round(g1/clusterRadius)*clusterRadius, qB1 = Math.round(b1/clusterRadius)*clusterRadius;
+                let qR2 = Math.round(r2/clusterRadius)*clusterRadius, qG2 = Math.round(g2/clusterRadius)*clusterRadius, qB2 = Math.round(b2/clusterRadius)*clusterRadius;
+                let key = `I${qR1},${qG1},${qB1}|S${qR2},${qG2},${qB2}`;
                 
-                if (!segmentErrorMap.has(key)) {
-                    segmentErrorMap.set(key, { r1: origR, g1: origG, b1: origB, r2: decR, g2: decG, b2: decB, mse: metricMse, count: 0, x: i % imgW, y: Math.floor(i / imgW) });
-                }
+                if (!segmentErrorMap.has(key)) segmentErrorMap.set(key, { r1, g1, b1, r2, g2, b2, mse: metricMse, count: 0, x: i % imgW, y: Math.floor(i / imgW), bits: bits });
                 segmentErrorMap.get(key).count++;
             }
         }
@@ -141,19 +161,51 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
 
     stats.global.avgRgb = g_rgbSum / totalPixels;
     stats.global.avgYuv = g_metricSum / totalPixels;
+    stats.global.top10 = Array.from(globalErrorMap.values()).sort((a, b) => (b.mse * b.count) - (a.mse * a.count)).slice(0, 10);
 
-    // Korrekte Sortierung rein nach MSE absteigend
-    stats.global.top10 = Array.from(globalErrorMap.values())
-        .sort((a, b) => b.mse - a.mse)
-        .slice(0, 10);
+    // Bilde Top-10-Listen für jeden genutzten Bucket
+    for (let b in bitDepthMaps) {
+        stats.global.byBitDepth[b] = Array.from(bitDepthMaps[b].values()).sort((a, b) => (b.mse * b.count) - (a.mse * a.count)).slice(0, 10);
+    }
 
     if (s_count > 0) {
         stats.segment.avgRgb = s_rgbSum / s_count;
         stats.segment.avgYuv = s_metricSum / s_count;
-        stats.segment.top10 = Array.from(segmentErrorMap.values())
-            .sort((a, b) => b.mse - a.mse)
-            .slice(0, 10);
+        stats.segment.top10 = Array.from(segmentErrorMap.values()).sort((a, b) => (b.mse * b.count) - (a.mse * a.count)).slice(0, 10);
     }
 
     return stats;
+}
+
+export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palette, stepVal, strategy, metric, max_depth, format, currentOffset = 0) {
+    let imgH = origData.length / (imgW * 4);
+    let segs = [{ absEnd: origData.length / 4, waitPixels: origData.length / 4, offset: currentOffset, step: stepVal }];
+    let encodeResult = await encodeStream(origData, imgW, imgH, format, segs, palette, strategy, metric, max_depth, null, sPx, ePx);
+    let config = HAM_CONFIGS[format];
+    let decoded = decodeStream(encodeResult.commandArray, imgW, imgH, palette, segs, config);
+    
+    let yuvSum = 0, rgbSum = 0, maxYuv = 0, count = 0;
+    
+    for (let i = sPx; i < ePx; i += 2) {
+        let idx = i * 4;
+        let r1 = origData[idx], g1 = origData[idx+1], b1 = origData[idx+2];
+        let r2 = decoded[idx], g2 = decoded[idx+1], b2 = decoded[idx+2];
+        
+        let yDist = getAnalysisDist(metric, r1, g1, b1, r2, g2, b2);
+        let rDist = get_rgb_dist(r1, g1, b1, r2, g2, b2);
+        
+        yuvSum += yDist;
+        rgbSum += rDist;
+        if (yDist > maxYuv) maxYuv = yDist;
+        count++;
+    }
+
+    let avgRgb = rgbSum / count;
+    let avgYuv = yuvSum / count;
+    let alpha = 0.2;
+    let beta = 0.5;  
+    let stepPenalty = stepVal.r + stepVal.g + stepVal.b;
+    let score = avgYuv + (alpha * maxYuv) + (beta * stepPenalty);
+
+    return { avgRgb, avgYuv, maxYuv, score };
 }

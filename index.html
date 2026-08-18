@@ -192,15 +192,22 @@
 
 <!-- Builder Modal (Absolut und verschiebbar) -->
 <div id="builder-modal" class="modal-overlay">
-   <div class="modal-content">
+   <div class="modal-content" style="width: 900px;">
       <h3 title="Zum Verschieben gedrückt halten">Optimierer ab <span id="b-bank-title" style="color:#4dabf7;">Offset 0</span> (<span id="b-fmt"></span>)</h3>
       <div id="builder-status" style="color:#aaa; font-size:13px;">Initialisiere...</div>
       <div style="font-size:11px; color:#aaa; margin-top:6px;">Klicke auf einen Slot, um die Farbe direkt zu wählen:</div>
       <div id="builder-palette-preview" style="display:flex; flex-wrap:wrap; gap:3px; margin:6px 0; background:#000; padding:6px; border-radius:4px; max-height:75px; overflow-y:auto;"></div>
 
       <div style="display:flex; gap:15px; margin-top:12px;">
-          <div style="flex:1;"><h4 style="margin:0 0 6px 0; color:#ff6b6b; font-size:13px;">Top 10 Fehler im Gesamtbild</h4><div id="builder-mse-list"></div></div>
-          <div style="flex:1;"><h4 style="margin:0 0 6px 0; color:#4dabf7; font-size:13px;">Top 10 Bild-Histogramm</h4><div id="builder-hist-list"></div></div>
+          <!-- Container für die nebeneinander liegenden Bit-Tiefen-Spalten -->
+          <div style="flex:2; display:flex; flex-direction:column;">
+              <h4 style="margin:0 0 6px 0; color:#ff6b6b; font-size:13px;">Top 10 Fehler (Nach Bit-Tiefe separiert)</h4>
+              <div id="builder-mse-list" style="display:flex; gap:10px; overflow-x:auto; padding-bottom:5px;"></div>
+          </div>
+          <div style="flex:1; display:flex; flex-direction:column;">
+              <h4 style="margin:0 0 6px 0; color:#4dabf7; font-size:13px;">Top 10 Bild-Histogramm</h4>
+              <div id="builder-hist-list"></div>
+          </div>
       </div>
       
       <div style="margin-top:15px; display:flex; justify-content:space-between; align-items:center;">
@@ -214,7 +221,6 @@
       </div>
    </div>
 </div>
-
 <!-- Auto-Step Result Modal -->
 <div id="auto-step-modal" class="modal-overlay">
    <div class="modal-content" style="width: 700px;">
@@ -235,7 +241,7 @@
    <div class="modal-content" style="width: 850px;">
       <h3 title="Zum Verschieben gedrückt halten">Fehler- & Histogramm-Analyse</h3>
       <h4 style="margin:10px 0 5px 0; color:#ffc107;">Gesamtbild: Top 10 Max MSE Abweichungen</h4>
-      <div id="analysis-top5" style="background:#111; padding:8px; border-radius:4px; font-size:12px;"></div>
+      <div id="analysis-top5" style="background:#111; padding:8px; border-radius:4px; font-size:12px; max-height:200px; overflow-y:auto;"></div>
       
       <h4 style="margin:15px 0 5px 0; color:#4dabf7;">Fehler-Histogramm (Gesamtbild)</h4>
       <div style="max-height: 300px; overflow-y: auto;">
