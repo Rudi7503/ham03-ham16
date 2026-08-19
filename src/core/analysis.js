@@ -105,13 +105,13 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
         g_metricSum += metricMse;
 
         // Bit-Tiefe für dieses Pixel ermitteln
-        let bits = 8;
+       let bits = 8;
         if (config) {
             if (config.isMixed && config.sequence) {
                 let x = i % imgW;
                 let seqIdx = x % config.sequence.length;
                 let fmt = config.sequence[seqIdx];
-                bits = (fmt === "HAM04") ? 4 : (fmt === "HAM05") ? 5 : (fmt === "HAM06") ? 6 : (fmt === "HAM08_PAL") ? 8 : 8;
+                bits = (fmt === "HAM01") ? 1 : (fmt === "HAM02") ? 2 : (fmt === "HAM03") ? 3 : (fmt === "HAM04") ? 4 : (fmt === "HAM05") ? 5 : (fmt === "HAM06") ? 6 : (fmt === "HAM08_PAL") ? 8 : 8;
             } else if (config.bits) {
                 bits = config.bits;
             }
