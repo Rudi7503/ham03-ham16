@@ -37,6 +37,209 @@ const ctxOriginal = canvasOriginal.getContext('2d', { willReadFrequently: true }
 const canvasDecoded = document.getElementById('canvas-decoded');
 const ctxDecoded = canvasDecoded.getContext('2d', { willReadFrequently: true });
 
+// ==========================================
+// GLOBALE VARIABLEN FÜR ROI (REGION OF INTEREST)
+// ==========================================
+let optRegion = { x: 0, y: 0, width: 0, height: 0 };
+let isDrawingRegion = false;
+let isRegionModeActive = false;
+let startX = 0, startY = 0;
+
+function resetOptRegion(imgW, imgH) {
+    optRegion = { x: 0, y: 0, width: imgW, height: imgH };
+    updateRegionLabel();
+}
+
+function updateRegionLabel() {
+    let lbl = document.getElementById("region-info");
+    if (!lbl) return;
+    if (originalImageData && optRegion.width === originalImageData.width && optRegion.height === originalImageData.height) {
+        lbl.innerText = "Bereich: Ganzes Bild";
+    } else {
+        lbl.innerText = `Bereich: X:${optRegion.x}, Y:${optRegion.y}, B:${optRegion.width}, H:${optRegion.height}`;
+    }
+}
+
+// ==========================================
+// INITIALISIERUNG DER CANVAS-EVENTS FÜR ROI
+// ==========================================
+function initRegionEvents() {
+    let sourceCanvas = document.getElementById('canvas-original');
+    if (!sourceCanvas) return;
+
+    document.getElementById('btn-draw-region').addEventListener('click', () => {
+        isRegionModeActive = true;
+        sourceCanvas.style.cursor = 'crosshair';
+    });
+
+    document.getElementById('btn-reset-region').addEventListener('click', () => {
+        isRegionModeActive = false;
+        sourceCanvas.style.cursor = 'default';
+        if (originalImageData) {
+            resetOptRegion(originalImageData.width, originalImageData.height);
+            // Quellbild neu zeichnen, um Rechteck zu entfernen
+            let ctx = sourceCanvas.getContext('2d');
+            ctx.putImageData(originalImageData, 0, 0);
+        }
+    });
+
+    sourceCanvas.addEventListener('mousedown', (e) => {
+        if (!isRegionModeActive) return;
+        
+        e.stopPropagation(); // WICHTIG: Verhindert, dass das Bild verschoben wird!
+        
+        isDrawingRegion = true;
+        let rect = sourceCanvas.getBoundingClientRect();
+        let scaleX = sourceCanvas.width / rect.width;
+        let scaleY = sourceCanvas.height / rect.height;
+        startX = Math.floor((e.clientX - rect.left) * scaleX);
+        startY = Math.floor((e.clientY - rect.top) * scaleY);
+    });
+
+    sourceCanvas.addEventListener('mousemove', (e) => {
+        if (!isDrawingRegion) return;
+        
+        e.stopPropagation(); // WICHTIG: Blockiert Panning während des Ziehens
+        
+        let rect = sourceCanvas.getBoundingClientRect();
+        let scaleX = sourceCanvas.width / rect.width;
+        let scaleY = sourceCanvas.height / rect.height;
+        let curX = Math.floor((e.clientX - rect.left) * scaleX);
+        let curY = Math.floor((e.clientY - rect.top) * scaleY);
+
+        let ctx = sourceCanvas.getContext('2d');
+        
+        // Vorheriges Frame löschen
+        if (originalImageData) {
+            ctx.putImageData(originalImageData, 0, 0);
+        }
+        
+        ctx.strokeStyle = "rgba(255, 0, 0, 0.8)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(startX, startY, curX - startX, curY - startY);
+    });
+
+    sourceCanvas.addEventListener('mouseup', (e) => {
+        if (!isDrawingRegion) return;
+        
+        e.stopPropagation(); // WICHTIG
+        
+        isDrawingRegion = false;
+        isRegionModeActive = false;
+        sourceCanvas.style.cursor = 'default';
+
+        let rect = sourceCanvas.getBoundingClientRect();
+        let scaleX = sourceCanvas.width / rect.width;
+        let scaleY = sourceCanvas.height / rect.height;
+        let endX = Math.floor((e.clientX - rect.left) * scaleX);
+        let endY = Math.floor((e.clientY - rect.top) * scaleY);
+
+        optRegion.x = Math.max(0, Math.min(startX, endX));
+        optRegion.y = Math.max(0, Math.min(startY, endY));
+        optRegion.width = Math.min(originalImageData.width - optRegion.x, Math.abs(endX - startX));
+        optRegion.height = Math.min(originalImageData.height - optRegion.y, Math.abs(endY - startY));
+
+        if (optRegion.width === 0) optRegion.width = 1;
+        if (optRegion.height === 0) optRegion.height = 1;
+
+        updateRegionLabel();
+        
+        let ctx = sourceCanvas.getContext('2d');
+        if (originalImageData) {
+            ctx.putImageData(originalImageData, 0, 0); 
+        }
+        ctx.strokeStyle = "rgba(255, 0, 0, 0.8)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(optRegion.x, optRegion.y, optRegion.width, optRegion.height);
+    });
+}
+
+// Startet die Überwachung der Canvas-Events
+initRegionEvents();
+
+// 4. GANZ WICHTIG: Die Funktion muss hier direkt ausgeführt werden, 
+// damit die Event-Listener beim Laden der Seite auch wirklich angehängt werden!
+initRegionEvents();
+
+// ==========================================
+// DYNAMISCHE PALETTEN-SORTIERUNG MIT ROI-FILTER
+// (Ersetze hiermit deine bisherige Funktion)
+// ==========================================
+async function sortPaletteSlotsByUsage() {
+    if (!originalImageData || !latestCommandArray) {
+        alert("Bitte zuerst das Bild codieren.");
+        return;
+    }
+    let config = HAM_CONFIGS[currentFormat]; // Stelle sicher, dass currentFormat global verfügbar ist
+    if (!config || !config.isPaletted) return;
+
+    let currentOffset = getGlobalOffset(); // Deine bestehende Funktion
+    let blockSize = config.slotsPerBank || 8;
+    
+    // Abbruch, wenn das Format (z.B. reines HAM01/02) keine Anker hat
+    if (blockSize === 0) return;
+
+    let totalAnchorUsage = new Array(256).fill(0);
+    let imgW = originalImageData.width;
+
+    // Zählung MIT Filterung nach ROI
+    for (let i = 0; i < latestCommandArray.length; i++) {
+        let cmd = latestCommandArray[i];
+        if (cmd && cmd.isAnchor && cmd.anchorIdx !== undefined) {
+            let x = i % imgW;
+            let y = Math.floor(i / imgW);
+            
+            // Pixel muss innerhalb der OptRegion liegen
+            if (x >= optRegion.x && x < optRegion.x + optRegion.width &&
+                y >= optRegion.y && y < optRegion.y + optRegion.height) {
+                
+                let absSlot = (currentOffset + cmd.anchorIdx) % 256;
+                totalAnchorUsage[absSlot]++;
+            }
+        }
+    }
+
+    // Sortierung der Blöcke
+    for (let bankStart = 0; bankStart < 256; bankStart += blockSize) {
+        let blockSlots = [];
+        for (let i = 0; i < blockSize; i++) {
+            let absSlot = (bankStart + i) % 256;
+            blockSlots.push({
+                absSlot: absSlot,
+                isFixed: (i === 0), // Der erste Slot des Blocks bleibt fix
+                r: globalPaletteRAM[absSlot * 3],
+                g: globalPaletteRAM[absSlot * 3 + 1],
+                b: globalPaletteRAM[absSlot * 3 + 2],
+                usage: totalAnchorUsage[absSlot]
+            });
+        }
+        
+        let fixedSlot = blockSlots.find(s => s.isFixed);
+        let sortableSlots = blockSlots.filter(s => !s.isFixed);
+        sortableSlots.sort((a, b) => b.usage - a.usage);
+        
+        let newBlockOrder = [fixedSlot, ...sortableSlots];
+        
+        for (let i = 0; i < blockSize; i++) {
+            let targetAbsSlot = (bankStart + i) % 256;
+            globalPaletteRAM[targetAbsSlot * 3]     = newBlockOrder[i].r;
+            globalPaletteRAM[targetAbsSlot * 3 + 1] = newBlockOrder[i].g;
+            globalPaletteRAM[targetAbsSlot * 3 + 2] = newBlockOrder[i].b;
+        }
+    }
+
+    await triggerAutoReencode(); // Deine Funktion
+    handleFormatChange();        // Deine Funktion
+    
+    let bModal = document.getElementById('builder-modal');
+    if (bModal && bModal.style.display === 'block') {
+        btnBuilder.click(); // Update UI
+    }
+}
+
+
 function getGlobalStep() {
     return { r: parseInt(hamStepR.value) || 4, g: parseInt(hamStepG.value) || 4, b: parseInt(hamStepB.value) || 4 };
 }
@@ -91,70 +294,6 @@ async function triggerAutoReencode() {
     btnSave.disabled = false;
 }
 
-async function sortPaletteSlotsByUsage() {
-    if (!originalImageData || !latestCommandArray) {
-        alert("Bitte zuerst das Bild codieren.");
-        return;
-    }
-    let config = HAM_CONFIGS[currentFormat];
-    if (!config || !config.isPaletted) return;
-
-    let currentOffset = getGlobalOffset();
-
-    // 1. Zähle die Nutzung aller Absolut-Slots im gesamten Befehlsstrom
-    let totalAnchorUsage = new Array(256).fill(0);
-    for (let cmd of latestCommandArray) {
-        if (cmd && cmd.isAnchor && cmd.anchorIdx !== undefined) {
-            let absSlot = (currentOffset + cmd.anchorIdx) % 256;
-            totalAnchorUsage[absSlot]++;
-        }
-    }
-
-    // 2. Sortiere strikt in festen 8er-Blöcken (0-7, 8-15, 16-23 ...)
-    let blockSize = 8;
-    for (let bankStart = 0; bankStart < 256; bankStart += blockSize) {
-        let blockSlots = [];
-
-        // Sammle exakt 8 Slots für diesen Block
-        for (let i = 0; i < blockSize; i++) {
-            let absSlot = (bankStart + i) % 256;
-            blockSlots.push({
-                absSlot: absSlot,
-                isFixed: (i === 0), // Der erste Slot (lokaler Index 0 des 8er-Blocks) bleibt fix
-                r: globalPaletteRAM[absSlot * 3],
-                g: globalPaletteRAM[absSlot * 3 + 1],
-                b: globalPaletteRAM[absSlot * 3 + 2],
-                usage: totalAnchorUsage[absSlot]
-            });
-        }
-
-        // Trenne den fixen Slot (Index 0) von den 7 sortierbaren Slots des 8er-Blocks
-        let fixedSlot = blockSlots.find(s => s.isFixed);
-        let sortableSlots = blockSlots.filter(s => !s.isFixed);
-
-        // Sortiere die 7 Slots dieses 8er-Blocks absteigend nach Häufigkeit
-        sortableSlots.sort((a, b) => b.usage - a.usage);
-
-        // Baue den 8er-Block wieder zusammen (fixer Slot bleibt an Position 0)
-        let newBlockOrder = [fixedSlot, ...sortableSlots];
-
-        // Schreibe die sortierten Farben zurück in diesen spezifischen 8er-RAM-Bereich
-        for (let i = 0; i < blockSize; i++) {
-            let targetAbsSlot = (bankStart + i) % 256;
-            globalPaletteRAM[targetAbsSlot * 3]     = newBlockOrder[i].r;
-            globalPaletteRAM[targetAbsSlot * 3 + 1] = newBlockOrder[i].g;
-            globalPaletteRAM[targetAbsSlot * 3 + 2] = newBlockOrder[i].b;
-        }
-    }
-
-    await triggerAutoReencode();
-    handleFormatChange();
-    
-    let bModal = document.getElementById('builder-modal');
-    if (bModal && bModal.style.display === 'block') {
-        btnBuilder.click(); 
-    }
-}
 
 function handleFormatChange() {
     currentFormat = formatSelect.value;
@@ -590,8 +729,7 @@ if (btnBuilder && builderModal) {
         // NEU: Bit-Tiefen Spalten nebeneinander rendern
         // ==============================================================
         if (mseListDiv && decodedImageData && originalImageData) {
-            let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config);
-            
+            let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
             let bitDepths = Object.keys(stats.global.byBitDepth).sort((a,b) => parseInt(a) - parseInt(b));
             let html = "";
             
@@ -631,7 +769,7 @@ if (btnBuilder && builderModal) {
 
         if (histListDiv && originalImageData) {
             import('./core/analysis.js').then(module => {
-                let histData = module.getImageHistogram(originalImageData, currentImgW, currentImgH, step, 10, globalPaletteRAM, currentOffset);
+                let histData = module.getImageHistogram(originalImageData, currentImgW, currentImgH, step, 10, globalPaletteRAM, currentOffset, optRegion);
                 histListDiv.innerHTML = generateHistogramHtml(histData);
                 
                 histListDiv.onclick = async (ev) => {
@@ -668,7 +806,7 @@ if (btnBuilderAuto) {
 
         for (let i = 1; i < slots; i++) {
             let absSlot = (currentOffset + i) % 256;
-            let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config);
+            let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
             let topErrors = stats.global.top10;
 
             if (topErrors.length > 0) {
@@ -698,7 +836,7 @@ if (btnAnalysis && analysisModal) {
         let config = HAM_CONFIGS[currentFormat];
         let step = getGlobalStep();
         let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
-        let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config);
+        let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
         
         let top5Div = document.getElementById('analysis-top5');
         if (top5Div) {

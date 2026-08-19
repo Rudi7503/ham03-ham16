@@ -16,7 +16,8 @@ function getAnalysisDist(metric, r1, g1, b1, r2, g2, b2) {
     return get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
 }
 
-export function getImageHistogram(imgData, imgW, imgH, stepVal, topN = 10, paletteRAM = null, offset = 0) {
+// NEU: optRegion als Parameter hinzugefügt
+export function getImageHistogram(imgData, imgW, imgH, stepVal, topN = 10, paletteRAM = null, offset = 0, optRegion = null) {
     let data = imgData.data;
     let colorMap = new Map();
     let totalPixels = imgW * imgH;
@@ -37,6 +38,15 @@ export function getImageHistogram(imgData, imgW, imgH, stepVal, topN = 10, palet
     }
 
     for (let i = 0; i < totalPixels; i += stride) {
+        // NEU: Region-Filter
+        if (optRegion) {
+            let x = i % imgW;
+            let y = Math.floor(i / imgW);
+            if (x < optRegion.x || x >= optRegion.x + optRegion.width || y < optRegion.y || y >= optRegion.y + optRegion.height) {
+                continue;
+            }
+        }
+
         let idx = i * 4;
         let r = Math.min(255, Math.round(data[idx] / clusterRadius) * clusterRadius);
         let g = Math.min(255, Math.round(data[idx+1] / clusterRadius) * clusterRadius);
@@ -74,8 +84,8 @@ export function autoFillPaletteFromImage(imgData, imgW, imgH, paletteRAM, offset
     }
 }
 
-// NEU: Nimmt config als Parameter an, um Bit-Tiefen zu separieren
-export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, endPx, stepVal = {r:4, g:4, b:4}, metric = 'yuv_weight', config = null) {
+// NEU: optRegion als letzter Parameter hinzugefügt
+export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, endPx, stepVal = {r:4, g:4, b:4}, metric = 'yuv_weight', config = null, optRegion = null) {
     let stats = {
         global: { top10: [], avgRgb: 0, avgYuv: 0, byBitDepth: {} },
         segment: { top10: [], avgRgb: 0, avgYuv: 0 },
@@ -94,6 +104,15 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
     let clusterRadius = Math.max(2, Math.floor((stepVal.r + stepVal.g + stepVal.b) / 3));
 
     for (let i = 0; i < totalPixels; i++) {
+        // NEU: Region-Filter
+        if (optRegion) {
+            let x = i % imgW;
+            let y = Math.floor(i / imgW);
+            if (x < optRegion.x || x >= optRegion.x + optRegion.width || y < optRegion.y || y >= optRegion.y + optRegion.height) {
+                continue;
+            }
+        }
+
         let idx = i * 4;
         let r1 = origData[idx], g1 = origData[idx+1], b1 = origData[idx+2];
         let r2 = decData[idx], g2 = decData[idx+1], b2 = decData[idx+2];
@@ -104,8 +123,7 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
         g_rgbSum += rMse;
         g_metricSum += metricMse;
 
-        // Bit-Tiefe für dieses Pixel ermitteln
-       let bits = 8;
+        let bits = 8;
         if (config) {
             if (config.isMixed && config.sequence) {
                 let x = i % imgW;
@@ -123,13 +141,11 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
             
             let key = `I${qR1},${qG1},${qB1}|S${qR2},${qG2},${qB2}`;
             
-            // Globale Map
             if (!globalErrorMap.has(key)) {
                 globalErrorMap.set(key, { r1, g1, b1, r2, g2, b2, mse: metricMse, count: 0, x: i % imgW, y: Math.floor(i / imgW), bits: bits });
             }
             globalErrorMap.get(key).count++;
 
-            // Bucket Map (für Builder UI Aufschlüsselung)
             if (!bitDepthMaps[bits]) bitDepthMaps[bits] = new Map();
             if (!bitDepthMaps[bits].has(key)) {
                 bitDepthMaps[bits].set(key, { r1, g1, b1, r2, g2, b2, mse: metricMse, count: 0, x: i % imgW, y: Math.floor(i / imgW), bits: bits });
@@ -159,11 +175,14 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
         }
     }
 
-    stats.global.avgRgb = g_rgbSum / totalPixels;
-    stats.global.avgYuv = g_metricSum / totalPixels;
+    // Wenn keine Pixel im Optimierungsbereich liegen, Division durch 0 abfangen
+    let validPixels = g_rgbSum === 0 ? 1 : (g_rgbSum / totalPixels); 
+    if(optRegion && optRegion.width > 0) validPixels = optRegion.width * optRegion.height;
+
+    stats.global.avgRgb = g_rgbSum / validPixels;
+    stats.global.avgYuv = g_metricSum / validPixels;
     stats.global.top10 = Array.from(globalErrorMap.values()).sort((a, b) => (b.mse * b.count) - (a.mse * a.count)).slice(0, 10);
 
-    // Bilde Top-10-Listen für jeden genutzten Bucket
     for (let b in bitDepthMaps) {
         stats.global.byBitDepth[b] = Array.from(bitDepthMaps[b].values()).sort((a, b) => (b.mse * b.count) - (a.mse * a.count)).slice(0, 10);
     }
