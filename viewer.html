@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HAM Image Viewer</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            max-width: 800px;
+            width: 100%;
+            background: #1e1e1e;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        h1 { margin-top: 0; color: #4dabf7; font-size: 24px; }
+        input[type="file"] {
+            margin-bottom: 20px;
+            padding: 10px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 4px;
+            color: white;
+            cursor: pointer;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .metadata-box {
+            background: #252525;
+            border: 1px solid #333;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none; /* Wird erst eingeblendet, wenn Datei geladen ist */
+        }
+        .metadata-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+        }
+        .meta-item {
+            display: flex;
+            flex-direction: column;
+        }
+        .meta-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; }
+        .meta-value { font-size: 16px; font-weight: bold; color: #fff; }
+        
+        .canvas-container {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        canvas {
+            max-width: 100%;
+            height: auto;
+            image-rendering: pixelated; /* Für gestochen scharfe Pixel beim Skalieren */
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>HAM Viewer</h1>
+        
+        <input type="file" id="file-input" accept=".ham">
+
+        <div class="metadata-box" id="metadata-box">
+            <div class="metadata-grid">
+                <div class="meta-item"><span class="meta-label">Format</span><span class="meta-value" id="meta-format">-</span></div>
+                <div class="meta-item"><span class="meta-label">Dimensionen</span><span class="meta-value" id="meta-dim">-</span></div>
+                <div class="meta-item"><span class="meta-label">Schrittweite (RGB)</span><span class="meta-value" id="meta-step">-</span></div>
+                <div class="meta-item"><span class="meta-label">Paletten-Offset</span><span class="meta-value" id="meta-offset">-</span></div>
+                <div class="meta-item"><span class="meta-label">Dateigröße</span><span class="meta-value" id="meta-size">-</span></div>
+            </div>
+        </div>
+
+        <div class="canvas-container">
+            <canvas id="viewer-canvas"></canvas>
+        </div>
+    </div>
+
+    <!-- Wichtig: Als type="module" einbinden, damit die Imports klappen -->
+    <script type="module" src="viewer.js"></script>
+</body>
+</html>

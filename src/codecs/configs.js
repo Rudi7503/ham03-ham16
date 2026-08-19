@@ -77,44 +77,19 @@ export const HAM_CONFIGS = {
         slotsPerBank: 16,
         sequence: ["HAM05", "HAM03", "HAM05", "HAM03", "HAM05", "HAM03", "HAM05", "HAM03"]
     },
+    "HAM_32BIT_44444444": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 32,
+        sequence: ["HAM04", "HAM04", "HAM04", "HAM04", "HAM04", "HAM04", "HAM04", "HAM04"]
+    },
     "HAM_32BIT_63436343": {
         isPaletted: true,
         isMixed: true,
         slotsPerBank: 32,
         sequence: ["HAM06", "HAM03", "HAM04", "HAM03", "HAM06", "HAM03", "HAM04", "HAM03"]
     },
-    "HAM_32BIT_62536253": {
-        isPaletted: true,
-        isMixed: true,
-        slotsPerBank: 32,
-        sequence: ["HAM06", "HAM02", "HAM05", "HAM03", "HAM06", "HAM02", "HAM05", "HAM03"]
-    },
-    "HAM_32BIT_62626262": {
-        isPaletted: true,
-        isMixed: true,
-        slotsPerBank: 32,
-        sequence: ["HAM06", "HAM02", "HAM06", "HAM02", "HAM06", "HAM02", "HAM06", "HAM02"]
-    },
-    "HAM_32BIT_54525452": {
-        isPaletted: true,
-        isMixed: true,
-        slotsPerBank: 16,
-        sequence: ["HAM05", "HAM04", "HAM05", "HAM02", "HAM05", "HAM04", "HAM05", "HAM02"]
-    },
-    "HAM_32BIT_83328322": {
-        isPaletted: true,
-        isMixed: true,
-        slotsPerBank: 128, // Max. Bank aus HAM08
-        sequence: ["HAM08", "HAM03", "HAM03", "HAM02", "HAM08", "HAM03", "HAM02", "HAM02"]
-    },
-    "HAM_32BIT_81348134": {
-        isPaletted: true,
-        isMixed: true,
-        slotsPerBank: 128, // Max. Bank aus HAM08
-        sequence: ["HAM08", "HAM01", "HAM03", "HAM04", "HAM08", "HAM01", "HAM03", "HAM04"]
-    },
-
-    // --- Weitere gemischte Bestandskonfigurationen ---
+     // --- Weitere gemischte Bestandskonfigurationen ---
     "HAM_32BIT_6446444": {
         isPaletted: true,
         isMixed: true,
