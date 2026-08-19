@@ -196,16 +196,27 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
     return stats;
 }
 
-export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palette, stepVal, strategy, metric, max_depth, format, currentOffset = 0) {
+export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palette, stepVal, strategy, metric, max_depth, format, currentOffset = 0, optRegion = null) {
     let imgH = origData.length / (imgW * 4);
     let segs = [{ absEnd: origData.length / 4, waitPixels: origData.length / 4, offset: currentOffset, step: stepVal }];
+    
+    // 1. Codiere das Bild (muss immer komplett passieren für korrekte Fehlerfortpflanzung)
     let encodeResult = await encodeStream(origData, imgW, imgH, format, segs, palette, strategy, metric, max_depth, null, sPx, ePx);
     let config = HAM_CONFIGS[format];
     let decoded = decodeStream(encodeResult.commandArray, imgW, imgH, palette, segs, config);
     
     let yuvSum = 0, rgbSum = 0, maxYuv = 0, count = 0;
     
-    for (let i = sPx; i < ePx; i += 2) {
+    // 2. Auswertung der Qualität (JETZT MIT ROI-FILTER)
+    for (let i = sPx; i < ePx; i++) { 
+        if (optRegion) {
+            let x = i % imgW;
+            let y = Math.floor(i / imgW);
+            if (x < optRegion.x || x >= optRegion.x + optRegion.width || y < optRegion.y || y >= optRegion.y + optRegion.height) {
+                continue;
+            }
+        }
+
         let idx = i * 4;
         let r1 = origData[idx], g1 = origData[idx+1], b1 = origData[idx+2];
         let r2 = decoded[idx], g2 = decoded[idx+1], b2 = decoded[idx+2];
@@ -218,6 +229,9 @@ export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palett
         if (yDist > maxYuv) maxYuv = yDist;
         count++;
     }
+
+    // Verhindere Division durch Null, falls die Region leer ist
+    if (count === 0) count = 1;
 
     let avgRgb = rgbSum / count;
     let avgYuv = yuvSum / count;

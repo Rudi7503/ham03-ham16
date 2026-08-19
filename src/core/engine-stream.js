@@ -1,6 +1,17 @@
 import { HAM_CONFIGS } from '../codecs/configs.js';
 import { clamp, get_yuv_dist, get_yuv_dist_weight, get_rgb_dist, get_yuv_dist_weight_heavy, get_rgb_abs_dist, get_redmean_dist, get_oklab_dist } from '../codecs/utils.js';
 
+// NEU: Kanal-Definitionen für die Delta-Schritte hinzufügen
+const CHANNEL_DEFS = {
+    "HAM01": { r: [1, -1], g: [1, -1], b: [1, -1] },
+    "HAM02": { r: [1, -1], g: [1, -1], b: [1, -1] },
+    "HAM03": { r: [1, -1], g: [1, -1], b: [1, -1] },
+    "HAM04": { r: [-1, 1], g: [-1, 1], b: [-1, 1] },
+    "HAM05": { r: [-1, 1], g: [-1, 1], b: [-1, 1] },
+    "HAM06": { r: [-1, 1], g: [-2, -1, 1, 2], b: [-1, 1] },
+    "HAM08": { r: [-2, -1, 1, 2], g: [-2, -1, 1, 2], b: [-2, -1, 1, 2] }
+};
+
 export async function encodeStream(origData, imgW, imgH, format, userSegments, globalPaletteRAM, strategy, metric, max_depth, progressCallback, startOverride=0, endOverride=0, hybridPercent=5.0) {
     let totalPixels = imgW * imgH;
     let config = HAM_CONFIGS[format];
@@ -44,7 +55,7 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
                 for (let i = 0; i < slotsForPixel; i++) {
                     let absoluteSlot = (currentOffset + i) % 256;
                     let r = globalPaletteRAM[absoluteSlot * 3], g = globalPaletteRAM[absoluteSlot * 3 + 1], b = globalPaletteRAM[absoluteSlot * 3 + 2];
-                    branches.push({ cmd: { isAnchor: true, anchorIdx: i }, r, g, b });
+                    branches.push({ cmd: { isAnchor: true, format: effFormat, anchorIdx: i }, r, g, b });
                 }
             } else if (effFormat === "HAM16") {
                 let r5 = Math.round(tr / 255 * 31), g5 = Math.round(tg / 255 * 31), b5 = Math.round(tb / 255 * 31);
@@ -68,14 +79,23 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
                 let sr = currentStep.r * m, sg = currentStep.g * m, sb = currentStep.b * m;
 
                 if (effConfig.isPaletted) {
-                    for (let ri = 0; ri < effConfig.channels.r.length; ri++) {
-                        for (let gi = 0; gi < effConfig.channels.g.length; gi++) {
-                            for (let bi = 0; bi < effConfig.channels.b.length; bi++) {
+                    // NEU: Greife auf das Mapping zu und wende die Kopplungen an
+                    let rChan = CHANNEL_DEFS[effFormat]?.r || [-1, 1];
+                    let gChan = CHANNEL_DEFS[effFormat]?.g || [-1, 1];
+                    let bChan = CHANNEL_DEFS[effFormat]?.b || [-1, 1];
+
+                    for (let ri = 0; ri < rChan.length; ri++) {
+                        for (let gi = 0; gi < gChan.length; gi++) {
+                            for (let bi = 0; bi < bChan.length; bi++) {
+                                
+                                if (effFormat === "HAM01" && (gi !== ri || bi !== ri)) continue;
+                                if ((effFormat === "HAM02" || effFormat === "HAM03") && (bi !== ri)) continue;
+
                                 branches.push({ 
-                                    cmd: { isAnchor: false, isTurbo: (m === 4), rIndex: ri, gIndex: gi, bIndex: bi }, 
-                                    r: clamp(c_acc.r + effConfig.channels.r[ri] * sr, 0, 255), 
-                                    g: clamp(c_acc.g + effConfig.channels.g[gi] * sg, 0, 255), 
-                                    b: clamp(c_acc.b + effConfig.channels.b[bi] * sb, 0, 255) 
+                                    cmd: { isAnchor: false, format: effFormat, isTurbo: (m === 4), rIndex: ri, gIndex: gi, bIndex: bi }, 
+                                    r: clamp(c_acc.r + rChan[ri] * sr, 0, 255), 
+                                    g: clamp(c_acc.g + gChan[gi] * sg, 0, 255), 
+                                    b: clamp(c_acc.b + bChan[bi] * sb, 0, 255) 
                                 });
                             }
                         }
@@ -122,7 +142,7 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
                 best_branch = { cost: total, cmd: b.cmd, r: b.r, g: b.g, b: b.b };
             }
         }
-        return best_branch || { cost: 0, cmd: branches[0]?.cmd || { isAnchor: true, anchorIdx: 0 }, r: c_acc.r, g: c_acc.g, b: c_acc.b };
+        return best_branch || { cost: 0, cmd: branches[0]?.cmd || { isAnchor: true, anchorIdx: 0, format: effFormat }, r: c_acc.r, g: c_acc.g, b: c_acc.b };
     }
 
     async function encodeSpan(startPx, endPx, initialAcc, depth, isPass2 = false) {
@@ -142,7 +162,9 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
                 pixelStates[i] = acc;
                 
             } else {
-                commandArray[i] = { isAnchor: true, anchorIdx: 0 };
+                let seqIdx = i % config.sequence.length;
+                let fmt = config.sequence ? config.sequence[seqIdx] : format;
+                commandArray[i] = { isAnchor: true, format: fmt, anchorIdx: 0 };
                 pixelStates[i] = acc;
             }
 
@@ -216,10 +238,18 @@ export async function encodeStream(origData, imgW, imgH, format, userSegments, g
     return { commandArray, packedData, stats };
 }
 
-// Hilfsfunktion: Ermittelt den Binärwert und die Bit-Breite eines einzelnen Befehls
+// NEU: Auch die kleinen Formate HAM01-03 sind nun hier abgedeckt
 function getCmdVal(cmd, format) {
     let v = 0, bits = 0;
-    if (format === "HAM04") {
+    if (format === "HAM01") {
+        bits = 1; v = cmd.rIndex & 1;
+    } else if (format === "HAM02") {
+        bits = 2; v = ((cmd.rIndex & 1) << 1) | (cmd.gIndex & 1);
+    } else if (format === "HAM03") {
+        bits = 3;
+        if (cmd.isAnchor) v = 4 | (cmd.anchorIdx & 3);
+        else v = ((cmd.rIndex & 1) << 1) | (cmd.gIndex & 1);
+    } else if (format === "HAM04") {
         bits = 4;
         if (cmd.isAnchor) v = 8 | (cmd.anchorIdx & 7);
         else v = (((cmd.rIndex||0)>0?1:0)<<2) | (((cmd.gIndex||0)>0?1:0)<<1) | ((cmd.bIndex||0)>0?1:0);
@@ -231,7 +261,7 @@ function getCmdVal(cmd, format) {
         bits = 6;
         if (cmd.isAnchor) v = 32 | (cmd.anchorIdx & 31);
         else v = (((cmd.isTurbo?1:0)<<4) | ((cmd.rIndex||0)<<3) | ((cmd.gIndex||0)<<1) | (cmd.bIndex||0));
-    } else if (format === "HAM08_PAL") {
+    } else if (format === "HAM08" || format === "HAM08_PAL") {
         bits = 8;
         if (cmd.isAnchor) v = 128 | (cmd.anchorIdx & 127);
         else v = (((cmd.isTurbo?1:0)<<6) | ((cmd.rIndex||0)<<4) | ((cmd.gIndex||0)<<2) | (cmd.bIndex||0));
@@ -242,7 +272,6 @@ function getCmdVal(cmd, format) {
 function packCommandsToBinary(commands, format) {
     let config = HAM_CONFIGS[format];
     
-    // Universeller Bit-Stream Packer für ALLE Mischformate (16-Bit, 32-Bit A-E)
     if (config && config.isMixed) {
         let bitStream = [];
         let currentByte = 0;
@@ -251,11 +280,10 @@ function packCommandsToBinary(commands, format) {
         for (let i = 0; i < commands.length; i++) {
             let seqIdx = i % config.sequence.length;
             let fmt = config.sequence[seqIdx];
-            let cmd = commands[i] || { isAnchor: true, anchorIdx: 0 };
+            let cmd = commands[i] || { isAnchor: true, format: fmt, anchorIdx: 0 };
             
             let { v, bits } = getCmdVal(cmd, fmt);
             
-            // Bits einzeln von MSB zu LSB in den Stream schieben
             for (let b = bits - 1; b >= 0; b--) {
                 let bit = (v >> b) & 1;
                 currentByte = (currentByte << 1) | bit;
@@ -269,7 +297,6 @@ function packCommandsToBinary(commands, format) {
             }
         }
         
-        // Letztes Byte auffüllen, falls es nicht voll wurde
         if (bitsInByte > 0) {
             currentByte = currentByte << (8 - bitsInByte);
             bitStream.push(currentByte);
@@ -278,7 +305,6 @@ function packCommandsToBinary(commands, format) {
         return new Uint8Array(bitStream);
     }
 
-    // Reguläres Packing für Standard-Formate
     let rawWords = [];
     for (let cmd of commands) {
         let w = 0;
@@ -291,7 +317,7 @@ function packCommandsToBinary(commands, format) {
         } else if (format === "HAM06") {
             if (cmd.isAnchor) w = 32 | (cmd.anchorIdx & 31);
             else w = ((cmd.isTurbo ? 1 : 0) << 4) | (cmd.rIndex << 3) | (cmd.gIndex << 1) | cmd.bIndex;
-        } else if (format === "HAM08_PAL") {
+        } else if (format === "HAM08" || format === "HAM08_PAL") {
             if (cmd.isAnchor) w = 128 | (cmd.anchorIdx & 127);
             else w = ((cmd.isTurbo ? 1 : 0) << 6) | (cmd.rIndex << 4) | (cmd.gIndex << 2) | cmd.bIndex;
         } else if (format === "HAM12") {
@@ -315,87 +341,51 @@ function packCommandsToBinary(commands, format) {
     return new Uint8Array(rawWords);
 }
 
-// --- NEU: UNPACKER LOGIK FÜR LADE-FUNKTION ---
-// --- UNPACKER LOGIK FÜR LADE-FUNKTION ---
+// NEU: HAM01, HAM02 und HAM03 abgedeckt
 export function unpackBinaryToCommands(packedData, format, totalPixels) {
     let config = HAM_CONFIGS[format];
     let commands = new Array(totalPixels);
 
     function parseCmdVal(v, fmt) {
-        if (fmt === "HAM04") {
+        if (fmt === "HAM01") {
+            let dir = v & 1;
+            return { isAnchor: false, format: fmt, rIndex: dir, gIndex: dir, bIndex: dir };
+        } else if (fmt === "HAM02") {
+            let rbDir = (v >> 1) & 1, gDir = v & 1;
+            return { isAnchor: false, format: fmt, rIndex: rbDir, gIndex: gDir, bIndex: rbDir };
+        } else if (fmt === "HAM03") {
+            if (v & 4) return { isAnchor: true, format: fmt, anchorIdx: v & 3 };
+            return { isAnchor: false, format: fmt, isTurbo: false, rIndex: (v >> 1) & 1, gIndex: v & 1, bIndex: (v >> 1) & 1 };
+        } else if (fmt === "HAM04") {
             if (v & 8) return { isAnchor: true, format: fmt, anchorIdx: v & 7 };
             return { isAnchor: false, format: fmt, rIndex: (v>>2)&1, gIndex: (v>>1)&1, bIndex: v&1 };
         } else if (fmt === "HAM05") {
-            // HAM05: 5-Bit Wert. 
-            // Entsprechend dem Encoder: Wenn Bit 4 (16) gesetzt ist, ist es ein Anker, 
-            // ansonsten ein Delta-Befehl.
-            if (v & 16) {
-                return { isAnchor: true, format: fmt, anchorIdx: v & 15 };
-            }
-            return { 
-                isAnchor: false, 
-                format: fmt, 
-                isTurbo: ((v >> 3) & 1) === 1, 
-                rIndex: (v >> 2) & 1, 
-                gIndex: (v >> 1) & 1, 
-                bIndex: v & 1 
-            };
+            if (v & 16) return { isAnchor: true, format: fmt, anchorIdx: v & 15 };
+            return { isAnchor: false, format: fmt, isTurbo: ((v >> 3) & 1) === 1, rIndex: (v >> 2) & 1, gIndex: (v >> 1) & 1, bIndex: v & 1 };
         } else if (fmt === "HAM06") {
             if (v & 32) return { isAnchor: true, format: fmt, anchorIdx: v & 31 };
             return { isAnchor: false, format: fmt, isTurbo: ((v>>4)&1)===1, rIndex: (v>>3)&1, gIndex: (v>>1)&3, bIndex: v&1 };
-        } else if (fmt === "HAM08_PAL") {
+        } else if (fmt === "HAM08" || fmt === "HAM08_PAL") {
             if (v & 128) return { isAnchor: true, format: fmt, anchorIdx: v & 127 };
             return { isAnchor: false, format: fmt, isTurbo: ((v>>6)&1)===1, rIndex: (v>>4)&3, gIndex: (v>>2)&3, bIndex: v&3 };
         } else if (fmt === "HAM12") {
             if (v & 0x800) {
-                return { 
-                    isAnchor: true, 
-                    format: fmt, 
-                    b10: (v >> 10) & 1, 
-                    r3: (v >> 7) & 7, 
-                    g4: (v >> 3) & 15, 
-                    b3: v & 7,
+                return { isAnchor: true, format: fmt, b10: (v >> 10) & 1, r3: (v >> 7) & 7, g4: (v >> 3) & 15, b3: v & 7,
                     r: (((v >> 7) & 7) << 5) | (((v >> 10) & 1) ? 31 : 0),
                     g: ((v >> 3) & 15) << 4,
                     b: ((v & 7) << 5) | (((v >> 10) & 1) ? 31 : 0)
                 };
             }
-            let rawDr = (v >> 7) & 7; 
-            let dr = (rawDr & 4) ? rawDr - 8 : rawDr;
-            let rawDg = (v >> 3) & 15; 
-            let dg = (rawDg & 8) ? rawDg - 16 : rawDg;
-            let rawDb = v & 7; 
-            let db = (rawDb & 4) ? rawDb - 8 : rawDb;
-            
-            return { 
-                isAnchor: false, 
-                format: fmt, 
-                isTurbo: ((v >> 10) & 1) === 1, 
-                dr, 
-                dg, 
-                db 
-            };
+            let rawDr = (v >> 7) & 7; let dr = (rawDr & 4) ? rawDr - 8 : rawDr;
+            let rawDg = (v >> 3) & 15; let dg = (rawDg & 8) ? rawDg - 16 : rawDg;
+            let rawDb = v & 7; let db = (rawDb & 4) ? rawDb - 8 : rawDb;
+            return { isAnchor: false, format: fmt, isTurbo: ((v >> 10) & 1) === 1, dr, dg, db };
         } else if (fmt === "HAM16") {
-            if (v & 0x8000) {
-                return { 
-                    isAnchor: true, 
-                    format: fmt, 
-                    r5: (v >> 10) & 31, 
-                    g5: (v >> 5) & 31, 
-                    b5: v & 31 
-                };
-            }
+            if (v & 0x8000) return { isAnchor: true, format: fmt, r5: (v >> 10) & 31, g5: (v >> 5) & 31, b5: v & 31 };
             let rawDr = (v >> 10) & 15; let dr = rawDr >= 8 ? rawDr - 16 : rawDr;
             let rawDg = (v >> 5) & 31; let dg = rawDg >= 16 ? rawDg - 32 : rawDg;
             let rawDb = v & 31; let db = rawDb >= 16 ? db - 32 : db;
-            return { 
-                isAnchor: false, 
-                format: fmt, 
-                isTurbo: ((v >> 14) & 1) === 1, 
-                dr, 
-                dg, 
-                db 
-            };
+            return { isAnchor: false, format: fmt, isTurbo: ((v >> 14) & 1) === 1, dr, dg, db };
         }
         return { isAnchor: true, format: fmt, anchorIdx: 0 };
     }
@@ -419,10 +409,13 @@ export function unpackBinaryToCommands(packedData, format, totalPixels) {
             let seqIdx = i % config.sequence.length;
             let fmt = config.sequence[seqIdx];
             let bits = 0;
-            if(fmt==="HAM04") bits=4;
+            if(fmt==="HAM01") bits=1;
+            else if(fmt==="HAM02") bits=2;
+            else if(fmt==="HAM03") bits=3;
+            else if(fmt==="HAM04") bits=4;
             else if(fmt==="HAM05") bits=5;
             else if(fmt==="HAM06") bits=6;
-            else if(fmt==="HAM08_PAL") bits=8;
+            else if(fmt==="HAM08" || fmt==="HAM08_PAL") bits=8;
             
             let v = readBits(bits);
             commands[i] = parseCmdVal(v, fmt);

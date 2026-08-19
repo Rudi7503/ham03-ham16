@@ -1,5 +1,16 @@
 import { clamp } from '../codecs/utils.js';
-import { HAM_CONFIGS } from '../codecs/configs.js'; // <-- Dieser Import hat gefehlt!
+import { HAM_CONFIGS } from '../codecs/configs.js'; 
+
+// NEU: Kanal-Definitionen für die Delta-Schritte hinzufügen
+const CHANNEL_DEFS = {
+    "HAM01": { r: [1, -1], g: [1, -1], b: [1, -1] },
+    "HAM02": { r: [1, -1], g: [1, -1], b: [1, -1] },
+    "HAM03": { r: [1, -1], g: [1, -1], b: [1, -1] },
+    "HAM04": { r: [-1, 1], g: [-1, 1], b: [-1, 1] },
+    "HAM05": { r: [-1, 1], g: [-1, 1], b: [-1, 1] },
+    "HAM06": { r: [-1, 1], g: [-2, -1, 1, 2], b: [-1, 1] },
+    "HAM08": { r: [-2, -1, 1, 2], g: [-2, -1, 1, 2], b: [-2, -1, 1, 2] }
+};
 
 export function decodeStream(commandArray, imgW, imgH, globalPaletteRAM, userSegments, config) {
     let totalPixels = imgW * imgH;
@@ -36,17 +47,17 @@ export function decodeStream(commandArray, imgW, imgH, globalPaletteRAM, userSeg
 
         let cmd = commandArray[i];
         let effConfig = config;
+        let effFormat = cmd.format || "HAM04"; // Fallback
         
-        // Entschlüsselt Mixed Formate (z.B. HAM_16BIT) per X-Koordinate
         if (config.isMixed) {
             let x = i % imgW;
             let seqIdx = x % config.sequence.length;
-            effConfig = HAM_CONFIGS[config.sequence[seqIdx]];
+            effFormat = config.sequence[seqIdx];
+            effConfig = HAM_CONFIGS[effFormat];
         }
 
         if (cmd.isAnchor) {
             if (effConfig.isPaletted) {
-                // Liest Offset + Index, mit 256-Limit-Wrap
                 let absoluteSlot = (currentOffset + (cmd.anchorIdx || 0)) % 256;
                 let off = absoluteSlot * 3;
                 acc_r = globalPaletteRAM[off];
@@ -68,9 +79,14 @@ export function decodeStream(commandArray, imgW, imgH, globalPaletteRAM, userSeg
                 acc_g = clamp(acc_g + (cmd.dg || 0) * sg, 0, 255);
                 acc_b = clamp(acc_b + (cmd.db || 0) * sb, 0, 255);
             } else {
-                let dr = effConfig.channels.r[cmd.rIndex || 0] || 0;
-                let dg = effConfig.channels.g[cmd.gIndex || 0] || 0;
-                let db = effConfig.channels.b[cmd.bIndex || 0] || 0;
+                // NEU: Greift nun auf CHANNEL_DEFS zu statt auf effConfig.channels
+                let rChan = CHANNEL_DEFS[effFormat]?.r || [-1, 1];
+                let gChan = CHANNEL_DEFS[effFormat]?.g || [-1, 1];
+                let bChan = CHANNEL_DEFS[effFormat]?.b || [-1, 1];
+
+                let dr = rChan[cmd.rIndex || 0] || 0;
+                let dg = gChan[cmd.gIndex || 0] || 0;
+                let db = bChan[cmd.bIndex || 0] || 0;
 
                 acc_r = clamp(acc_r + dr * sr, 0, 255);
                 acc_g = clamp(acc_g + dg * sg, 0, 255);
