@@ -43,6 +43,7 @@ const autoMaxStepInp = document.getElementById('auto-max-step');
 const autoStepBody = document.getElementById('auto-step-body');
 const autoStepStatus = document.getElementById('auto-step-status');
 
+
 // ==========================================
 // GLOBALE VARIABLEN FÜR ROI (REGION OF INTEREST)
 // ==========================================
@@ -165,13 +166,9 @@ function initRegionEvents() {
 // Startet die Überwachung der Canvas-Events
 initRegionEvents();
 
-// 4. GANZ WICHTIG: Die Funktion muss hier direkt ausgeführt werden, 
-// damit die Event-Listener beim Laden der Seite auch wirklich angehängt werden!
-initRegionEvents();
-
 // ==========================================
 // DYNAMISCHE PALETTEN-SORTIERUNG MIT ROI-FILTER
-// (inklusive Sub-Gruppen-Logik für HAM03 und HAM05)
+// (Mit automatischer Slot-Hierarchie für gemischte Formate wie 63436343)
 // ==========================================
 async function sortPaletteSlotsByUsage() {
     if (!originalImageData || !latestCommandArray) {
@@ -182,11 +179,6 @@ async function sortPaletteSlotsByUsage() {
     if (!config || !config.isPaletted) return;
 
     let currentOffset = getGlobalOffset();
-    let blockSize = config.slotsPerBank || 8;
-    
-    // Abbruch, wenn das Format keine Anker hat
-    if (blockSize === 0) return;
-
     let totalAnchorUsage = new Array(256).fill(0);
     let imgW = originalImageData.width;
 
@@ -207,31 +199,45 @@ async function sortPaletteSlotsByUsage() {
         }
     }
 
-    // 2. Definition der Sortier-Gruppen (Sub-Blöcke)
+    // 2. Dynamische Hierarchie (Slot-Tiers) ermitteln
+    // Holt sich alle Sub-Formate (z.B. ["HAM06", "HAM03", "HAM04"])
+    let formatsInUse = config.isMixed ? [...new Set(config.sequence)] : [currentFormat];
+    
+    // Sammelt alle Slot-Kapazitäten, sortiert sie aufsteigend und entfernt Duplikate (z.B. -> [4, 8, 32])
+    let capacities = [...new Set(formatsInUse.map(f => HAM_CONFIGS[f]?.slotsPerBank || 8))].sort((a,b) => a - b);
+    
     let sortGroups = [];
-    if (blockSize === 16) { 
-        // HAM05 (16 Slots): Gruppe 1 (Slots 0-3), Gruppe 2 (Slots 4-15)
-        sortGroups = [ { start: 0, end: 3 }, { start: 4, end: 15 } ];
-    } else if (blockSize === 4) {
-        // HAM03 (4 Slots): Gruppe 1 (Slots 0-3)
-        sortGroups = [ { start: 0, end: 3 } ];
-    } else {
-        // Standard (z.B. HAM04 mit 8 Slots): Alles als eine durchgehende Gruppe
-        sortGroups = [ { start: 0, end: Math.max(0, blockSize - 1) } ];
+    let lastEnd = -1;
+    
+    // Zerschneidet die Palettenblöcke in isolierte Zugriffs-Ebenen
+    // z.B.: {0 bis 3}, {4 bis 7}, {8 bis 31}
+    for (let cap of capacities) {
+        if (cap === 0) continue;
+        let start = lastEnd + 1;
+        let end = cap - 1;
+        if (start <= end) {
+            sortGroups.push({ start: start, end: end });
+            lastEnd = end;
+        }
     }
 
-    // 3. Sortierung der Blöcke
-    for (let bankStart = 0; bankStart < 256; bankStart += blockSize) {
+    // Abbruch, wenn das Format keine validen Anker-Slots besitzt (z.B. HAM01)
+    if (sortGroups.length === 0) return;
+    
+    let maxSlotsPerBank = capacities[capacities.length - 1];
+
+    // 3. Sortierung der Blöcke anhand der berechneten Hierarchie
+    for (let bankStart = 0; bankStart < 256; bankStart += maxSlotsPerBank) {
         
         for (let group of sortGroups) {
             let groupSlots = [];
             
-            // Slots der aktuellen Gruppe auslesen
+            // Slots der exakten Unter-Gruppe auslesen
             for (let i = group.start; i <= group.end; i++) {
                 let absSlot = (bankStart + i) % 256;
                 groupSlots.push({
                     absSlot: absSlot,
-                    isFixed: (i === 0), // WICHTIG: Nur Slot 0 der gesamten Bank bleibt starr (Schwarz)
+                    isFixed: (i === 0), // Slot 0 des gesamten Blocks bleibt starr
                     r: globalPaletteRAM[absSlot * 3],
                     g: globalPaletteRAM[absSlot * 3 + 1],
                     b: globalPaletteRAM[absSlot * 3 + 2],
@@ -239,16 +245,16 @@ async function sortPaletteSlotsByUsage() {
                 });
             }
             
-            // Fixierte und sortierbare trennen
+            // Fixierte und sortierbare Slots trennen
             let fixedSlots = groupSlots.filter(s => s.isFixed);
             let sortableSlots = groupSlots.filter(s => !s.isFixed);
             
-            // Nach Häufigkeit absteigend sortieren
+            // Die freien Slots nach tatsächlicher Nutzung absteigend sortieren
             sortableSlots.sort((a, b) => b.usage - a.usage);
             
             let newOrder = [...fixedSlots, ...sortableSlots];
             
-            // Sortierte Werte in den RAM zurückschreiben
+            // Sortierte Werte in den echten globalen RAM zurückschreiben
             for (let idx = 0; idx < newOrder.length; idx++) {
                 let targetAbsSlot = (bankStart + group.start + idx) % 256;
                 globalPaletteRAM[targetAbsSlot * 3]     = newOrder[idx].r;
@@ -258,12 +264,13 @@ async function sortPaletteSlotsByUsage() {
         }
     }
 
+    // 4. UI triggern und Bild neu aufbauen
     await triggerAutoReencode(); 
     handleFormatChange();        
     
     let bModal = document.getElementById('builder-modal');
     if (bModal && bModal.style.display === 'block') {
-        btnBuilder.click(); // Update UI
+        btnBuilder.click(); // Builder UI refreshen
     }
 }
 
@@ -396,6 +403,10 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
             ctxOriginal.drawImage(img, 0, 0);
             
             originalImageData = ctxOriginal.getImageData(0, 0, currentImgW, currentImgH);
+            
+            // --- HIER DIE REGION SOFORT AUF DAS GANZE BILD SETZEN ---
+            resetOptRegion(currentImgW, currentImgH);
+            // --------------------------------------------------------
             
             canvasDecoded.width = currentImgW; canvasDecoded.height = currentImgH;
             ctxDecoded.clearRect(0, 0, currentImgW, currentImgH);
@@ -600,6 +611,7 @@ const builderModal = document.getElementById('builder-modal');
 const btnBuilderCancel = document.getElementById('btn-builder-cancel');
 const btnBuilderAuto = document.getElementById('btn-builder-auto');
 const btnSortSlots = document.getElementById('btn-sort-slots');
+const btnResetSlots = document.getElementById('btn-reset-slots');
 const autoStepModal = document.getElementById('auto-step-modal');
 const btnAutoStepClose = document.getElementById('btn-auto-step-close');
 const analysisModal = document.getElementById('analysis-modal');
@@ -758,12 +770,31 @@ if (btnBuilder && builderModal) {
         // ==============================================================
         if (mseListDiv && decodedImageData && originalImageData) {
             let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
+            
+            // --- HIER DIE METRIKEN IN DEN STATUS EINBINDEN ---
+            let avgMetricMse = stats.global.avgYuv.toFixed(2);
+            let avgRgbMse = stats.global.avgRgb.toFixed(2);
+            let maxMse = stats.global.top10.length > 0 ? Math.round(stats.global.top10[0].mse) : 0;
+            
+            if (statusDiv) {
+                statusDiv.innerHTML = `Bank aktiv (${slots} Slots) | <span style="color:#ffc107;">Gesamt MSE: ${avgMetricMse} (RGB: ${avgRgbMse}) | Max MSE: ${maxMse}</span><br>` +
+                                      `<span id='builder-instruction' style='color:#ffc107; font-weight:bold;'>Aktiv: Slot ${selectedTargetSlot.index}. Klicke einen Eintrag zum Zuweisen.</span>`;
+            }
+            // ------------------------------------------------
+            
             let bitDepths = Object.keys(stats.global.byBitDepth).sort((a,b) => parseInt(a) - parseInt(b));
             let html = "";
             
             if (bitDepths.length > 0) {
                 for (let b of bitDepths) {
-                    let hint = (b === "4") ? "(untere 8 Slots)" : "(höhere Slots)";
+                    let hint = "";
+                    if (b === "3") hint = "(Slots 0-3)";
+                    else if (b === "4") hint = "(Slots 0-7)";
+                    else if (b === "5") hint = "(Slots 0-15)";
+                    else if (b === "6") hint = "(Slots 0-31)";
+                    else if (b === "8") hint = "(Slots 0-127)";
+                    else hint = `(Slots nach Bit-Tiefe ${b})`;
+
                     html += `
                     <div style="flex: 1; min-width: 220px; background:#16181a; border:1px solid #444; border-radius:4px; padding:6px; display:flex; flex-direction:column; max-height: 280px; overflow-y: auto;">
                         <div style="background:#222; padding:4px; font-weight:bold; color:#ffc107; font-size:11px; text-align:center; margin-bottom:6px; border-radius:3px; border:1px solid #444;">${b}-Bit ${hint}</div>
@@ -773,6 +804,8 @@ if (btnBuilder && builderModal) {
             } else {
                 html = `<div style="flex:1;">${generateTop10Html(stats.global.top10)}</div>`;
             }
+            mseListDiv.innerHTML = html;
+            // ... (Rest des Event-Handlers bleibt unverändert)
             mseListDiv.innerHTML = html;
             
             mseListDiv.onclick = async (ev) => {
@@ -902,6 +935,36 @@ if (btnAnalysis && analysisModal) {
 
 if (btnAnalysisClose && analysisModal) btnAnalysisClose.addEventListener('click', () => analysisModal.style.display = 'none');
 if (btnAutoStepClose && autoStepModal) btnAutoStepClose.addEventListener('click', () => autoStepModal.style.display = 'none');
+
+if (btnResetSlots) {
+    btnResetSlots.addEventListener('click', async () => {
+        if (!originalImageData) return;
+        if (!confirm("Möchtest du wirklich alle anpassbaren Slots dieser Bank auf neutrales Grau (127, 127, 127) zurücksetzen?")) return;
+
+        let config = HAM_CONFIGS[currentFormat];
+        let slots = config ? (config.slotsPerBank || 8) : 8;
+        let currentOffset = getGlobalOffset();
+
+        ensureSlotZeroBlack();
+
+        // Alle Slots der aktuellen Bank (außer Offset 0 / Slot 0) auf neutrales Grau setzen
+        for (let i = 1; i < slots; i++) {
+            let absSlot = (currentOffset + i) % 256;
+            globalPaletteRAM[absSlot * 3] = 0;
+            globalPaletteRAM[absSlot * 3 + 1] = 0;
+            globalPaletteRAM[absSlot * 3 + 2] = 0;
+        }
+
+        await triggerAutoReencode();
+        handleFormatChange();
+        
+        let bModal = document.getElementById('builder-modal');
+        if (bModal && bModal.style.display === 'block') {
+            btnBuilder.click(); // Builder UI aktualisieren
+        }
+    });
+}
+
 
 // ============================================================================
 // AUTO-STEP OPTIMIERUNG (Mit ROI-Filter)
