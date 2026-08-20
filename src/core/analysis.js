@@ -175,22 +175,54 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
         }
     }
 
-    // Wenn keine Pixel im Optimierungsbereich liegen, Division durch 0 abfangen
+// Wenn keine Pixel im Optimierungsbereich liegen, Division durch 0 abfangen
     let validPixels = g_rgbSum === 0 ? 1 : (g_rgbSum / totalPixels); 
     if(optRegion && optRegion.width > 0) validPixels = optRegion.width * optRegion.height;
 
     stats.global.avgRgb = g_rgbSum / validPixels;
     stats.global.avgYuv = g_metricSum / validPixels;
-    stats.global.top10 = Array.from(globalErrorMap.values()).sort((a, b) => (b.mse * b.count) - (a.mse * a.count)).slice(0, 10);
+
+    // --- NEU: Helper für die abwechselnde Sortierung (Reißverschlussverfahren) ---
+    function interleaveErrors(errorArray, maxLen = 10) {
+        let weighted = [...errorArray].sort((a, b) => (b.mse * b.count) - (a.mse * a.count));
+        let pure = [...errorArray].sort((a, b) => b.mse - a.mse);
+        let combined = [];
+        let added = new Set();
+        let wIdx = 0, pIdx = 0;
+        
+        while (combined.length < maxLen && (wIdx < weighted.length || pIdx < pure.length)) {
+            // 1. Hole den nächsten gewichteten Fehler (Menge/Cluster)
+            while (wIdx < weighted.length && added.has(weighted[wIdx])) wIdx++;
+            if (wIdx < weighted.length && combined.length < maxLen) {
+                weighted[wIdx].sortType = "⚖️ Menge"; 
+                combined.push(weighted[wIdx]);
+                added.add(weighted[wIdx]);
+                wIdx++;
+            }
+            
+            // 2. Hole den nächsten reinen Einzelfehler (Spitze)
+            while (pIdx < pure.length && added.has(pure[pIdx])) pIdx++;
+            if (pIdx < pure.length && combined.length < maxLen) {
+                pure[pIdx].sortType = "🔥 Spitze"; 
+                combined.push(pure[pIdx]);
+                added.add(pure[pIdx]);
+                pIdx++;
+            }
+        }
+        return combined;
+    }
+
+    // Wende die neue Logik auf alle Listen an
+    stats.global.top10 = interleaveErrors(Array.from(globalErrorMap.values()), 10);
 
     for (let b in bitDepthMaps) {
-        stats.global.byBitDepth[b] = Array.from(bitDepthMaps[b].values()).sort((a, b) => (b.mse * b.count) - (a.mse * a.count)).slice(0, 10);
+        stats.global.byBitDepth[b] = interleaveErrors(Array.from(bitDepthMaps[b].values()), 10);
     }
 
     if (s_count > 0) {
         stats.segment.avgRgb = s_rgbSum / s_count;
         stats.segment.avgYuv = s_metricSum / s_count;
-        stats.segment.top10 = Array.from(segmentErrorMap.values()).sort((a, b) => (b.mse * b.count) - (a.mse * a.count)).slice(0, 10);
+        stats.segment.top10 = interleaveErrors(Array.from(segmentErrorMap.values()), 10);
     }
 
     return stats;

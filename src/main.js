@@ -625,17 +625,20 @@ function generateTop10Html(top10Array) {
             let sollR = e.r1, sollG = e.g1, sollB = e.b1;
             let istR = e.r2, istG = e.g2, istB = e.b2;
             let formattedMse = Math.round(e.mse).toLocaleString('de-DE');
+            
+            // NEU: Das Badge für den Sortier-Typ einblenden
+            let typeBadge = e.sortType ? `<span style="font-size:9px; background:#222; padding:2px 4px; border-radius:3px; color:#aaa; margin-right:4px; border:1px solid #444;" title="Warum dieser Fehler angezeigt wird">${e.sortType}</span>` : '';
 
             return `
             <div class="top10-cluster-item" data-r="${sollR}" data-g="${sollG}" data-b="${sollB}" data-x="${e.x}" data-y="${e.y}" style="font-size:10px; margin-bottom:3px; padding:4px 6px; background:#111; border-radius:3px; border:1px solid #333; cursor:pointer; display:flex; align-items:center; justify-content:space-between;" title="Klicken zum Zentrieren & Zuweisen">
                 <div style="display:flex; align-items:center; gap:6px; pointer-events:none;">
-                    <span style="color:#888; font-weight:bold;">#${idx+1}</span>
+                    <span style="color:#888; font-weight:bold; width:15px;">#${idx+1}</span>
+                    ${typeBadge}
                     <div style="width:12px; height:12px; background:rgb(${istR},${istG},${istB}); border:1px solid #668; border-radius:2px;" title="Ist (Decodiert)"></div>
                     <span>➡</span>
                     <div style="width:12px; height:12px; background:rgb(${sollR},${sollG},${sollB}); border:1px solid #688; border-radius:2px;" title="Soll (Original)"></div>
-                    <span style="color:#ccc;">RGB(${sollR},${sollG},${sollB})</span>
                 </div>
-                <div style="display:flex; align-items:center; gap:8px; pointer-events:none;">
+                <div style="display:flex; align-items:center; gap:6px; pointer-events:none;">
                     <span style="color:#4dabf7;">X:${e.x} Y:${e.y} (${e.count}x)</span>
                     <span style="color:#ff6b6b; font-weight:bold;">MSE: ${formattedMse}</span>
                 </div>
