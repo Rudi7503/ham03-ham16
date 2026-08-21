@@ -43,7 +43,6 @@ const autoMaxStepInp = document.getElementById('auto-max-step');
 const autoStepBody = document.getElementById('auto-step-body');
 const autoStepStatus = document.getElementById('auto-step-status');
 
-
 // ==========================================
 // GLOBALE VARIABLEN FÜR ROI (REGION OF INTEREST)
 // ==========================================
@@ -84,7 +83,6 @@ function initRegionEvents() {
         sourceCanvas.style.cursor = 'default';
         if (originalImageData) {
             resetOptRegion(originalImageData.width, originalImageData.height);
-            // Quellbild neu zeichnen, um Rechteck zu entfernen
             let ctx = sourceCanvas.getContext('2d');
             ctx.putImageData(originalImageData, 0, 0);
         }
@@ -92,9 +90,7 @@ function initRegionEvents() {
 
     sourceCanvas.addEventListener('mousedown', (e) => {
         if (!isRegionModeActive) return;
-        
-        e.stopPropagation(); // WICHTIG: Verhindert, dass das Bild verschoben wird!
-        
+        e.stopPropagation();
         isDrawingRegion = true;
         let rect = sourceCanvas.getBoundingClientRect();
         let scaleX = sourceCanvas.width / rect.width;
@@ -105,9 +101,7 @@ function initRegionEvents() {
 
     sourceCanvas.addEventListener('mousemove', (e) => {
         if (!isDrawingRegion) return;
-        
-        e.stopPropagation(); // WICHTIG: Blockiert Panning während des Ziehens
-        
+        e.stopPropagation();
         let rect = sourceCanvas.getBoundingClientRect();
         let scaleX = sourceCanvas.width / rect.width;
         let scaleY = sourceCanvas.height / rect.height;
@@ -115,8 +109,6 @@ function initRegionEvents() {
         let curY = Math.floor((e.clientY - rect.top) * scaleY);
 
         let ctx = sourceCanvas.getContext('2d');
-        
-        // Vorheriges Frame löschen
         if (originalImageData) {
             ctx.putImageData(originalImageData, 0, 0);
         }
@@ -129,9 +121,7 @@ function initRegionEvents() {
 
     sourceCanvas.addEventListener('mouseup', (e) => {
         if (!isDrawingRegion) return;
-        
-        e.stopPropagation(); // WICHTIG
-        
+        e.stopPropagation();
         isDrawingRegion = false;
         isRegionModeActive = false;
         sourceCanvas.style.cursor = 'default';
@@ -162,13 +152,10 @@ function initRegionEvents() {
         ctx.strokeRect(optRegion.x, optRegion.y, optRegion.width, optRegion.height);
     });
 }
-
-// Startet die Überwachung der Canvas-Events
 initRegionEvents();
 
 // ==========================================
 // DYNAMISCHE PALETTEN-SORTIERUNG MIT ROI-FILTER
-// (Mit automatischer Slot-Hierarchie für gemischte Formate wie 63436343)
 // ==========================================
 async function sortPaletteSlotsByUsage() {
     if (!originalImageData || !latestCommandArray) {
@@ -182,14 +169,12 @@ async function sortPaletteSlotsByUsage() {
     let totalAnchorUsage = new Array(256).fill(0);
     let imgW = originalImageData.width;
 
-    // 1. Zählung MIT Filterung nach ROI
     for (let i = 0; i < latestCommandArray.length; i++) {
         let cmd = latestCommandArray[i];
         if (cmd && cmd.isAnchor && cmd.anchorIdx !== undefined) {
             let x = i % imgW;
             let y = Math.floor(i / imgW);
             
-            // Pixel muss innerhalb der OptRegion liegen
             if (x >= optRegion.x && x < optRegion.x + optRegion.width &&
                 y >= optRegion.y && y < optRegion.y + optRegion.height) {
                 
@@ -199,18 +184,12 @@ async function sortPaletteSlotsByUsage() {
         }
     }
 
-    // 2. Dynamische Hierarchie (Slot-Tiers) ermitteln
-    // Holt sich alle Sub-Formate (z.B. ["HAM06", "HAM03", "HAM04"])
     let formatsInUse = config.isMixed ? [...new Set(config.sequence)] : [currentFormat];
-    
-    // Sammelt alle Slot-Kapazitäten, sortiert sie aufsteigend und entfernt Duplikate (z.B. -> [4, 8, 32])
     let capacities = [...new Set(formatsInUse.map(f => HAM_CONFIGS[f]?.slotsPerBank || 8))].sort((a,b) => a - b);
     
     let sortGroups = [];
     let lastEnd = -1;
     
-    // Zerschneidet die Palettenblöcke in isolierte Zugriffs-Ebenen
-    // z.B.: {0 bis 3}, {4 bis 7}, {8 bis 31}
     for (let cap of capacities) {
         if (cap === 0) continue;
         let start = lastEnd + 1;
@@ -221,23 +200,17 @@ async function sortPaletteSlotsByUsage() {
         }
     }
 
-    // Abbruch, wenn das Format keine validen Anker-Slots besitzt (z.B. HAM01)
     if (sortGroups.length === 0) return;
-    
     let maxSlotsPerBank = capacities[capacities.length - 1];
 
-    // 3. Sortierung der Blöcke anhand der berechneten Hierarchie
     for (let bankStart = 0; bankStart < 256; bankStart += maxSlotsPerBank) {
-        
         for (let group of sortGroups) {
             let groupSlots = [];
-            
-            // Slots der exakten Unter-Gruppe auslesen
             for (let i = group.start; i <= group.end; i++) {
                 let absSlot = (bankStart + i) % 256;
                 groupSlots.push({
                     absSlot: absSlot,
-                    isFixed: (i === 0), // Slot 0 des gesamten Blocks bleibt starr
+                    isFixed: (i === 0),
                     r: globalPaletteRAM[absSlot * 3],
                     g: globalPaletteRAM[absSlot * 3 + 1],
                     b: globalPaletteRAM[absSlot * 3 + 2],
@@ -245,16 +218,12 @@ async function sortPaletteSlotsByUsage() {
                 });
             }
             
-            // Fixierte und sortierbare Slots trennen
             let fixedSlots = groupSlots.filter(s => s.isFixed);
             let sortableSlots = groupSlots.filter(s => !s.isFixed);
             
-            // Die freien Slots nach tatsächlicher Nutzung absteigend sortieren
             sortableSlots.sort((a, b) => b.usage - a.usage);
-            
             let newOrder = [...fixedSlots, ...sortableSlots];
             
-            // Sortierte Werte in den echten globalen RAM zurückschreiben
             for (let idx = 0; idx < newOrder.length; idx++) {
                 let targetAbsSlot = (bankStart + group.start + idx) % 256;
                 globalPaletteRAM[targetAbsSlot * 3]     = newOrder[idx].r;
@@ -264,16 +233,12 @@ async function sortPaletteSlotsByUsage() {
         }
     }
 
-    // 4. UI triggern und Bild neu aufbauen
     await triggerAutoReencode(); 
     handleFormatChange();        
     
     let bModal = document.getElementById('builder-modal');
-    if (bModal && bModal.style.display === 'block') {
-        btnBuilder.click(); // Builder UI refreshen
-    }
+    if (bModal && bModal.style.display === 'block') btnBuilder.click();
 }
-
 
 function getGlobalStep() {
     return { r: parseInt(hamStepR.value) || 4, g: parseInt(hamStepG.value) || 4, b: parseInt(hamStepB.value) || 4 };
@@ -328,7 +293,6 @@ async function triggerAutoReencode() {
     ctxDecoded.putImageData(decodedImageData, 0, 0);
     btnSave.disabled = false;
 }
-
 
 function handleFormatChange() {
     currentFormat = formatSelect.value;
@@ -404,9 +368,7 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
             
             originalImageData = ctxOriginal.getImageData(0, 0, currentImgW, currentImgH);
             
-            // --- HIER DIE REGION SOFORT AUF DAS GANZE BILD SETZEN ---
             resetOptRegion(currentImgW, currentImgH);
-            // --------------------------------------------------------
             
             canvasDecoded.width = currentImgW; canvasDecoded.height = currentImgH;
             ctxDecoded.clearRect(0, 0, currentImgW, currentImgH);
@@ -603,7 +565,6 @@ window.addEventListener('mouseup', () => {
     currentDraggedElement = null;
 });
 
-
 // ============================================================================
 // MODAL & BUILDER LOGIC
 // ============================================================================
@@ -626,7 +587,6 @@ function generateTop10Html(top10Array) {
             let istR = e.r2, istG = e.g2, istB = e.b2;
             let formattedMse = Math.round(e.mse).toLocaleString('de-DE');
             
-            // NEU: Das Badge für den Sortier-Typ einblenden
             let typeBadge = e.sortType ? `<span style="font-size:9px; background:#222; padding:2px 4px; border-radius:3px; color:#aaa; margin-right:4px; border:1px solid #444;" title="Warum dieser Fehler angezeigt wird">${e.sortType}</span>` : '';
 
             return `
@@ -768,22 +728,26 @@ if (btnBuilder && builderModal) {
             handleFormatChange();
         }
 
-        // ==============================================================
-        // NEU: Bit-Tiefen Spalten nebeneinander rendern
-        // ==============================================================
         if (mseListDiv && decodedImageData && originalImageData) {
             let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
             
-            // --- HIER DIE METRIKEN IN DEN STATUS EINBINDEN ---
             let avgMetricMse = stats.global.avgYuv.toFixed(2);
             let avgRgbMse = stats.global.avgRgb.toFixed(2);
-            let maxMse = stats.global.top10.length > 0 ? Math.round(stats.global.top10[0].mse) : 0;
+            
+            let allErrors = [];
+            for (let b in stats.global.byBitDepth) {
+                allErrors.push(...stats.global.byBitDepth[b]);
+            }
+            if (allErrors.length === 0) allErrors = [...stats.global.top10];
+            
+            allErrors.sort((a, b) => b.mse - a.mse);
+            let pureMaxMse = allErrors.length > 0 ? Math.round(allErrors[0].mse) : 0;
+            let weightedMaxMse = stats.global.top10.length > 0 ? Math.round(stats.global.top10[0].mse) : 0;
             
             if (statusDiv) {
-                statusDiv.innerHTML = `Bank aktiv (${slots} Slots) | <span style="color:#ffc107;">Gesamt MSE: ${avgMetricMse} (RGB: ${avgRgbMse}) | Max MSE: ${maxMse}</span><br>` +
+                statusDiv.innerHTML = `Bank aktiv (${slots} Slots) | <span style="color:#ffc107;">⌀ MSE: ${avgMetricMse} (RGB: ${avgRgbMse}) | Max MSE (Gewichtet): ${weightedMaxMse} | Max MSE (Rein): ${pureMaxMse}</span><br>` +
                                       `<span id='builder-instruction' style='color:#ffc107; font-weight:bold;'>Aktiv: Slot ${selectedTargetSlot.index}. Klicke einen Eintrag zum Zuweisen.</span>`;
             }
-            // ------------------------------------------------
             
             let bitDepths = Object.keys(stats.global.byBitDepth).sort((a,b) => parseInt(a) - parseInt(b));
             let html = "";
@@ -807,8 +771,6 @@ if (btnBuilder && builderModal) {
             } else {
                 html = `<div style="flex:1;">${generateTop10Html(stats.global.top10)}</div>`;
             }
-            mseListDiv.innerHTML = html;
-            // ... (Rest des Event-Handlers bleibt unverändert)
             mseListDiv.innerHTML = html;
             
             mseListDiv.onclick = async (ev) => {
@@ -857,41 +819,205 @@ if (btnBuilderCancel && builderModal) {
     });
 }
 
+// ============================================================================
+// AUTO-FILL & NACHOPTIMIERUNG (Ausschließlich mit triggerAutoReencode)
+// ============================================================================
 if (btnBuilderAuto) {
     btnBuilderAuto.addEventListener('click', async () => {
         if (!originalImageData || !decodedImageData) { alert("Bitte zuerst das Bild codieren."); return; }
+        
         let config = HAM_CONFIGS[currentFormat];
-        let slots = config ? (config.slotsPerBank || 8) : 8;
         let currentOffset = getGlobalOffset();
         let step = getGlobalStep();
         let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
 
         ensureSlotZeroBlack();
 
-        for (let i = 1; i < slots; i++) {
-            let absSlot = (currentOffset + i) % 256;
-            let stats = computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
-            let topErrors = stats.global.top10;
-
-            if (topErrors.length > 0) {
-                globalPaletteRAM[absSlot * 3] = topErrors[0].r1;
-                globalPaletteRAM[absSlot * 3 + 1] = topErrors[0].g1;
-                globalPaletteRAM[absSlot * 3 + 2] = topErrors[0].b1;
-            } else {
-                globalPaletteRAM[absSlot * 3] = 127;
-                globalPaletteRAM[absSlot * 3 + 1] = 127;
-                globalPaletteRAM[absSlot * 3 + 2] = 127;
+        let formatsInUse = config.isMixed ? [...new Set(config.sequence)] : [currentFormat];
+        let capacities = [...new Set(formatsInUse.map(f => HAM_CONFIGS[f]?.slotsPerBank || 8))].sort((a,b) => a - b);
+        
+        let sortGroups = [];
+        let lastEnd = -1;
+        for (let cap of capacities) {
+            if (cap === 0) continue;
+            let start = lastEnd + 1;
+            let end = cap - 1;
+            if (start <= end) {
+                sortGroups.push({ start: start, end: end });
+                lastEnd = end;
             }
+        }
+        sortGroups.reverse(); // Bottom-Up
 
-            await triggerAutoReencode();
+        let statusDiv = document.getElementById('builder-instruction') || document.getElementById('builder-status');
+        const analysisModule = await import('./core/analysis.js');
+
+        // SCHRITT 1: Leere Slots von unten nach oben befüllen
+        for (let group of sortGroups) {
+            let targetBits = 8;
+            if (group.end <= 3) targetBits = 3;
+            else if (group.end <= 7) targetBits = 4;
+            else if (group.end <= 15) targetBits = 5;
+            else if (group.end <= 31) targetBits = 6;
+
+            for (let i = group.end; i >= group.start; i--) {
+                if (i === 0) continue;
+
+                let absSlot = (currentOffset + i) % 256;
+                let r = globalPaletteRAM[absSlot * 3];
+                let g = globalPaletteRAM[absSlot * 3 + 1];
+                let b = globalPaletteRAM[absSlot * 3 + 2];
+                
+                if (r !== 0 || g !== 0 || b !== 0) continue; // Belegt überspringen
+
+                if (statusDiv) {
+                    statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Fülle Slot ${i} (${targetBits}-Bit Pool)...</span>`;
+                }
+                
+                let stats = analysisModule.computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
+                let bitPool = stats.global.byBitDepth[targetBits] || stats.global.top10;
+                
+                let candMenge = null;
+                for (let err of bitPool) {
+                    if (!candMenge && err.sortType === "⚖️ Menge") {
+                        candMenge = { r: err.r1, g: err.g1, b: err.b1 };
+                        break;
+                    }
+                }
+                if (!candMenge && bitPool.length > 0) candMenge = { r: bitPool[0].r1, g: bitPool[0].g1, b: bitPool[0].b1 };
+                if (!candMenge) continue;
+
+                // Direkt in den RAM und echtes Reencode triggern
+                globalPaletteRAM[absSlot * 3] = candMenge.r;
+                globalPaletteRAM[absSlot * 3 + 1] = candMenge.g;
+                globalPaletteRAM[absSlot * 3 + 2] = candMenge.b;
+
+                selectedTargetSlot = { index: i, absSlot: absSlot };
+                await triggerAutoReencode(); 
+                handleFormatChange();      
+                btnBuilder.click();        
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
         }
 
+        // SCHRITT 2: Nachoptimierung der Wackelkandidaten über echtes Reencode (Battle)
+        if (statusDiv) {
+            statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Starte Wackelkandidaten-Nachoptimierung...</span>`;
+        }
+
+        // Nutzung der Slots ermitteln
+        let totalAnchorUsage = new Array(256).fill(0);
+        if (latestCommandArray) {
+            let imgW = originalImageData.width;
+            for (let i = 0; i < latestCommandArray.length; i++) {
+                let cmd = latestCommandArray[i];
+                if (cmd && cmd.isAnchor && cmd.anchorIdx !== undefined) {
+                    let x = i % imgW;
+                    let y = Math.floor(i / imgW);
+                    if (x >= optRegion.x && x < optRegion.x + optRegion.width &&
+                        y >= optRegion.y && y < optRegion.y + optRegion.height) {
+                        let absSlot = (currentOffset + cmd.anchorIdx) % 256;
+                        totalAnchorUsage[absSlot]++;
+                    }
+                }
+            }
+        }
+
+        for (let group of sortGroups) {
+            let targetBits = 8;
+            let numWeakSlots = 1;
+            
+            if (group.end <= 3) { targetBits = 3; numWeakSlots = 1; }
+            else if (group.end <= 7) { targetBits = 4; numWeakSlots = 2; }
+            else if (group.end <= 15) { targetBits = 5; numWeakSlots = 4; }
+            else if (group.end <= 31) { targetBits = 6; numWeakSlots = 8; }
+            else { targetBits = 8; numWeakSlots = 16; }
+
+            let groupSlots = [];
+            for (let i = group.start; i <= group.end; i++) {
+                if (i === 0) continue;
+                let absSlot = (currentOffset + i) % 256;
+                groupSlots.push({ index: i, absSlot: absSlot, usage: totalAnchorUsage[absSlot] });
+            }
+
+            groupSlots.sort((a, b) => a.usage - b.usage);
+            let weakSlots = groupSlots.slice(0, numWeakSlots);
+
+            for (let slotInfo of weakSlots) {
+                let absSlot = slotInfo.absSlot;
+
+                if (statusDiv) {
+                    statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Optimiere Wackelkandidat Slot ${slotInfo.index}...</span>`;
+                }
+
+                let stats = analysisModule.computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
+                let bitPool = stats.global.byBitDepth[targetBits] || stats.global.top10;
+
+                let candMenge = null;
+                let candSpitze = null;
+                for (let err of bitPool) {
+                    if (!candMenge && err.sortType === "⚖️ Menge") candMenge = { r: err.r1, g: err.g1, b: err.b1 };
+                    if (!candSpitze && err.sortType === "🔥 Spitze") candSpitze = { r: err.r1, g: err.g1, b: err.b1 };
+                }
+                if (!candMenge) continue;
+                if (!candSpitze) candSpitze = candMenge;
+
+                // Wir messen die echte Bildqualität (avgYuv) nach echtem Reencode per Direktvergleich:
+                let baseDecodedData = new Uint8ClampedArray(decodedImageData.data);
+                let baseAvgYuv = stats.global.avgYuv;
+
+                // Test B: Mit Menge
+                let backupR = globalPaletteRAM[absSlot*3], backupG = globalPaletteRAM[absSlot*3+1], backupB = globalPaletteRAM[absSlot*3+2];
+                
+                globalPaletteRAM[absSlot * 3] = candMenge.r; 
+                globalPaletteRAM[absSlot * 3 + 1] = candMenge.g; 
+                globalPaletteRAM[absSlot * 3 + 2] = candMenge.b;
+                await triggerAutoReencode();
+                let statsMenge = analysisModule.computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
+                let scoreMenge = statsMenge.global.avgYuv;
+
+                // Test C: Mit Spitze
+                globalPaletteRAM[absSlot * 3] = candSpitze.r; 
+                globalPaletteRAM[absSlot * 3 + 1] = candSpitze.g; 
+                globalPaletteRAM[absSlot * 3 + 2] = candSpitze.b;
+                await triggerAutoReencode();
+                let statsSpitze = analysisModule.computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
+                let scoreSpitze = statsSpitze.global.avgYuv;
+
+                // Finde das absolute Optimum im echten Reencode
+                let bestScore = Math.min(baseAvgYuv, scoreMenge, scoreSpitze);
+
+                if (bestScore === baseAvgYuv) {
+                    // Original behalten
+                    globalPaletteRAM[absSlot * 3] = backupR; 
+                    globalPaletteRAM[absSlot * 3 + 1] = backupG; 
+                    globalPaletteRAM[absSlot * 3 + 2] = backupB;
+                    await triggerAutoReencode();
+                } else if (bestScore === scoreMenge) {
+                    // Menge gewinnt (RAM ist schon gesetzt)
+                } else {
+                    // Spitze gewinnt
+                    globalPaletteRAM[absSlot * 3] = candSpitze.r; 
+                    globalPaletteRAM[absSlot * 3 + 1] = candSpitze.g; 
+                    globalPaletteRAM[absSlot * 3 + 2] = candSpitze.b;
+                    await triggerAutoReencode();
+                }
+
+                selectedTargetSlot = { index: slotInfo.index, absSlot: absSlot };
+                handleFormatChange();      
+                btnBuilder.click();        
+                await new Promise(resolve => setTimeout(resolve, 50));
+            }
+        }
+
+        if (statusDiv) {
+            statusDiv.innerHTML = `<span style='color:#28a745; font-weight:bold;'>✅ Auto-Füllen & Nachoptimierung beendet!</span>`;
+        }
+        
         selectedTargetSlot = { index: 1, absSlot: (currentOffset + 1) % 256 };
         btnBuilder.click(); 
-        handleFormatChange();
     });
 }
-
 if (btnAnalysis && analysisModal) {
     btnAnalysis.addEventListener('click', () => {
         if (!decodedImageData || !originalImageData) { alert("Bitte zuerst das Bild codieren."); return; }
@@ -942,7 +1068,7 @@ if (btnAutoStepClose && autoStepModal) btnAutoStepClose.addEventListener('click'
 if (btnResetSlots) {
     btnResetSlots.addEventListener('click', async () => {
         if (!originalImageData) return;
-        if (!confirm("Möchtest du wirklich alle anpassbaren Slots dieser Bank auf neutrales Grau (127, 127, 127) zurücksetzen?")) return;
+        if (!confirm("Möchtest du wirklich alle anpassbaren Slots dieser Bank auf Schwarz (0, 0, 0) zurücksetzen?")) return;
 
         let config = HAM_CONFIGS[currentFormat];
         let slots = config ? (config.slotsPerBank || 8) : 8;
@@ -950,7 +1076,6 @@ if (btnResetSlots) {
 
         ensureSlotZeroBlack();
 
-        // Alle Slots der aktuellen Bank (außer Offset 0 / Slot 0) auf neutrales Grau setzen
         for (let i = 1; i < slots; i++) {
             let absSlot = (currentOffset + i) % 256;
             globalPaletteRAM[absSlot * 3] = 0;
@@ -963,11 +1088,10 @@ if (btnResetSlots) {
         
         let bModal = document.getElementById('builder-modal');
         if (bModal && bModal.style.display === 'block') {
-            btnBuilder.click(); // Builder UI aktualisieren
+            btnBuilder.click(); 
         }
     });
 }
-
 
 // ============================================================================
 // AUTO-STEP OPTIMIERUNG (Mit ROI-Filter)
@@ -987,14 +1111,12 @@ if (btnAutoStep && autoStepModal) {
         let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
         let currentOffset = getGlobalOffset();
 
-        // Importiere Analyse-Modul dynamisch für die Simulation
         import('./core/analysis.js').then(async (module) => {
             let results = [];
 
             for (let s = minStep; s <= maxStep; s++) {
                 let testStep = { r: s, g: s, b: s };
                 
-                // HIER WIRD DIE REGION ÜBERGEBEN (optRegion)
                 let sim = await module.runSimulationWithStrategy(
                     0, totalPixels, originalImageData.data, currentImgW, 
                     globalPaletteRAM, testStep, strategy, metric, max_depth, 
@@ -1003,12 +1125,10 @@ if (btnAutoStep && autoStepModal) {
                 
                 results.push({ step: s, ...sim });
                 
-                // UI updaten, damit der Browser nicht blockiert
                 if(autoStepStatus) autoStepStatus.innerText = `Analysiere Schrittweite ${s} von ${maxStep}...`;
-                await new Promise(r => setTimeout(r, 10)); // Kurze Pause für den UI-Thread
+                await new Promise(r => setTimeout(r, 10)); 
             }
 
-            // Sortiere aufsteigend nach dem besten Score (kleinster Fehler = oben)
             results.sort((a, b) => a.score - b.score);
             
             let html = '';
@@ -1031,7 +1151,6 @@ if (btnAutoStep && autoStepModal) {
             let regionText = (optRegion.width === currentImgW) ? "Ganzes Bild" : "Ausschnitt aktiv";
             if(autoStepStatus) autoStepStatus.innerText = `Analyse abgeschlossen. Bereich: ±${minStep} bis ±${maxStep}. (${regionText})`;
             
-            // Klick-Handler für die "Übernehmen"-Buttons in der Tabelle
             document.querySelectorAll('.btn-apply-step').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     let chosenStep = e.target.getAttribute('data-step');
@@ -1040,7 +1159,7 @@ if (btnAutoStep && autoStepModal) {
                     hamStepB.value = chosenStep;
                     
                     autoStepModal.style.display = 'none';
-                    triggerAutoReencode(); // Bild direkt mit neuen Werten neu berechnen
+                    triggerAutoReencode();
                 });
             });
         });

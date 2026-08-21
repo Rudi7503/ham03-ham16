@@ -16,7 +16,6 @@ function getAnalysisDist(metric, r1, g1, b1, r2, g2, b2) {
     return get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
 }
 
-// NEU: optRegion als Parameter hinzugefügt
 export function getImageHistogram(imgData, imgW, imgH, stepVal, topN = 10, paletteRAM = null, offset = 0, optRegion = null) {
     let data = imgData.data;
     let colorMap = new Map();
@@ -38,7 +37,6 @@ export function getImageHistogram(imgData, imgW, imgH, stepVal, topN = 10, palet
     }
 
     for (let i = 0; i < totalPixels; i += stride) {
-        // NEU: Region-Filter
         if (optRegion) {
             let x = i % imgW;
             let y = Math.floor(i / imgW);
@@ -77,14 +75,13 @@ export function autoFillPaletteFromImage(imgData, imgW, imgH, paletteRAM, offset
             paletteRAM[absSlot * 3 + 1] = topColors[i].g;
             paletteRAM[absSlot * 3 + 2] = topColors[i].b;
         } else {
-            paletteRAM[absSlot * 3] = 127;
-            paletteRAM[absSlot * 3 + 1] = 127;
-            paletteRAM[absSlot * 3 + 2] = 127;
+            paletteRAM[absSlot * 3] = 0;
+            paletteRAM[absSlot * 3 + 1] = 0;
+            paletteRAM[absSlot * 3 + 2] = 0;
         }
     }
 }
 
-// NEU: optRegion als letzter Parameter hinzugefügt
 export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, endPx, stepVal = {r:4, g:4, b:4}, metric = 'yuv_weight', config = null, optRegion = null) {
     let stats = {
         global: { top10: [], avgRgb: 0, avgYuv: 0, byBitDepth: {} },
@@ -104,7 +101,6 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
     let clusterRadius = Math.max(2, Math.floor((stepVal.r + stepVal.g + stepVal.b) / 3));
 
     for (let i = 0; i < totalPixels; i++) {
-        // NEU: Region-Filter
         if (optRegion) {
             let x = i % imgW;
             let y = Math.floor(i / imgW);
@@ -175,14 +171,13 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
         }
     }
 
-// Wenn keine Pixel im Optimierungsbereich liegen, Division durch 0 abfangen
     let validPixels = g_rgbSum === 0 ? 1 : (g_rgbSum / totalPixels); 
     if(optRegion && optRegion.width > 0) validPixels = optRegion.width * optRegion.height;
 
     stats.global.avgRgb = g_rgbSum / validPixels;
     stats.global.avgYuv = g_metricSum / validPixels;
 
-    // --- NEU: Helper für die abwechselnde Sortierung (Reißverschlussverfahren) ---
+    // Helper für die abwechselnde Sortierung (Reißverschlussverfahren)
     function interleaveErrors(errorArray, maxLen = 10) {
         let weighted = [...errorArray].sort((a, b) => (b.mse * b.count) - (a.mse * a.count));
         let pure = [...errorArray].sort((a, b) => b.mse - a.mse);
@@ -191,7 +186,6 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
         let wIdx = 0, pIdx = 0;
         
         while (combined.length < maxLen && (wIdx < weighted.length || pIdx < pure.length)) {
-            // 1. Hole den nächsten gewichteten Fehler (Menge/Cluster)
             while (wIdx < weighted.length && added.has(weighted[wIdx])) wIdx++;
             if (wIdx < weighted.length && combined.length < maxLen) {
                 weighted[wIdx].sortType = "⚖️ Menge"; 
@@ -200,7 +194,6 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
                 wIdx++;
             }
             
-            // 2. Hole den nächsten reinen Einzelfehler (Spitze)
             while (pIdx < pure.length && added.has(pure[pIdx])) pIdx++;
             if (pIdx < pure.length && combined.length < maxLen) {
                 pure[pIdx].sortType = "🔥 Spitze"; 
@@ -212,7 +205,6 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
         return combined;
     }
 
-    // Wende die neue Logik auf alle Listen an
     stats.global.top10 = interleaveErrors(Array.from(globalErrorMap.values()), 10);
 
     for (let b in bitDepthMaps) {
@@ -232,14 +224,12 @@ export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palett
     let imgH = origData.length / (imgW * 4);
     let segs = [{ absEnd: origData.length / 4, waitPixels: origData.length / 4, offset: currentOffset, step: stepVal }];
     
-    // 1. Codiere das Bild (muss immer komplett passieren für korrekte Fehlerfortpflanzung)
     let encodeResult = await encodeStream(origData, imgW, imgH, format, segs, palette, strategy, metric, max_depth, null, sPx, ePx);
     let config = HAM_CONFIGS[format];
     let decoded = decodeStream(encodeResult.commandArray, imgW, imgH, palette, segs, config);
     
     let yuvSum = 0, rgbSum = 0, maxYuv = 0, count = 0;
     
-    // 2. Auswertung der Qualität (JETZT MIT ROI-FILTER)
     for (let i = sPx; i < ePx; i++) { 
         if (optRegion) {
             let x = i % imgW;
@@ -262,7 +252,6 @@ export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palett
         count++;
     }
 
-    // Verhindere Division durch Null, falls die Region leer ist
     if (count === 0) count = 1;
 
     let avgRgb = rgbSum / count;
