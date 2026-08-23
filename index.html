@@ -93,9 +93,9 @@
         <option value="HAM_32BIT_44444444"          >HAM 32-Bit 44444444 (4/4/4/4/4/4/4/4)  4.0 Bit/pixel</option>
         <option value="HAM_32BIT_53535353"          >HAM 32-Bit 53535353 (5/3/5/3/5/3/5/3)  4.0 Bit/pixel</option>
         <option value="HAM_32BIT_63436343" selected >HAM 32-Bit 63436343 (6/3/4/3/6/3/4/3)  4.0 Bit/pixel</option>
-        <option value="HAM_32BIT_6446444"          >HAM 3２-Bit 6446444  (6/4/4/6/4/4/4)   4.6 Bit/pixel</option>
+        <option value="HAM_32BIT_6446444"          >HAM 32-Bit 6446444  (6/4/4/6/4/4/4)   4.6 Bit/pixel</option>
         <option value="HAM_32BIT_5454545"           >HAM 32-Bit 5454545  (5/4/5/4/5/4/5)    4.6 Bit/pixel</option>
-        <option value="HAM_32BIT_6454544"           >HAM 32-Bit 6454544  (6/4/5/4/5/4/4)    ４.6 Bit/pixel</option>
+        <option value="HAM_32BIT_6454544"           >HAM 32-Bit 6454544  (6/4/5/4/5/4/4)    4.6 Bit/pixel</option>
         <option value="HAM_32BIT_655655"            >HAM 32-Bit 655655   (6/5/5/6/5/5)      5.3 Bit/pixel</option>
         <option value="HAM_32BIT_86666"             >HAM 32-Bit 86666    (8/6/6/6/6)        6.4 Bit/pixel</option>
         <option value="HAM_32BIT_8888"              >HAM 32-Bit 8888     (8/8/8/8)          8.0 Bit/pixel</option>
@@ -107,27 +107,32 @@
     <div class="control-group">
         <label>Strategie:</label>
         <select id="encode-strategy">
-            <option value="both" selected>Greedy (Fast)</option>
-            <option value="hybrid_2">Hybrid (Anchor-Bounded L2)</option>
-            <option value="hybrid_3">Hybrid (Anchor-Bounded L3)</option>
-            <option value="hybrid_4">Hybrid (Anchor-Bounded L4)</option>
-            <option value="lookahead_2">2-Px Lookahead (Klassisch)</option>
-            <option value="lookahead_3">3-Px Lookahead (Klassisch)</option>
+            <option value="greedy" selected>Greedy (Schnell)</option>
+            <option value="lookahead_chunk">Chunk-Lookahead (Branch & Bound)</option>
             <option value="anchor_only">Nur Anker</option>
             <option value="delta_only">Nur Delta</option>
         </select>
     </div>
-    
-    <div class="control-group" id="hybrid-group" style="background:#111; padding:2px 6px; border-radius:4px; border:1px solid #ffc107;">
-        <label style="color:#ffc107;">Fokus:</label>
-        <input type="number" id="hybrid-percent" value="5" min="1" max="100" style="width:40px; font-weight:bold;">
-        <span style="font-size:10px; color:#aaa;">% schlechteste Blöcke</span>
+	
+	<div class="control-group" style="background:#111; padding:2px 8px; border-radius:4px; border:1px solid #007bff;">
+        <label style="color:#4dabf7;" title="Iterative Error Feedback">Feedback Loop:</label>
+        
+        <label title="Anzahl der Durchläufe (1 = aus)">Iter:</label>
+        <input type="number" id="feedback-iter" min="1" max="5" value="1" style="width:35px;">
+		<label title="Zeigt das verstärkte Fehlerbild im Dekodiert-Canvas an">
+		<input type="checkbox" id="chk-error-overlay" style="vertical-align: middle;"> Fehler anzeigen</label>
+        
+        <label title="Korrektur-Stärke (0.2 bis 0.6)">λ (Dämpfung):</label>
+        <input type="number" id="feedback-lambda" step="0.1" min="0.1" max="1.0" value="0.4" style="width:40px;">
+        
+        <label title="Kantenschutz (0.001 bis 0.05)">ε (Kante):</label>
+        <input type="number" id="feedback-epsilon" step="0.005" min="0.001" max="0.1" value="0.02" style="width:45px;">
     </div>
     
     <div class="control-group">
         <label>Metrik:</label>
         <select id="encode-metric">
-            <option value="oklab" d>Oklab (Perzeptuell Perfekt)</option>
+            <option value="oklab">Oklab (Perzeptuell Perfekt)</option>
             <option value="redmean">Redmean (Schnell & Wahrnehmung)</option>
             <option value="yuv_weight_heavy">YUV (Gewichtet Stark)</option>
             <option value="yuv_weight" selected>YUV (Gewichtet)</option>
@@ -136,6 +141,15 @@
             <option value="rgb_ABS">RGB (ABS)</option>
         </select>
     </div>
+	
+	<div class="control-group">
+		<label for="lookahead-threshold" title="MSE-Schwellenwert: Blöcke unter diesem Wert überspringen den Lookahead">Lookahead Threshold:</label>
+		<input type="number" id="lookahead-threshold" value="15" min="0" max="100" step="1" style="width: 50px;">
+	</div>
+	
+	<div id="lookahead-stats" style="font-size: 11px; color: #4dabf7; margin-top: 4px;">
+		Lookahead übersprungen: <span id="skip-percent-val">0.0</span>%
+	</div>
 
     <div class="control-group" id="ham-step-group">
         <label>Schritt:</label>
@@ -209,7 +223,6 @@
       <div id="builder-palette-preview" style="display:flex; flex-wrap:wrap; gap:3px; margin:6px 0; background:#000; padding:6px; border-radius:4px; max-height:75px; overflow-y:auto;"></div>
 
       <div style="display:flex; gap:15px; margin-top:12px;">
-          <!-- Container für die nebeneinander liegenden Bit-Tiefen-Spalten -->
           <div style="flex:2; display:flex; flex-direction:column;">
               <h4 style="margin:0 0 6px 0; color:#ff6b6b; font-size:13px;">Top 10 Fehler (Nach Bit-Tiefe separiert)</h4>
               <div id="builder-mse-list" style="display:flex; gap:10px; overflow-x:auto; padding-bottom:5px;"></div>
@@ -226,8 +239,8 @@
           <div style="display:flex; align-items:center; gap:8px;">
               <span style="font-size:11px; color:#ccc;" id="builder-current-metric-label">Nutzt globale Metrik</span>
               <button id="btn-sort-slots" style="background:#17a2b8; color:#fff;" title="Sortiert Slots nach Häufigkeit (seltenste rechts)">Slots sortieren</button>
-              <button id="btn-builder-auto" style="background:#28a745; color:#fff;">Offset Auto-Füllen</button>
-              <button id="btn-reset-slots" style="background:#6c757d; color:#fff;" title="Alle Slots (außer Slot 0) auf Grau zurücksetzen">Slots zurücksetzen</button>
+              <button id="btn-builder-auto" style="background:#28a745; color:#fff;">Auto-Füllen</button>
+              <button id="btn-reset-slots" style="background:#6c757d; color:#fff;" title="Alle Slots (außer Slot 0) auf schwarz zurücksetzen">Slots zurücksetzen</button>
           </div>
       </div>
    </div>

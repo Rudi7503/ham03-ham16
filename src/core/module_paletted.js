@@ -1,13 +1,17 @@
 import { HAM_CONFIGS } from '../codecs/configs.js';
 import { clamp, get_yuv_dist, get_yuv_dist_weight, get_rgb_dist, get_yuv_dist_weight_heavy, get_rgb_abs_dist, get_redmean_dist, get_oklab_dist } from '../codecs/utils.js';
 
-function getMetricDist(metric, r1, g1, b1, r2, g2, b2) {
-    if (metric === 'oklab') return get_oklab_dist(r1, g1, b1, r2, g2, b2);
-    // ... andere Metriken ...
-    return get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
+// Funktions-Pointer zurückgeben, statt bei jedem Aufruf Strings zu vergleichen
+function getMetricDistFunc(metric) {
+    if (metric === 'oklab') return get_oklab_dist;
+    if (metric === 'redmean') return get_redmean_dist;
+    if (metric === 'yuv_weight_heavy') return get_yuv_dist_weight_heavy;
+    if (metric === 'rgb') return get_rgb_dist;
+    if (metric === 'rgb_ABS') return get_rgb_abs_dist;
+    if (metric === 'yuv') return get_yuv_dist;
+    return get_yuv_dist_weight;
 }
 
-// 0 mapped auf +1, 1 mapped auf -1 für HAM01, HAM02, HAM03
 const CHANNEL_DEFS = {
     "HAM01": { r: [1, -1], g: [1, -1], b: [1, -1] },
     "HAM02": { r: [1, -1], g: [1, -1], b: [1, -1] },
@@ -18,45 +22,35 @@ const CHANNEL_DEFS = {
     "HAM08_PAL": { r: [-2, -1, 1, 2], g: [-2, -1, 1, 2], b: [-2, -1, 1, 2] }
 };
 
-export async function encodePaletted(origData, imgW, imgH, format, stepVal, paletteRAM, offset, strategy="both", metric="yuv_weight", max_depth=1, progressCallback=null, startOverride=0, endOverride=0, hybridPercent=5.0) {
+export async function encodePaletted(origData, imgW, imgH, format, stepVal, paletteRAM, offset, strategy="greedy", metric="yuv_weight", progressCallback=null, startOverride=0, endOverride=0, errorThreshold = 15.0, beamWidth = 6) {
     let totalPixels = imgW * imgH;
     let commands = new Array(totalPixels);
-    let pixelStates = new Array(totalPixels);
     let config = HAM_CONFIGS[format];
-    
+
     let simStart = startOverride || 0;
     let simEnd = endOverride || totalPixels;
 
     paletteRAM[0] = 0; paletteRAM[1] = 0; paletteRAM[2] = 0;
 
-    function findBestBranch(x, y, c_acc, metric) {
-        let pIdx = y * imgW + x;
-        let origIdx = pIdx * 4;
-        let tr = origData[origIdx], tg = origData[origIdx+1], tb = origData[origIdx+2];
+    let chunkSize = (config.isMixed && config.sequence) ? config.sequence.length : 1;
+    let totalChunksCount = 0;
+    let skippedChunksCount = 0;
+    let optimizedOverlay = new Uint8Array(totalPixels);
 
-        let effFormat = config.isMixed ? config.sequence[pIdx % config.sequence.length] : format;
-        let effConfig = HAM_CONFIGS[effFormat] || { slotsPerBank: 0, hasTurbo: false };
-        
-        let bestDist = Infinity;
-        let bestCmd = null;
-        let bestR, bestG, bestB;
+    // OPTIMIERUNG 1: Metrik-Funktion einmalig auflösen
+    const distFunc = getMetricDistFunc(metric);
 
-        let slots = effConfig.slotsPerBank || 0;
-        
-        for (let s = 0; s < slots; s++) {
-            let absSlot = (offset + s) % 256;
-            let r = paletteRAM[absSlot*3], g = paletteRAM[absSlot*3+1], b = paletteRAM[absSlot*3+2];
-            let dist = getMetricDist(metric, tr, tg, tb, r, g, b);
-            
-            if (dist === 0) return { cmd: { isAnchor: true, format: effFormat, anchorIdx: s }, r, g, b };
-            if (dist < bestDist) { bestDist = dist; bestCmd = { isAnchor: true, format: effFormat, anchorIdx: s }; bestR = r; bestG = g; bestB = b; }
-        }
-
-        let hasTurbo = effConfig.hasTurbo || false;
-        let multipliers = hasTurbo ? [1, 4] : [1];
-        let rChan = CHANNEL_DEFS[effFormat]?.r || [-1, 1];
-        let gChan = CHANNEL_DEFS[effFormat]?.g || [-1, 1];
-        let bChan = CHANNEL_DEFS[effFormat]?.b || [-1, 1];
+    // OPTIMIERUNG 2: Delta-Branches einmalig vorberechnen (spart Millionen von IF-Abfragen)
+    let deltaCache = {};
+    let formatsToCache = config.isMixed ? config.sequence : [format];
+    
+    for (let fmt of formatsToCache) {
+        let effConfig = HAM_CONFIGS[fmt] || { slotsPerBank: 0, hasTurbo: false };
+        let multipliers = effConfig.hasTurbo ? [1, 4] : [1];
+        let rChan = CHANNEL_DEFS[fmt]?.r || [-1, 1];
+        let gChan = CHANNEL_DEFS[fmt]?.g || [-1, 1];
+        let bChan = CHANNEL_DEFS[fmt]?.b || [-1, 1];
+        let cache = [];
 
         for (let m of multipliers) {
             let sr = stepVal.r * m, sg = stepVal.g * m, sb = stepVal.b * m;
@@ -64,39 +58,177 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
                 for (let gi = 0; gi < gChan.length; gi++) {
                     for (let bi = 0; bi < bChan.length; bi++) {
                         
-                        // ZWANGSKOPPLUNG der Kanäle für die kleinen Bit-Formate
-                        if (effFormat === "HAM01" && (gi !== ri || bi !== ri)) continue;
-                        if ((effFormat === "HAM02" || effFormat === "HAM03") && (bi !== ri)) continue;
+                        if (fmt === "HAM01" && (gi !== ri || bi !== ri)) continue;
+                        if ((fmt === "HAM02" || fmt === "HAM03") && (bi !== ri)) continue;
 
-                        let nr = clamp(c_acc.r + rChan[ri] * sr, 0, 255);
-                        let ng = clamp(c_acc.g + gChan[gi] * sg, 0, 255);
-                        let nb = clamp(c_acc.b + bChan[bi] * sb, 0, 255);
-                        
-                        let dist = getMetricDist(metric, tr, tg, tb, nr, ng, nb);
-                        
-                        if (dist === 0) return { cmd: { isAnchor: false, format: effFormat, isTurbo: (m===4), rIndex: ri, gIndex: gi, bIndex: bi }, r: nr, g: ng, b: nb };
-                        if (dist < bestDist) { bestDist = dist; bestCmd = { isAnchor: false, format: effFormat, isTurbo: (m===4), rIndex: ri, gIndex: gi, bIndex: bi }; bestR = nr; bestG = ng; bestB = nb; }
+                        cache.push({
+                            cmd: { isAnchor: false, format: fmt, isTurbo: (m===4), rIndex: ri, gIndex: gi, bIndex: bi },
+                            dr: rChan[ri] * sr,
+                            dg: gChan[gi] * sg,
+                            db: bChan[bi] * sb
+                        });
                     }
                 }
             }
         }
-        return { cmd: bestCmd, r: bestR, g: bestG, b: bestB };
-    }
-    
-    // ... encodeSpan & Lookahead bleiben identisch wie zuvor ...
-    async function encodeSpan(startPx, endPx, initialAcc, depth, phaseName) {
-        let acc = { ...initialAcc };
-        for (let i = startPx; i < endPx; i++) {
-            let best = findBestBranch(i % imgW, Math.floor(i / imgW), acc, metric);
-            commands[i] = best.cmd;
-            acc = { r: best.r, g: best.g, b: best.b };
-            pixelStates[i] = acc;
-        }
-        return acc;
+        deltaCache[fmt] = cache;
     }
 
-    await encodeSpan(0, totalPixels, { r: 127, g: 127, b: 127 }, max_depth, "Encoding");
-    return commands;
+    // Extrem verschlankte Branch-Generierung
+    function getBranches(pxIdx, c_acc) {
+        let branches = [];
+        let effFormat = config.isMixed ? config.sequence[pxIdx % config.sequence.length] : format;
+        let effConfig = HAM_CONFIGS[effFormat] || { slotsPerBank: 0 };
+        let slots = effConfig.slotsPerBank || 0;
+
+        if (strategy !== 'delta_only') {
+            for (let s = 0; s < slots; s++) {
+                let absSlot = (offset + s) % 256;
+                branches.push({ 
+                    cmd: { isAnchor: true, format: effFormat, anchorIdx: s }, 
+                    r: paletteRAM[absSlot*3], 
+                    g: paletteRAM[absSlot*3+1], 
+                    b: paletteRAM[absSlot*3+2] 
+                });
+            }
+        }
+
+        if (strategy !== 'anchor_only') {
+            let cachedDeltas = deltaCache[effFormat];
+            for (let i = 0; i < cachedDeltas.length; i++) {
+                let d = cachedDeltas[i];
+                branches.push({
+                    cmd: d.cmd,
+                    r: clamp(c_acc.r + d.dr, 0, 255),
+                    g: clamp(c_acc.g + d.dg, 0, 255),
+                    b: clamp(c_acc.b + d.db, 0, 255)
+                });
+            }
+        }
+        
+        if (branches.length === 0) branches.push({ cmd: { isAnchor: true, format: effFormat, anchorIdx: 0 }, r: c_acc.r, g: c_acc.g, b: c_acc.b });
+        return branches;
+    }
+
+    let acc = { r: 127, g: 127, b: 127 };
+    let forceLookahead = false;
+
+    for (let i = simStart; i < simEnd; i += chunkSize) {
+        let actualChunkSize = Math.min(chunkSize, simEnd - i);
+        let greedyCost = 0;
+        let currentGreedyAcc = { ...acc };
+        let greedyPath = [];
+
+        totalChunksCount++;
+
+        // 1. Greedy Pre-Pass
+        for (let c = 0; c < actualChunkSize; c++) {
+            let pxIdx = i + c;
+            let branches = getBranches(pxIdx, currentGreedyAcc);
+            let bestDist = Infinity;
+            let bestBranch = branches[0];
+
+            let tr = origData[pxIdx*4], tg = origData[pxIdx*4+1], tb = origData[pxIdx*4+2];
+
+            for (let b of branches) {
+                let dist = distFunc(tr, tg, tb, b.r, b.g, b.b);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestBranch = b;
+                }
+            }
+            greedyCost += bestDist;
+            currentGreedyAcc = { r: bestBranch.r, g: bestBranch.g, b: bestBranch.b };
+            greedyPath.push(bestBranch);
+        }
+
+        let bestChunkCmds = greedyPath.map(b => b.cmd);
+        let finalAcc = currentGreedyAcc;
+        let greedyAvgCost = greedyCost / actualChunkSize;
+
+        let startsWithAnchor = greedyPath[0].cmd.isAnchor;
+        let wasOptimized = false;
+        
+        let needsLookahead = (greedyAvgCost > errorThreshold) || (forceLookahead && !startsWithAnchor);
+
+        // 2. Beschleunigte Suche (Beam Search)
+        if (strategy === 'lookahead_chunk' && actualChunkSize > 1 && needsLookahead) {
+            wasOptimized = true;
+            let bestDfsCost = greedyCost;
+            let bestChunkPath = greedyPath;
+
+            let currentBeam = [{ cost: 0, acc: { ...acc }, path: [] }];
+
+            for (let c = 0; c < actualChunkSize; c++) {
+                let pxIdx = i + c;
+                let tr = origData[pxIdx*4], tg = origData[pxIdx*4+1], tb = origData[pxIdx*4+2];
+                let nextBeam = [];
+
+                for (let node of currentBeam) {
+                    let branches = getBranches(pxIdx, node.acc);
+
+                    for (let b of branches) {
+                        let dist = distFunc(tr, tg, tb, b.r, b.g, b.b);
+                        let newCost = node.cost + dist;
+
+                        if (newCost < bestDfsCost) {
+                            nextBeam.push({
+                                cost: newCost,
+                                acc: { r: b.r, g: b.g, b: b.b },
+                                path: [...node.path, b]
+                            });
+                        }
+                    }
+                }
+
+                if (nextBeam.length === 0) break;
+
+                nextBeam.sort((a, b) => a.cost - b.cost);
+                currentBeam = nextBeam.slice(0, beamWidth);
+
+                if (c === actualChunkSize - 1 && currentBeam.length > 0) {
+                    if (currentBeam[0].cost < bestDfsCost) {
+                        bestDfsCost = currentBeam[0].cost;
+                        bestChunkPath = currentBeam[0].path;
+                    }
+                }
+            }
+
+            if (bestChunkPath && bestChunkPath.length === actualChunkSize) {
+                bestChunkCmds = bestChunkPath.map(b => b.cmd);
+                finalAcc = { r: bestChunkPath[actualChunkSize-1].r, g: bestChunkPath[actualChunkSize-1].g, b: bestChunkPath[actualChunkSize-1].b };
+            }
+            
+            forceLookahead = true; 
+        } else {
+            skippedChunksCount++;
+            forceLookahead = false; 
+        }
+
+        for (let c = 0; c < actualChunkSize; c++) {
+            let pxIdx = i + c;
+            commands[pxIdx] = bestChunkCmds[c];
+            optimizedOverlay[pxIdx] = wasOptimized ? 1 : 0;
+        }
+        acc = finalAcc;
+
+        if (progressCallback && i % (imgW * 4) === 0) {
+            progressCallback(`Encoding (${strategy})`, i, simEnd);
+            await new Promise(r => setTimeout(r, 0));
+        }
+    }
+
+    let skipPercent = totalChunksCount > 0 ? ((skippedChunksCount / totalChunksCount) * 100).toFixed(1) : 0;
+    
+    return {
+        commands,
+        stats: {
+            totalChunks: totalChunksCount,
+            skippedChunks: skippedChunksCount,
+            skipPercent: parseFloat(skipPercent)
+        },
+        overlay: optimizedOverlay
+    };
 }
 
 function getCmdVal(cmd) {
@@ -104,18 +236,13 @@ function getCmdVal(cmd) {
     let fmt = cmd.format;
     
     if (fmt === "HAM01") {
-        bits = 1;
-        v = cmd.rIndex & 1; // 0 für +1, 1 für -1
+        bits = 1; v = cmd.rIndex & 1;
     } else if (fmt === "HAM02") {
-        bits = 2;
-        v = ((cmd.rIndex & 1) << 1) | (cmd.gIndex & 1); // Bit 1 = R/B, Bit 0 = G
+        bits = 2; v = ((cmd.rIndex & 1) << 1) | (cmd.gIndex & 1);
     } else if (fmt === "HAM03") {
         bits = 3;
-        if (cmd.isAnchor) {
-            v = 4 | (cmd.anchorIdx & 3); // Bit 2 (Modus) = 1
-        } else {
-            v = ((cmd.rIndex & 1) << 1) | (cmd.gIndex & 1); // Bit 2 = 0, Bit 1 = R/B, Bit 0 = G
-        }
+        if (cmd.isAnchor) v = 4 | (cmd.anchorIdx & 3);
+        else v = ((cmd.rIndex & 1) << 1) | (cmd.gIndex & 1);
     } else if (fmt === "HAM04") {
         bits = 4;
         if (cmd.isAnchor) v = 8 | (cmd.anchorIdx & 7);
@@ -141,7 +268,7 @@ export function packPaletted(commands, format) {
     let out = [];
     let pixelsPerWord = config.sequence.length;
     for (let i = 0; i < commands.length; i += pixelsPerWord) {
-        let w32 = 0, shift = 32; // Oder 24 Bit je nach Sequenz-Länge
+        let w32 = 0, shift = 32; 
         for (let j = 0; j < pixelsPerWord; j++) {
             if (i + j >= commands.length) break;
             let { v, bits } = getCmdVal(commands[i + j]);
@@ -162,17 +289,12 @@ export function unpackPaletted(packedData, format, totalPixels) {
 
     function parseVal(v, fmt) {
         if (fmt === "HAM01") {
-            let dir = v & 1;
-            return { isAnchor: false, format: fmt, rIndex: dir, gIndex: dir, bIndex: dir };
+            let dir = v & 1; return { isAnchor: false, format: fmt, rIndex: dir, gIndex: dir, bIndex: dir };
         } else if (fmt === "HAM02") {
-            let rbDir = (v >> 1) & 1;
-            let gDir = v & 1;
-            return { isAnchor: false, format: fmt, rIndex: rbDir, gIndex: gDir, bIndex: rbDir };
+            let rbDir = (v >> 1) & 1, gDir = v & 1; return { isAnchor: false, format: fmt, rIndex: rbDir, gIndex: gDir, bIndex: rbDir };
         } else if (fmt === "HAM03") {
             if (v & 4) return { isAnchor: true, format: fmt, anchorIdx: v & 3 };
-            let rbDir = (v >> 1) & 1;
-            let gDir = v & 1;
-            return { isAnchor: false, format: fmt, isTurbo: false, rIndex: rbDir, gIndex: gDir, bIndex: rbDir };
+            let rbDir = (v >> 1) & 1, gDir = v & 1; return { isAnchor: false, format: fmt, isTurbo: false, rIndex: rbDir, gIndex: gDir, bIndex: rbDir };
         } else if (fmt === "HAM04") {
             if (v & 8) return { isAnchor: true, format: fmt, anchorIdx: v & 7 };
             return { isAnchor: false, format: fmt, isTurbo: false, rIndex: (v >> 2) & 1, gIndex: (v >> 1) & 1, bIndex: v & 1 };

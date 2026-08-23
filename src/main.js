@@ -5,18 +5,23 @@ import { encodeHam12_16, decodeHam12_16, packHam12_16, unpackHam12_16 } from './
 import { encodePaletted, decodePaletted, packPaletted, unpackPaletted } from './core/module_paletted.js';
 import { debugRoundtripHam12_16, debugRoundtripPaletted } from './core/debugger.js';
 import { computeDetailedAnalysis, errorBins } from './core/analysis.js';
+import { generateFeedbackTarget } from './core/feedback.js';
 
 let currentImgW = 0, currentImgH = 0, totalPixels = 0;
 let originalImageData = null, decodedImageData = null;
-let currentFormat = "HAM_32Bit_44444444"; 
+let currentFormat = "HAM_32BIT_63436343"; 
 let latestPackedData = null, latestCommandArray = null;
 let globalPaletteRAM = new Uint8Array(256 * 3);
 let currentImgFileName = "image";
+let latestErrorOverlayData = null; // Gespeicherte Fehlerkarte für den Live-Toggle
 
 const formatSelect = document.getElementById('format');
 const encodeStrategySelect = document.getElementById('encode-strategy');
 const encodeMetricSelect = document.getElementById('encode-metric');
-const hypPercentInp = document.getElementById('hybrid-percent');
+
+const feedbackIterInp = document.getElementById('feedback-iter');
+const feedbackLambdaInp = document.getElementById('feedback-lambda');
+const feedbackEpsilonInp = document.getElementById('feedback-epsilon');
 
 const hamStepR = document.getElementById('ham-step-r');
 const hamStepG = document.getElementById('ham-step-g');
@@ -42,6 +47,24 @@ const autoMinStepInp = document.getElementById('auto-min-step');
 const autoMaxStepInp = document.getElementById('auto-max-step');
 const autoStepBody = document.getElementById('auto-step-body');
 const autoStepStatus = document.getElementById('auto-step-status');
+
+const lookaheadThresholdInp = document.getElementById('lookahead-threshold');
+const skipPercentValEl = document.getElementById('skip-percent-val');
+const chkErrorOverlay = document.getElementById('chk-error-overlay');
+
+// ==========================================
+// LIVE-TOGGLE FÜR FEHLER-OVERLAY
+// ==========================================
+if (chkErrorOverlay) {
+    chkErrorOverlay.addEventListener('change', (e) => {
+        if (!decodedImageData || !ctxDecoded) return;
+        if (e.target.checked && latestErrorOverlayData) {
+            ctxDecoded.putImageData(latestErrorOverlayData, 0, 0);
+        } else {
+            ctxDecoded.putImageData(decodedImageData, 0, 0);
+        }
+    });
+}
 
 // ==========================================
 // GLOBALE VARIABLEN FÜR ROI (REGION OF INTEREST)
@@ -267,6 +290,9 @@ function updateProgress(phase, current, total) {
     if (sText) sText.innerText = `${phase}: ${pct}%`;
 }
 
+// ============================================================================
+// AUTO-REENCODE
+// ============================================================================
 async function triggerAutoReencode() {
     if (!originalImageData) return;
     ensureSlotZeroBlack();
@@ -277,21 +303,73 @@ async function triggerAutoReencode() {
     }
 
     let step = getGlobalStep();
-    let strategy = encodeStrategySelect ? encodeStrategySelect.value : "both";
+    let strategy = encodeStrategySelect ? encodeStrategySelect.value : "greedy";
     let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
-    let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
-    let hybridPercent = hypPercentInp ? (parseFloat(hypPercentInp.value) || 5.0) : 5.0;
-
     let offset = getGlobalOffset();
-    latestCommandArray = await encodePaletted(
-        originalImageData.data, currentImgW, currentImgH, currentFormat, step, globalPaletteRAM, offset, 
-        strategy, metric, max_depth, null, 0, 0, hybridPercent
-    );
-    latestPackedData = packPaletted(latestCommandArray, currentFormat);
-    let pixels = decodePaletted(latestCommandArray, currentImgW, currentImgH, step, globalPaletteRAM, offset);
-    decodedImageData = new ImageData(pixels, currentImgW, currentImgH);
-    ctxDecoded.putImageData(decodedImageData, 0, 0);
+
+    let iterations = feedbackIterInp ? (parseInt(feedbackIterInp.value) || 1) : 1;
+    let lambda = feedbackLambdaInp ? (parseFloat(feedbackLambdaInp.value) || 0.4) : 0.4;
+    let epsilon = feedbackEpsilonInp ? (parseFloat(feedbackEpsilonInp.value) || 0.02) : 0.02;
+
+    let currentTargetData = new Uint8ClampedArray(originalImageData.data);
+    let decodedPixels = null;
+    let threshold = lookaheadThresholdInp ? (parseFloat(lookaheadThresholdInp.value) || 15.0) : 15.0;
+
+    for (let iter = 1; iter <= iterations; iter++) {
+        if (statusDiv && iterations > 1) {
+            statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Iteration ${iter}/${iterations} codiert...</span>`;
+            await new Promise(r => setTimeout(r, 10));
+        }
+
+        let encodeRes = await encodePaletted(
+            currentTargetData, currentImgW, currentImgH, currentFormat, step, globalPaletteRAM, offset, 
+            strategy, metric, null, 0, 0, threshold
+        );
+        
+        latestCommandArray = encodeRes.commands;
+        latestPackedData = packPaletted(latestCommandArray, currentFormat);
+        decodedPixels = decodePaletted(latestCommandArray, currentImgW, currentImgH, step, globalPaletteRAM, offset);
+
+        if (skipPercentValEl) {
+            skipPercentValEl.innerText = encodeRes.stats.skipPercent;
+        }
+
+        decodedImageData = new ImageData(decodedPixels, currentImgW, currentImgH);
+        
+        // Canvas entsprechend der Checkbox updaten
+        if (chkErrorOverlay && chkErrorOverlay.checked && latestErrorOverlayData) {
+            ctxDecoded.putImageData(latestErrorOverlayData, 0, 0);
+        } else {
+            ctxDecoded.putImageData(decodedImageData, 0, 0);
+        }
+
+        if (iter < iterations) {
+            if (statusDiv) {
+                statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Berechne Guided Filter (Kanten-Schutz)...</span>`;
+                await new Promise(r => setTimeout(r, 10));
+            }
+            
+            currentTargetData = generateFeedbackTarget(
+                originalImageData.data, decodedPixels, currentImgW, currentImgH, lambda, epsilon, false
+            );
+        }
+    }
+
+    // Fehlerkarte für Auto-Reencode aktualisieren
+    if (originalImageData && decodedPixels) {
+        let overlayResult = generateFeedbackTarget(
+            originalImageData.data, decodedPixels, currentImgW, currentImgH, lambda, epsilon, true
+        );
+        latestErrorOverlayData = new ImageData(overlayResult.errorMap, currentImgW, currentImgH);
+        if (chkErrorOverlay && chkErrorOverlay.checked) {
+            ctxDecoded.putImageData(latestErrorOverlayData, 0, 0);
+        }
+    }
+
     btnSave.disabled = false;
+    if (statusDiv) {
+        statusDiv.innerHTML = `<span style='color:#28a745; font-weight:bold;'>✅ Codierung abgeschlossen!</span>`;
+    }
 }
 
 function handleFormatChange() {
@@ -386,6 +464,9 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
     reader.readAsDataURL(file);
 });
 
+// ============================================================================
+// HAUPT-ENCODER
+// ============================================================================
 if (btnEncode) btnEncode.addEventListener('click', async () => {
     if (!currentImgW) return;
     btnEncode.disabled = true; btnSave.disabled = true; btnDebugRoundtrip.disabled = true;
@@ -394,30 +475,77 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
     let step = getGlobalStep();
     let is16BitClass = (currentFormat === "HAM12" || currentFormat === "HAM16");
     
-    let strategy = encodeStrategySelect ? encodeStrategySelect.value : "both";
+    let strategy = encodeStrategySelect ? encodeStrategySelect.value : "greedy";
     let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
-    let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
-    let hybridPercent = hypPercentInp ? (parseFloat(hypPercentInp.value) || 5.0) : 5.0;
+
+    let iterations = feedbackIterInp ? (parseInt(feedbackIterInp.value) || 1) : 1;
+    let lambda = feedbackLambdaInp ? (parseFloat(feedbackLambdaInp.value) || 0.4) : 0.4;
+    let epsilon = feedbackEpsilonInp ? (parseFloat(feedbackEpsilonInp.value) || 0.02) : 0.02;
 
     ensureSlotZeroBlack();
 
-    if (is16BitClass) {
-        latestCommandArray = await encodeHam12_16(originalImageData.data, currentImgW, currentImgH, currentFormat, step, strategy, metric, max_depth, updateProgress, 0, 0, hybridPercent);
-        latestPackedData = packHam12_16(latestCommandArray, currentFormat);
-        let pixels = decodeHam12_16(latestCommandArray, currentImgW, currentImgH, step);
-        decodedImageData = new ImageData(pixels, currentImgW, currentImgH);
-    } else {
-        let offset = getGlobalOffset();
-        latestCommandArray = await encodePaletted(originalImageData.data, currentImgW, currentImgH, currentFormat, step, globalPaletteRAM, offset, strategy, metric, max_depth, updateProgress, 0, 0, hybridPercent);
-        latestPackedData = packPaletted(latestCommandArray, currentFormat);
-        let pixels = decodePaletted(latestCommandArray, currentImgW, currentImgH, step, globalPaletteRAM, offset);
-        decodedImageData = new ImageData(pixels, currentImgW, currentImgH);
+    let currentTargetData = new Uint8ClampedArray(originalImageData.data);
+    let decodedPixels = null;
+
+    for (let iter = 1; iter <= iterations; iter++) {
+        let phasePrefix = iterations > 1 ? `[Iter ${iter}/${iterations}] ` : "";
+        updateProgress(`${phasePrefix}Starte Codierung...`, 0, 100);
+
+        if (is16BitClass) {
+            latestCommandArray = await encodeHam12_16(currentTargetData, currentImgW, currentImgH, currentFormat, step, strategy, metric, 1, updateProgress, 0, 0);
+            latestPackedData = packHam12_16(latestCommandArray, currentFormat);
+            decodedPixels = decodeHam12_16(latestCommandArray, currentImgW, currentImgH, step);
+        } else {
+            let offset = getGlobalOffset();
+            let threshold = lookaheadThresholdInp ? (parseFloat(lookaheadThresholdInp.value) || 15.0) : 15.0;
+
+            let encodeRes = await encodePaletted(
+                currentTargetData, currentImgW, currentImgH, currentFormat, step, globalPaletteRAM, offset, 
+                strategy, metric, updateProgress, 0, 0, threshold
+            );
+            
+            latestCommandArray = encodeRes.commands;
+            latestPackedData = packPaletted(latestCommandArray, currentFormat);
+            decodedPixels = decodePaletted(latestCommandArray, currentImgW, currentImgH, step, globalPaletteRAM, offset);
+
+            if (skipPercentValEl) {
+                skipPercentValEl.innerText = encodeRes.stats.skipPercent;
+            }
+        }
+
+        decodedImageData = new ImageData(decodedPixels, currentImgW, currentImgH);
+        
+        // Canvas updaten
+        if (chkErrorOverlay && chkErrorOverlay.checked && latestErrorOverlayData) {
+            ctxDecoded.putImageData(latestErrorOverlayData, 0, 0);
+        } else {
+            ctxDecoded.putImageData(decodedImageData, 0, 0);
+        }
+        updateStatusTextDimAndColors();
+
+        if (iter < iterations) {
+            updateProgress(`${phasePrefix}Berechne Guided Filter...`, 50, 100);
+            await new Promise(r => setTimeout(r, 10));
+            
+            currentTargetData = generateFeedbackTarget(
+                originalImageData.data, decodedPixels, currentImgW, currentImgH, lambda, epsilon, false
+            );
+        }
+    }
+
+    // Fehlerkarte für den Live-Toggle berechnen
+    if (originalImageData && decodedPixels) {
+        let overlayResult = generateFeedbackTarget(
+            originalImageData.data, decodedPixels, currentImgW, currentImgH, lambda, epsilon, true
+        );
+        latestErrorOverlayData = new ImageData(overlayResult.errorMap, currentImgW, currentImgH);
+        
+        if (chkErrorOverlay && chkErrorOverlay.checked) {
+            ctxDecoded.putImageData(latestErrorOverlayData, 0, 0);
+        }
     }
 
     updateProgress("Fertig", 100, 100);
-    ctxDecoded.putImageData(decodedImageData, 0, 0);
-    updateStatusTextDimAndColors();
-    
     btnEncode.disabled = false; btnSave.disabled = false; btnDebugRoundtrip.disabled = false;
 });
 
@@ -434,7 +562,7 @@ if (btnSave) btnSave.addEventListener('click', () => {
     
     u8.set([72, 65, 77, 33], 0); 
     view.setUint8(4, 3);
-    view.setUint8(5, 0); // Little Endian
+    view.setUint8(5, 0);
     view.setUint16(6, currentImgW, true);
     view.setUint16(8, currentImgH, true);
     view.setUint8(10, fmtBytes.length);
@@ -511,7 +639,7 @@ if (btnDebugRoundtrip) btnDebugRoundtrip.addEventListener('click', async () => {
     
     let fmt = formatSelect.value;
     let is16 = (fmt === "HAM12" || fmt === "HAM16");
-    let strategy = encodeStrategySelect ? encodeStrategySelect.value : "both";
+    let strategy = encodeStrategySelect ? encodeStrategySelect.value : "greedy";
     let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
     
     if (is16) await debugRoundtripHam12_16(originalImageData.data, currentImgW, currentImgH, fmt, getGlobalStep(), strategy, metric);
@@ -586,7 +714,6 @@ function generateTop10Html(top10Array) {
             let sollR = e.r1, sollG = e.g1, sollB = e.b1;
             let istR = e.r2, istG = e.g2, istB = e.b2;
             let formattedMse = Math.round(e.mse).toLocaleString('de-DE');
-            
             let typeBadge = e.sortType ? `<span style="font-size:9px; background:#222; padding:2px 4px; border-radius:3px; color:#aaa; margin-right:4px; border:1px solid #444;" title="Warum dieser Fehler angezeigt wird">${e.sortType}</span>` : '';
 
             return `
@@ -820,7 +947,7 @@ if (btnBuilderCancel && builderModal) {
 }
 
 // ============================================================================
-// AUTO-FILL & NACHOPTIMIERUNG (Ausschließlich mit triggerAutoReencode)
+// AUTO-FILL & NACHOPTIMIERUNG
 // ============================================================================
 if (btnBuilderAuto) {
     btnBuilderAuto.addEventListener('click', async () => {
@@ -847,12 +974,11 @@ if (btnBuilderAuto) {
                 lastEnd = end;
             }
         }
-        sortGroups.reverse(); // Bottom-Up
+        sortGroups.reverse(); 
 
         let statusDiv = document.getElementById('builder-instruction') || document.getElementById('builder-status');
         const analysisModule = await import('./core/analysis.js');
 
-        // SCHRITT 1: Leere Slots von unten nach oben befüllen
         for (let group of sortGroups) {
             let targetBits = 8;
             if (group.end <= 3) targetBits = 3;
@@ -868,7 +994,7 @@ if (btnBuilderAuto) {
                 let g = globalPaletteRAM[absSlot * 3 + 1];
                 let b = globalPaletteRAM[absSlot * 3 + 2];
                 
-                if (r !== 0 || g !== 0 || b !== 0) continue; // Belegt überspringen
+                if (r !== 0 || g !== 0 || b !== 0) continue; 
 
                 if (statusDiv) {
                     statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Fülle Slot ${i} (${targetBits}-Bit Pool)...</span>`;
@@ -877,20 +1003,53 @@ if (btnBuilderAuto) {
                 let stats = analysisModule.computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
                 let bitPool = stats.global.byBitDepth[targetBits] || stats.global.top10;
                 
+                function isColorInPalette(r, g, b, threshold = 8) {
+                    for (let slot = 0; slot < 256; slot++) {
+                        let pr = globalPaletteRAM[slot * 3];
+                        let pg = globalPaletteRAM[slot * 3 + 1];
+                        let pb = globalPaletteRAM[slot * 3 + 2];
+                        let dist = Math.abs(r - pr) + Math.abs(g - pg) + Math.abs(b - pb);
+                        if (dist <= threshold) return true;
+                    }
+                    return false;
+                }
+
                 let candMenge = null;
+                let candSpitze = null;
+
                 for (let err of bitPool) {
-                    if (!candMenge && err.sortType === "⚖️ Menge") {
-                        candMenge = { r: err.r1, g: err.g1, b: err.b1 };
-                        break;
+                    if (isColorInPalette(err.r1, err.g1, err.b1, 8)) continue;
+
+                    if (!candMenge && err.sortType === "⚖️ Menge") candMenge = { r: err.r1, g: err.g1, b: err.b1, mse: err.mse };
+                    if (!candSpitze && err.sortType === "🔥 Spitze") candSpitze = { r: err.r1, g: err.g1, b: err.b1, mse: err.mse };
+                    if (candMenge && candSpitze) break;
+                }
+
+                if (!candMenge && !candSpitze) {
+                    for (let err of bitPool) {
+                        if (!isColorInPalette(err.r1, err.g1, err.b1, 0)) {
+                            candMenge = { r: err.r1, g: err.g1, b: err.b1, mse: err.mse };
+                            break;
+                        }
                     }
                 }
-                if (!candMenge && bitPool.length > 0) candMenge = { r: bitPool[0].r1, g: bitPool[0].g1, b: bitPool[0].b1 };
-                if (!candMenge) continue;
 
-                // Direkt in den RAM und echtes Reencode triggern
-                globalPaletteRAM[absSlot * 3] = candMenge.r;
-                globalPaletteRAM[absSlot * 3 + 1] = candMenge.g;
-                globalPaletteRAM[absSlot * 3 + 2] = candMenge.b;
+                if (!candMenge && !candSpitze) continue;
+
+                let chosenCandidate = null;
+                if (candMenge && candSpitze) {
+                    if (candMenge.mse < 2.5 * candSpitze.mse) {
+                        chosenCandidate = candSpitze;
+                    } else {
+                        chosenCandidate = candMenge;
+                    }
+                } else {
+                    chosenCandidate = candSpitze || candMenge;
+                }
+
+                globalPaletteRAM[absSlot * 3]     = chosenCandidate.r;
+                globalPaletteRAM[absSlot * 3 + 1] = chosenCandidate.g;
+                globalPaletteRAM[absSlot * 3 + 2] = chosenCandidate.b;
 
                 selectedTargetSlot = { index: i, absSlot: absSlot };
                 await triggerAutoReencode(); 
@@ -900,12 +1059,10 @@ if (btnBuilderAuto) {
             }
         }
 
-        // SCHRITT 2: Nachoptimierung der Wackelkandidaten über echtes Reencode (Battle)
         if (statusDiv) {
             statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Starte Wackelkandidaten-Nachoptimierung...</span>`;
         }
 
-        // Nutzung der Slots ermitteln
         let totalAnchorUsage = new Array(256).fill(0);
         if (latestCommandArray) {
             let imgW = originalImageData.width;
@@ -962,44 +1119,26 @@ if (btnBuilderAuto) {
                 if (!candMenge) continue;
                 if (!candSpitze) candSpitze = candMenge;
 
-                // Wir messen die echte Bildqualität (avgYuv) nach echtem Reencode per Direktvergleich:
-                let baseDecodedData = new Uint8ClampedArray(decodedImageData.data);
                 let baseAvgYuv = stats.global.avgYuv;
-
-                // Test B: Mit Menge
                 let backupR = globalPaletteRAM[absSlot*3], backupG = globalPaletteRAM[absSlot*3+1], backupB = globalPaletteRAM[absSlot*3+2];
                 
-                globalPaletteRAM[absSlot * 3] = candMenge.r; 
-                globalPaletteRAM[absSlot * 3 + 1] = candMenge.g; 
-                globalPaletteRAM[absSlot * 3 + 2] = candMenge.b;
+                globalPaletteRAM[absSlot * 3] = candMenge.r; globalPaletteRAM[absSlot * 3 + 1] = candMenge.g; globalPaletteRAM[absSlot * 3 + 2] = candMenge.b;
                 await triggerAutoReencode();
                 let statsMenge = analysisModule.computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
                 let scoreMenge = statsMenge.global.avgYuv;
 
-                // Test C: Mit Spitze
-                globalPaletteRAM[absSlot * 3] = candSpitze.r; 
-                globalPaletteRAM[absSlot * 3 + 1] = candSpitze.g; 
-                globalPaletteRAM[absSlot * 3 + 2] = candSpitze.b;
+                globalPaletteRAM[absSlot * 3] = candSpitze.r; globalPaletteRAM[absSlot * 3 + 1] = candSpitze.g; globalPaletteRAM[absSlot * 3 + 2] = candSpitze.b;
                 await triggerAutoReencode();
                 let statsSpitze = analysisModule.computeDetailedAnalysis(originalImageData.data, decodedImageData.data, currentImgW, currentImgH, 0, totalPixels, step, metric, config, optRegion);
                 let scoreSpitze = statsSpitze.global.avgYuv;
 
-                // Finde das absolute Optimum im echten Reencode
                 let bestScore = Math.min(baseAvgYuv, scoreMenge, scoreSpitze);
 
                 if (bestScore === baseAvgYuv) {
-                    // Original behalten
-                    globalPaletteRAM[absSlot * 3] = backupR; 
-                    globalPaletteRAM[absSlot * 3 + 1] = backupG; 
-                    globalPaletteRAM[absSlot * 3 + 2] = backupB;
+                    globalPaletteRAM[absSlot * 3] = backupR; globalPaletteRAM[absSlot * 3 + 1] = backupG; globalPaletteRAM[absSlot * 3 + 2] = backupB;
                     await triggerAutoReencode();
                 } else if (bestScore === scoreMenge) {
-                    // Menge gewinnt (RAM ist schon gesetzt)
-                } else {
-                    // Spitze gewinnt
-                    globalPaletteRAM[absSlot * 3] = candSpitze.r; 
-                    globalPaletteRAM[absSlot * 3 + 1] = candSpitze.g; 
-                    globalPaletteRAM[absSlot * 3 + 2] = candSpitze.b;
+                    globalPaletteRAM[absSlot * 3] = candMenge.r; globalPaletteRAM[absSlot * 3 + 1] = candMenge.g; globalPaletteRAM[absSlot * 3 + 2] = candMenge.b;
                     await triggerAutoReencode();
                 }
 
@@ -1018,6 +1157,7 @@ if (btnBuilderAuto) {
         btnBuilder.click(); 
     });
 }
+
 if (btnAnalysis && analysisModal) {
     btnAnalysis.addEventListener('click', () => {
         if (!decodedImageData || !originalImageData) { alert("Bitte zuerst das Bild codieren."); return; }
@@ -1094,7 +1234,7 @@ if (btnResetSlots) {
 }
 
 // ============================================================================
-// AUTO-STEP OPTIMIERUNG (Mit ROI-Filter)
+// AUTO-STEP OPTIMIERUNG
 // ============================================================================
 if (btnAutoStep && autoStepModal) {
     btnAutoStep.addEventListener('click', async () => {
@@ -1106,9 +1246,8 @@ if (btnAutoStep && autoStepModal) {
         
         let minStep = parseInt(autoMinStepInp.value) || 1;
         let maxStep = parseInt(autoMaxStepInp.value) || 16;
-        let strategy = encodeStrategySelect ? encodeStrategySelect.value : "both";
+        let strategy = encodeStrategySelect ? encodeStrategySelect.value : "greedy";
         let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
-        let max_depth = strategy.startsWith('lookahead_') ? parseInt(strategy.split('_')[1]) : 1;
         let currentOffset = getGlobalOffset();
 
         import('./core/analysis.js').then(async (module) => {
@@ -1117,13 +1256,24 @@ if (btnAutoStep && autoStepModal) {
             for (let s = minStep; s <= maxStep; s++) {
                 let testStep = { r: s, g: s, b: s };
                 
-                let sim = await module.runSimulationWithStrategy(
-                    0, totalPixels, originalImageData.data, currentImgW, 
-                    globalPaletteRAM, testStep, strategy, metric, max_depth, 
-                    currentFormat, currentOffset, optRegion
+                let encodeRes = await encodePaletted(
+                    originalImageData.data, currentImgW, currentImgH, currentFormat, testStep,
+                    globalPaletteRAM, currentOffset, strategy, metric, null, 0, 0
                 );
                 
-                results.push({ step: s, ...sim });
+                let simCmds = encodeRes.commands;
+                let simDecoded = decodePaletted(simCmds, currentImgW, currentImgH, testStep, globalPaletteRAM, currentOffset);
+                let simStats = module.computeDetailedAnalysis(originalImageData.data, simDecoded, currentImgW, currentImgH, 0, totalPixels, testStep, metric, HAM_CONFIGS[currentFormat], optRegion);
+                
+                let score = simStats.global.avgYuv + (0.2 * (simStats.global.top10[0]?.mse || 0)) + ((s * 3) * 0.5);
+
+                results.push({ 
+                    step: s, 
+                    avgRgb: simStats.global.avgRgb, 
+                    avgYuv: simStats.global.avgYuv, 
+                    maxYuv: simStats.global.top10[0]?.mse || 0, 
+                    score: score 
+                });
                 
                 if(autoStepStatus) autoStepStatus.innerText = `Analysiere Schrittweite ${s} von ${maxStep}...`;
                 await new Promise(r => setTimeout(r, 10)); 
