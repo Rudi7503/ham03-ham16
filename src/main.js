@@ -1,3 +1,5 @@
+// src/main.js
+
 import { setZoomMode, updateView, centerOnCoordinate, setupCanvasEvents, viewState } from './ui/canvas-view.js';
 import { HAM_CONFIGS } from './codecs/configs.js';
 import { hexToRgb, rgbToHex } from './codecs/utils.js';
@@ -315,6 +317,9 @@ async function triggerAutoReencode() {
     let decodedPixels = null;
     let threshold = lookaheadThresholdInp ? (parseFloat(lookaheadThresholdInp.value) || 15.0) : 15.0;
 
+    // --- NEU: Alte Fehlerkarte verwerfen ---
+    latestErrorOverlayData = null;
+
     for (let iter = 1; iter <= iterations; iter++) {
         if (statusDiv && iterations > 1) {
             statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Iteration ${iter}/${iterations} codiert...</span>`;
@@ -446,6 +451,10 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
             
             originalImageData = ctxOriginal.getImageData(0, 0, currentImgW, currentImgH);
             
+            // --- NEU: Fehlerkarte leeren und Haken entfernen ---
+            latestErrorOverlayData = null;
+            if (chkErrorOverlay) chkErrorOverlay.checked = false;
+            
             resetOptRegion(currentImgW, currentImgH);
             
             canvasDecoded.width = currentImgW; canvasDecoded.height = currentImgH;
@@ -486,6 +495,9 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
 
     let currentTargetData = new Uint8ClampedArray(originalImageData.data);
     let decodedPixels = null;
+
+    // --- NEU: Alte Fehlerkarte verwerfen, damit sie während der Berechnung nicht flackert ---
+    latestErrorOverlayData = null;
 
     for (let iter = 1; iter <= iterations; iter++) {
         let phasePrefix = iterations > 1 ? `[Iter ${iter}/${iterations}] ` : "";
@@ -606,6 +618,10 @@ if (fileBin) fileBin.addEventListener('change', (e) => {
         formatSelect.value = currentFormat;
         
         ensureSlotZeroBlack();
+
+        // --- NEU: Fehlerkarte leeren und Haken entfernen ---
+        latestErrorOverlayData = null;
+        if (chkErrorOverlay) chkErrorOverlay.checked = false;
 
         canvasOriginal.width = currentImgW; canvasOriginal.height = currentImgH;
         canvasDecoded.width = currentImgW; canvasDecoded.height = currentImgH;
