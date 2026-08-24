@@ -7,7 +7,7 @@ import { encodeHam12_16, decodeHam12_16, packHam12_16, unpackHam12_16 } from './
 import { encodePaletted, decodePaletted, packPaletted, unpackPaletted } from './core/module_paletted.js';
 import { debugRoundtripHam12_16, debugRoundtripPaletted } from './core/debugger.js';
 import { computeDetailedAnalysis, errorBins } from './core/analysis.js';
-import { generateFeedbackTarget } from './core/feedback.js';
+import { applySmartBandwidthFilter } from './core/feedback.js';
 
 let currentImgW = 0, currentImgH = 0, totalPixels = 0;
 let originalImageData = null, decodedImageData = null;
@@ -16,6 +16,7 @@ let latestPackedData = null, latestCommandArray = null;
 let globalPaletteRAM = new Uint8Array(256 * 3);
 let currentImgFileName = "image";
 let latestErrorOverlayData = null; // Gespeicherte Fehlerkarte für den Live-Toggle
+let lastShiftCount = 0;
 
 const formatSelect = document.getElementById('format');
 const encodeStrategySelect = document.getElementById('encode-strategy');
@@ -53,6 +54,9 @@ const autoStepStatus = document.getElementById('auto-step-status');
 const lookaheadThresholdInp = document.getElementById('lookahead-threshold');
 const skipPercentValEl = document.getElementById('skip-percent-val');
 const chkErrorOverlay = document.getElementById('chk-error-overlay');
+
+const filterToleranceInp = document.getElementById('filter-tolerance');
+
 
 // ==========================================
 // LIVE-TOGGLE FÜR FEHLER-OVERLAY
@@ -300,29 +304,24 @@ async function triggerAutoReencode() {
     ensureSlotZeroBlack();
     
     let statusDiv = document.getElementById('builder-instruction') || document.getElementById('builder-status');
-    if (statusDiv) {
-        statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Bild wird neu codiert und analysiert...</span>`;
-    }
-
     let step = getGlobalStep();
     let strategy = encodeStrategySelect ? encodeStrategySelect.value : "greedy";
     let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
     let offset = getGlobalOffset();
 
     let iterations = feedbackIterInp ? (parseInt(feedbackIterInp.value) || 1) : 1;
-    let lambda = feedbackLambdaInp ? (parseFloat(feedbackLambdaInp.value) || 0.4) : 0.4;
-    let epsilon = feedbackEpsilonInp ? (parseFloat(feedbackEpsilonInp.value) || 0.02) : 0.02;
+    let threshold = lookaheadThresholdInp ? (parseFloat(lookaheadThresholdInp.value) || 15.0) : 15.0;
 
     let currentTargetData = new Uint8ClampedArray(originalImageData.data);
     let decodedPixels = null;
-    let threshold = lookaheadThresholdInp ? (parseFloat(lookaheadThresholdInp.value) || 15.0) : 15.0;
-
-    // --- NEU: Alte Fehlerkarte verwerfen ---
+    let config = HAM_CONFIGS[currentFormat];
+    let tolerance = filterToleranceInp ? (parseFloat(filterToleranceInp.value) || 2.5) : 2.5;
+    
     latestErrorOverlayData = null;
 
     for (let iter = 1; iter <= iterations; iter++) {
         if (statusDiv && iterations > 1) {
-            statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Iteration ${iter}/${iterations} codiert...</span>`;
+            statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Iteration ${iter}/${iterations}...</span>`;
             await new Promise(r => setTimeout(r, 10));
         }
 
@@ -335,13 +334,8 @@ async function triggerAutoReencode() {
         latestPackedData = packPaletted(latestCommandArray, currentFormat);
         decodedPixels = decodePaletted(latestCommandArray, currentImgW, currentImgH, step, globalPaletteRAM, offset);
 
-        if (skipPercentValEl) {
-            skipPercentValEl.innerText = encodeRes.stats.skipPercent;
-        }
-
         decodedImageData = new ImageData(decodedPixels, currentImgW, currentImgH);
         
-        // Canvas entsprechend der Checkbox updaten
         if (chkErrorOverlay && chkErrorOverlay.checked && latestErrorOverlayData) {
             ctxDecoded.putImageData(latestErrorOverlayData, 0, 0);
         } else {
@@ -349,32 +343,31 @@ async function triggerAutoReencode() {
         }
 
         if (iter < iterations) {
-            if (statusDiv) {
-                statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Berechne Guided Filter (Kanten-Schutz)...</span>`;
-                await new Promise(r => setTimeout(r, 10));
-            }
+            if (statusDiv) statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ Berechne Smart Target...</span>`;
+            await new Promise(r => setTimeout(r, 10));
             
-            currentTargetData = generateFeedbackTarget(
-                originalImageData.data, decodedPixels, currentImgW, currentImgH, lambda, epsilon, false
+            let filterResult = applySmartBandwidthFilter(
+                originalImageData.data, decodedPixels, currentImgW, currentImgH, step, config, currentFormat, tolerance
             );
+            currentTargetData = filterResult.target;
+            lastShiftCount = filterResult.shiftCount;
         }
     }
 
-    // Fehlerkarte für Auto-Reencode aktualisieren
-    if (originalImageData && decodedPixels) {
-        let overlayResult = generateFeedbackTarget(
-            originalImageData.data, decodedPixels, currentImgW, currentImgH, lambda, epsilon, true
+    if (originalImageData && decodedPixels && iterations > 1) {
+        let filterResult = applySmartBandwidthFilter(
+            originalImageData.data, decodedPixels, currentImgW, currentImgH, step, config, currentFormat, tolerance
         );
-        latestErrorOverlayData = new ImageData(overlayResult.errorMap, currentImgW, currentImgH);
+        latestErrorOverlayData = new ImageData(filterResult.target, currentImgW, currentImgH);
+        lastShiftCount = filterResult.shiftCount;
+        
         if (chkErrorOverlay && chkErrorOverlay.checked) {
             ctxDecoded.putImageData(latestErrorOverlayData, 0, 0);
         }
     }
 
     btnSave.disabled = false;
-    if (statusDiv) {
-        statusDiv.innerHTML = `<span style='color:#28a745; font-weight:bold;'>✅ Codierung abgeschlossen!</span>`;
-    }
+    if (statusDiv) statusDiv.innerHTML = `<span style='color:#28a745; font-weight:bold;'>✅ Codierung abgeschlossen!</span>`;
 }
 
 function handleFormatChange() {
@@ -474,7 +467,7 @@ if (fileImg) fileImg.addEventListener('change', (e) => {
 });
 
 // ============================================================================
-// HAUPT-ENCODER
+// HAUPT-ENCODER EVENT (btnEncode)
 // ============================================================================
 if (btnEncode) btnEncode.addEventListener('click', async () => {
     if (!currentImgW) return;
@@ -483,20 +476,16 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
     currentFormat = formatSelect.value;
     let step = getGlobalStep();
     let is16BitClass = (currentFormat === "HAM12" || currentFormat === "HAM16");
-    
     let strategy = encodeStrategySelect ? encodeStrategySelect.value : "greedy";
     let metric = encodeMetricSelect ? encodeMetricSelect.value : "yuv_weight";
-
     let iterations = feedbackIterInp ? (parseInt(feedbackIterInp.value) || 1) : 1;
-    let lambda = feedbackLambdaInp ? (parseFloat(feedbackLambdaInp.value) || 0.4) : 0.4;
-    let epsilon = feedbackEpsilonInp ? (parseFloat(feedbackEpsilonInp.value) || 0.02) : 0.02;
+    let config = HAM_CONFIGS[currentFormat];
+    let tolerance = filterToleranceInp ? (parseFloat(filterToleranceInp.value) || 2.5) : 2.5;
 
     ensureSlotZeroBlack();
 
     let currentTargetData = new Uint8ClampedArray(originalImageData.data);
     let decodedPixels = null;
-
-    // --- NEU: Alte Fehlerkarte verwerfen, damit sie während der Berechnung nicht flackert ---
     latestErrorOverlayData = null;
 
     for (let iter = 1; iter <= iterations; iter++) {
@@ -519,15 +508,10 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
             latestCommandArray = encodeRes.commands;
             latestPackedData = packPaletted(latestCommandArray, currentFormat);
             decodedPixels = decodePaletted(latestCommandArray, currentImgW, currentImgH, step, globalPaletteRAM, offset);
-
-            if (skipPercentValEl) {
-                skipPercentValEl.innerText = encodeRes.stats.skipPercent;
-            }
         }
 
         decodedImageData = new ImageData(decodedPixels, currentImgW, currentImgH);
         
-        // Canvas updaten
         if (chkErrorOverlay && chkErrorOverlay.checked && latestErrorOverlayData) {
             ctxDecoded.putImageData(latestErrorOverlayData, 0, 0);
         } else {
@@ -536,21 +520,23 @@ if (btnEncode) btnEncode.addEventListener('click', async () => {
         updateStatusTextDimAndColors();
 
         if (iter < iterations) {
-            updateProgress(`${phasePrefix}Berechne Guided Filter...`, 50, 100);
+            updateProgress(`${phasePrefix}Berechne Smart Target...`, 50, 100);
             await new Promise(r => setTimeout(r, 10));
             
-            currentTargetData = generateFeedbackTarget(
-                originalImageData.data, decodedPixels, currentImgW, currentImgH, lambda, epsilon, false
+            let filterResult = applySmartBandwidthFilter(
+                originalImageData.data, decodedPixels, currentImgW, currentImgH, step, config, currentFormat, tolerance
             );
+            currentTargetData = filterResult.target;
+            lastShiftCount = filterResult.shiftCount;
         }
     }
 
-    // Fehlerkarte für den Live-Toggle berechnen
-    if (originalImageData && decodedPixels) {
-        let overlayResult = generateFeedbackTarget(
-            originalImageData.data, decodedPixels, currentImgW, currentImgH, lambda, epsilon, true
+    if (originalImageData && decodedPixels && iterations > 1) {
+        let filterResult = applySmartBandwidthFilter(
+            originalImageData.data, decodedPixels, currentImgW, currentImgH, step, config, currentFormat, tolerance
         );
-        latestErrorOverlayData = new ImageData(overlayResult.errorMap, currentImgW, currentImgH);
+        latestErrorOverlayData = new ImageData(filterResult.target, currentImgW, currentImgH);
+        lastShiftCount = filterResult.shiftCount;
         
         if (chkErrorOverlay && chkErrorOverlay.checked) {
             ctxDecoded.putImageData(latestErrorOverlayData, 0, 0);

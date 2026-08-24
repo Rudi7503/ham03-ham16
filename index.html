@@ -115,18 +115,19 @@
     </div>
 	
 	<div class="control-group" style="background:#111; padding:2px 8px; border-radius:4px; border:1px solid #007bff;">
-        <label style="color:#4dabf7;" title="Iterative Error Feedback">Feedback Loop:</label>
+        <label style="color:#4dabf7;" title="Smart Bandwidth Feedback">Feedback Loop:</label>
         
-        <label title="Anzahl der Durchläufe (1 = aus)">Iter:</label>
-        <input type="number" id="feedback-iter" min="1" max="5" value="1" style="width:35px;">
-		<label title="Zeigt das verstärkte Fehlerbild im Dekodiert-Canvas an">
-		<input type="checkbox" id="chk-error-overlay" style="vertical-align: middle;"> Fehler anzeigen</label>
-        
-        <label title="Korrektur-Stärke (0.2 bis 0.6)">λ (Dämpfung):</label>
-        <input type="number" id="feedback-lambda" step="0.1" min="0.1" max="1.0" value="0.4" style="width:40px;">
-        
-        <label title="Kantenschutz (0.001 bis 0.05)">ε (Kante):</label>
-        <input type="number" id="feedback-epsilon" step="0.005" min="0.001" max="0.1" value="0.02" style="width:45px;">
+        <label title="Anzahl der Durchläufe (1 = Standard-Codierung ohne Feedback)">Iter:</label>
+        <input type="number" id="feedback-iter" min="1" max="10" value="1" style="width:35px;">
+		
+        <!-- NEU: Toleranz-Regler -->
+        <label title="Höherer Wert = Es wird WENIGER gefiltert (mehr Pixel bleiben geschützt)">
+            Toleranz: <input type="number" id="filter-tolerance" step="0.5" min="0.5" max="15.0" value="6.5" style="width:45px;">
+        </label>
+
+        <label title="Zeigt das modifizierte Originalbild (Target für den Encoder) im Decoder-Canvas an">
+		    <input type="checkbox" id="chk-error-overlay" style="vertical-align: middle;"> Zeige mod. Original
+        </label>
     </div>
     
     <div class="control-group">

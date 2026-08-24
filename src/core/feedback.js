@@ -1,168 +1,134 @@
 // core/feedback.js
 
-import { clamp } from '../codecs/utils.js';
+import { HAM_CONFIGS } from '../codecs/configs.js';
+
+// Hilfsfunktion zum Extrahieren der Bit-Tiefe
+function getFormatBits(fmt) {
+    if (!fmt) return 8;
+    if (fmt.includes("01")) return 1;
+    if (fmt.includes("02")) return 2;
+    if (fmt.includes("03")) return 3;
+    if (fmt.includes("04")) return 4;
+    if (fmt.includes("05")) return 5;
+    if (fmt.includes("06")) return 6;
+    return 8;
+}
 
 /**
- * Superschneller separabler Box-Blur (O(N)) mit Fenstergröße W=8
- * Asymmetrisch (4 links, 3 rechts) zur Auslöschung des 32-Bit-Musters.
- * Nutzt strikt "Clamp to Edge" an den Bildrändern.
+ * Smart Bandwidth Filter mit Double Buffering:
+ * Verhindert das "Verschmieren" (Kaskadieren) von Pixeln im selben Durchlauf.
  */
-function boxBlurW8(src, width, height) {
-    let dst = new Float32Array(width * height);
-    let temp = new Float32Array(width * height);
-    const W = 8;
-    const halfLeft = 4;
-    const halfRight = 3;
+export function applySmartBandwidthFilter(originalRgba, decodedRgba, width, height, stepVal, config, currentFormat, tolerance = 2.5) {
+    const N = width * height;
+    let targetRgba = new Uint8ClampedArray(originalRgba); 
+    
+    let isGood = new Uint8Array(N);
+    let sequence = config.isMixed && config.sequence ? config.sequence : [currentFormat];
+    let stepThreshold = (stepVal.r + stepVal.g + stepVal.b) * tolerance; 
 
-    // Horizontaler Pass
+    // 1. Schwellenwert-Analyse und Maskierung
     for (let y = 0; y < height; y++) {
-        let offset = y * width;
-        let sum = 0;
-        
-        // Initiales Fenster für x=0 aufbauen (Clamp to Edge)
-        for (let i = -halfLeft; i <= halfRight; i++) {
-            let px = Math.max(0, Math.min(width - 1, i));
-            sum += src[offset + px];
-        }
-        temp[offset] = sum / W;
-        
-        // Sliding Window (Gleitende Summe)
-        for (let x = 1; x < width; x++) {
-            let subX = Math.max(0, x - halfLeft - 1);
-            let addX = Math.min(width - 1, x + halfRight);
-            sum += src[offset + addX] - src[offset + subX];
-            temp[offset + x] = sum / W;
+        for (let x = 0; x < width; x++) {
+            let i = y * width + x;
+            let idx = i * 4;
+            
+            let err = Math.abs(originalRgba[idx] - decodedRgba[idx]) + 
+                      Math.abs(originalRgba[idx+1] - decodedRgba[idx+1]) + 
+                      Math.abs(originalRgba[idx+2] - decodedRgba[idx+2]);
+            
+            isGood[i] = err <= stepThreshold ? 1 : 0;
         }
     }
 
-    // Vertikaler Pass
-    for (let x = 0; x < width; x++) {
-        let sum = 0;
-        
-        // Initiales Fenster für y=0 aufbauen (Clamp to Edge)
-        for (let i = -halfLeft; i <= halfRight; i++) {
-            let py = Math.max(0, Math.min(height - 1, i));
-            sum += temp[py * width + x];
-        }
-        dst[x] = sum / W;
-        
-        // Sliding Window
-        for (let y = 1; y < height; y++) {
-            let subY = Math.max(0, y - halfLeft - 1);
-            let addY = Math.min(height - 1, y + halfRight);
-            sum += temp[addY * width + x] - temp[subY * width + x];
-            dst[y * width + x] = sum / W;
-        }
-    }
-    return dst;
-}
+    // 2. Spatial Shift (Bandweiten-Routing)
+    let shiftedRgba = new Uint8ClampedArray(targetRgba);
+    let shiftCount = 0;
 
-/**
- * Führt den Guided Filter Algorithmus aus.
- * Alle Eingaben müssen im genormten Bereich [0.0, 1.0] vorliegen.
- */
-function guidedFilter(guide, target, width, height, epsilon) {
-    const N = width * height;
-    
-    let mean_I = boxBlurW8(guide, width, height);
-    let mean_p = boxBlurW8(target, width, height);
-    
-    let II = new Float32Array(N);
-    let Ip = new Float32Array(N);
-    for (let i = 0; i < N; i++) {
-        II[i] = guide[i] * guide[i];
-        Ip[i] = guide[i] * target[i];
-    }
-    
-    let mean_II = boxBlurW8(II, width, height);
-    let mean_Ip = boxBlurW8(Ip, width, height);
-    
-    let a = new Float32Array(N);
-    let b = new Float32Array(N);
-    
-    for (let i = 0; i < N; i++) {
-        let var_I = mean_II[i] - mean_I[i] * mean_I[i];
-        let cov_Ip = mean_Ip[i] - mean_I[i] * mean_p[i];
-        
-        a[i] = cov_Ip / (var_I + epsilon);
-        b[i] = mean_p[i] - a[i] * mean_I[i];
-    }
-    
-    let mean_a = boxBlurW8(a, width, height);
-    let mean_b = boxBlurW8(b, width, height);
-    
-    let q = new Float32Array(N);
-    for (let i = 0; i < N; i++) {
-        q[i] = mean_a[i] * guide[i] + mean_b[i];
-    }
-    
-    return q;
-}
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            let i = y * width + x;
+            if (isGood[i]) continue; 
 
-/**
- * Berechnet das manipulierte Zielbild für den Encoder (Pre-Compensation).
- * Nutzt das Luma-Leitbild zur Kanten-Erhaltung.
- * 
- * @param {boolean} returnErrorMap - Wenn true, wird zusätzlich ein verstärktes Fehler-Overlay zurückgegeben.
- */
-export function generateFeedbackTarget(originalRgba, decodedRgba, width, height, lambda, epsilon, returnErrorMap = false) {
-    const N = width * height;
-    let guide = new Float32Array(N);
-    let targetR = new Float32Array(N);
-    let targetG = new Float32Array(N);
-    let targetB = new Float32Array(N);
+            let seqIdx = x % sequence.length;
+            let fmt = sequence[seqIdx];
+            let bits = getFormatBits(fmt);
 
-    // 1. Leitbild (Luma) und Fehlerkarten extrahieren (genormt auf 0..1)
-    for (let i = 0; i < N; i++) {
-        let idx = i * 4;
-        let oR = originalRgba[idx] / 255.0;
-        let oG = originalRgba[idx + 1] / 255.0;
-        let oB = originalRgba[idx + 2] / 255.0;
-        
-        let dR = decodedRgba[idx] / 255.0;
-        let dG = decodedRgba[idx + 1] / 255.0;
-        let dB = decodedRgba[idx + 2] / 255.0;
+            if (bits <= 4 && x > 0 && x < width - 1) {
+                let leftFmt = sequence[(x - 1) % sequence.length];
+                let rightFmt = sequence[(x + 1) % sequence.length];
+                
+                let leftBits = getFormatBits(leftFmt);
+                let rightBits = getFormatBits(rightFmt);
 
-        // Y-Kanal Berechnung
-        guide[i] = 0.299 * oR + 0.587 * oG + 0.114 * oB;
-        
-        // Roher Fehler: Original minus Rekonstruktion
-        targetR[i] = oR - dR;
-        targetG[i] = oG - dG;
-        targetB[i] = oB - dB;
-    }
+                let targetX = x;
+                if (leftBits > bits && leftBits >= rightBits) targetX = x - 1;
+                else if (rightBits > bits) targetX = x + 1;
 
-    // 2. Guided Filter über die Fehlerkarten laufen lassen
-    let filteredR = guidedFilter(guide, targetR, width, height, epsilon);
-    let filteredG = guidedFilter(guide, targetG, width, height, epsilon);
-    let filteredB = guidedFilter(guide, targetB, width, height, epsilon);
-
-    // 3. Neues Zielbild und optionales Fehler-Overlay berechnen
-    let newTargetRgba = new Uint8ClampedArray(N * 4);
-    let errorMapRgba = returnErrorMap ? new Uint8ClampedArray(N * 4) : null;
-
-    for (let i = 0; i < N; i++) {
-        let idx = i * 4;
-        let nr = Math.round(originalRgba[idx] + (filteredR[i] * lambda * 255.0));
-        let ng = Math.round(originalRgba[idx + 1] + (filteredG[i] * lambda * 255.0));
-        let nb = Math.round(originalRgba[idx + 2] + (filteredB[i] * lambda * 255.0));
-
-        newTargetRgba[idx] = clamp(nr, 0, 255);
-        newTargetRgba[idx + 1] = clamp(ng, 0, 255);
-        newTargetRgba[idx + 2] = clamp(nb, 0, 255);
-        newTargetRgba[idx + 3] = 255;
-
-        // Fehlerkarte bauen (5-fach verstärkt für bessere Sichtbarkeit)
-        if (returnErrorMap) {
-            errorMapRgba[idx]     = clamp(Math.abs(filteredR[i]) * 255.0 * 5, 0, 255);
-            errorMapRgba[idx + 1] = clamp(Math.abs(filteredG[i]) * 255.0 * 5, 0, 255);
-            errorMapRgba[idx + 2] = clamp(Math.abs(filteredB[i]) * 255.0 * 5, 0, 255);
-            errorMapRgba[idx + 3] = 255;
+                if (targetX !== x) {
+                    let targetIdx = (y * width + targetX) * 4;
+                    let srcIdx = i * 4;
+                    shiftedRgba[targetIdx]     = originalRgba[srcIdx];
+                    shiftedRgba[targetIdx + 1] = originalRgba[srcIdx + 1];
+                    shiftedRgba[targetIdx + 2] = originalRgba[srcIdx + 2];
+                    
+                    shiftCount++;
+                }
+            }
         }
     }
 
-    if (returnErrorMap) {
-        return { target: newTargetRgba, errorMap: errorMapRgba };
+    // 3. Modifizierter 3x3 Gauß-Filter mit Double Buffering
+    // Wir lesen AUS dem geshiften Puffer und schreiben IN ein separates Ziel-Array,
+    // damit modifizierte Pixel die Nachbarbereiche im selben Durchlauf nicht "verseuchen".
+    let finalTarget = new Uint8ClampedArray(shiftedRgba);
+
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            let i = y * width + x;
+            if (isGood[i]) continue; // Geschützte Bereiche bleiben komplett unangetastet
+
+            let seqIdx = x % sequence.length;
+            let fmt = sequence[seqIdx];
+            let bits = getFormatBits(fmt);
+
+            let centerWeight = (bits >= 6) ? 8 : (bits >= 4 ? 4 : 2);
+            
+            let sumR = 0, sumG = 0, sumB = 0, totalWeight = 0;
+
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    let nx = x + dx;
+                    let ny = y + dy;
+                    
+                    if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                        let ni = ny * width + nx;
+                        let nIdx = ni * 4;
+                        
+                        let weight = 0;
+                        if (dx === 0 && dy === 0) {
+                            weight = centerWeight;
+                        } else {
+                            // Gute Kanten-Pixel zählen doppelt als Anker
+                            weight = isGood[ni] ? 2 : 1; 
+                        }
+
+                        // WICHTIG: Lesen aus shiftedRgba (Read-Only Quelle für den Filter)
+                        sumR += shiftedRgba[nIdx] * weight;
+                        sumG += shiftedRgba[nIdx + 1] * weight;
+                        sumB += shiftedRgba[nIdx + 2] * weight;
+                        totalWeight += weight;
+                    }
+                }
+            }
+
+            let outIdx = i * 4;
+            // Schreiben in den separaten finalTarget Puffer
+            finalTarget[outIdx]     = sumR / totalWeight;
+            finalTarget[outIdx + 1] = sumG / totalWeight;
+            finalTarget[outIdx + 2] = sumB / totalWeight;
+            finalTarget[outIdx + 3] = 255; 
+        }
     }
-    return newTargetRgba;
+
+    return { target: finalTarget, shiftCount: shiftCount };
 }
