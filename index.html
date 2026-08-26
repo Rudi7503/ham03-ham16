@@ -6,279 +6,41 @@
     <title>HAM Pro: Modular Edition</title>
     <style>
         body { font-family: Arial, sans-serif; background-color: #2c2f33; color: #fff; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-
-        /* --- Steuerungsmenü --- */
-        #top-bar { background-color: #1e2124; padding: 12px 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; z-index: 10; border-bottom: 2px solid #444; }
-        h2 { margin: 0; color: #fff; font-size: 18px; border-right: 2px solid #555; padding-right: 12px; }
-        .control-group { display: flex; align-items: center; gap: 5px; }
-        label { font-weight: bold; font-size: 11px; color: #ccc; }
-        select, input[type="range"], input[type="number"] { padding: 4px; border-radius: 4px; font-size: 11px; background: #fff; color: #000; }
-        input[type="number"] { width: 45px; text-align: center; }
-        input:disabled, select:disabled { background: #555 !important; color: #aaa !important; cursor: not-allowed; }
         
-        button, .btn-label { padding: 6px 10px; font-size: 12px; font-weight: bold; border: none; border-radius: 4px; cursor: pointer; transition: background 0.2s; display: inline-block; box-sizing: border-box; }
-        .btn-label-primary { background-color: #007bff; color: white; } .btn-label-primary:hover { background-color: #0069d9; }
-        .btn-label-success { background-color: #20c997; color: white; } .btn-label-success:hover { background-color: #1aa179; }
+        /* Globale App-Toolbar */
+        #global-top-bar { background-color: #181a1c; padding: 12px 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; gap: 15px; align-items: center; z-index: 20; border-bottom: 2px solid #007bff; }
+        h1 { margin: 0; font-size: 18px; color: #4dabf7; border-right: 2px solid #444; padding-right: 15px; }
         
-        #btn-encode { background-color: #28a745; color: white; } #btn-encode:hover { background-color: #218838; }
-        #btn-save { background-color: #ffc107; color: black; } #btn-save:hover { background-color: #e0a800; }
-        #btn-debug-roundtrip { background-color: #dc3545; color: white; } #btn-debug-roundtrip:hover { background-color: #c82333; }
-        #btn-builder { background-color: #17a2b8; color: white; } #btn-builder:hover { background-color: #138496; }
-        #btn-auto-step { background-color: #e83e8c; color: white; padding: 4px 6px; font-size: 11px; } #btn-auto-step:hover { background-color: #d63384; }
-        #btn-analysis { background-color: #6f42c1; color: white; } #btn-analysis:hover { background-color: #5a32a3; }
+        .btn-global { background: #007bff; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px; transition: background 0.2s; }
+        .btn-global:hover { background: #0056b3; }
+        .btn-success { background: #28a745; } .btn-success:hover { background: #218838; }
         
-        #btn-encode:disabled, #btn-save:disabled, #btn-builder:disabled, #btn-analysis:disabled, #btn-debug-roundtrip:disabled { background-color: #555; cursor: not-allowed; color: #888; }
-        
-        .btn-zoom { background-color: #6c757d; color: white; } .btn-zoom.active { background-color: #17a2b8; }
-        
-        #palette-box { display: none; background: #111; padding: 3px 6px; border-radius: 4px; border: 1px solid #444; align-items: center; gap: 6px; }
-        #palette-pickers-container { display: flex; gap: 2px; flex-wrap: wrap; max-width: 260px; max-height: 120px; overflow-y: auto; }
-        .palette-picker { width: 18px; height: 18px; border: none; cursor: pointer; padding: 0; background: none; }
-
-        /* Counter Stream Panel */
-        #stream-panel { background: #181a1c; padding: 8px 20px; border-bottom: 1px solid #444; display: flex; gap: 15px; align-items: center; font-size: 11px; }
-        #stream-list { display: flex; gap: 5px; flex-wrap: wrap; max-height: 35px; overflow-y: auto; align-items: center; }
-        .stream-tag { background: #2b2f33; border: 1px solid #555; padding: 2px 6px; border-radius: 3px; font-size: 10px; display: flex; align-items: center; gap: 5px; cursor: pointer; transition: background 0.2s; }
-        .stream-tag:hover { background: #3c4043; border-color: #777; }
-
-        .status-container { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 260px; border-left: 2px solid #555; padding-left: 10px; }
-        progress { width: 100%; height: 6px; } 
-        .status-row { display: flex; justify-content: space-between; font-size: 11px; color: #aaa; }
-
-        /* --- Bildbereich --- */
-        #image-area { display: flex; flex: 1; overflow: hidden; background-color: #000; }
-        .view-pane { flex: 1; position: relative; overflow: hidden; cursor: grab; }
-        .view-pane.grabbing { cursor: grabbing; } #pane-left { border-right: 2px solid #444; }
-        .pane-label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 4px; font-weight: bold; font-size: 12px; z-index: 100; pointer-events: none; }
-        .view-pane canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; box-shadow: 0 0 20px rgba(255,255,255,0.1); image-rendering: pixelated; }
-        .divider { width: 2px; height: 25px; background-color: #555; margin: 0 2px; }
-
-        /* Modals - Transparent & Verschiebbar */
-        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: transparent; pointer-events: none; z-index: 1000; }
-        .modal-content { background: #1e2124; padding: 20px; border-radius: 8px; width: 750px; max-height: 90vh; overflow-y: auto; color: white; border: 1px solid #444; pointer-events: auto; position: absolute; top: 80px; left: 100px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); cursor: default; }
-        .modal-content h3 { cursor: move; user-select: none; margin-top: 0; }
-        
-        .builder-slot { width:20px; height:20px; border:1px solid #444; border-radius:3px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; font-size:9px; font-weight:bold; }
-        
-        table.analysis-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 10px; }
-        table.analysis-table th, table.analysis-table td { border: 1px solid #444; padding: 4px 6px; text-align: center; }
-        table.analysis-table th { background: #2b2f33; }
-        #avg-mse-display { font-size: 11px; color: #ffc107; font-weight: bold; background: #111; padding: 4px 8px; border-radius: 4px; border: 1px solid #444; }
+        /* Modul-Container */
+        #app-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: #000; }
     </style>
 </head>
 <body>
-
-<div id="top-bar">
-    <h2>HAM LAB</h2>
-    <div class="control-group">
-        <label for="file-img" class="btn-label btn-label-primary" title="Originalbild (PNG/JPG) laden">1. Bild laden</label>
-        <label for="file-bin" class="btn-label btn-label-success" title="Gepacktes HAM-File laden">.ham laden</label>
-        <button id="btn-encode" disabled>2. Codieren</button>
-        <button id="btn-save" disabled>3. Speichern</button>
-        <button id="btn-debug-roundtrip" disabled title="Codiere, Packe, Entpacke und vergleiche die Befehle">4. Debug Vergleichen</button>
-    </div>
-    
-<div class="divider"></div>
-    <div class="control-group">
-        <label>Farboptimierung:</label>
-        <button id="btn-draw-region" title="Rechteck auf dem Bild ziehen">Ausschnitt wählen</button>
-        <button id="btn-reset-region" title="Wieder das ganze Bild nutzen">Ganzes Bild</button>
-    <div id="region-info" style="font-size: 0.85em; color: #888; margin-top: 5px;">Bereich: Ganzes Bild</div>
-</div>
-
-   <div class="divider"></div>
-<div class="control-group">
-    <label>Format:</label>
-    <select id="format">
-        <option value="HAM_32BIT_44444444"          >HAM 32-Bit 44444444 (4/4/4/4/4/4/4/4)  4.0 Bit/pixel</option>
-        <option value="HAM_32BIT_53535353"          >HAM 32-Bit 53535353 (5/3/5/3/5/3/5/3)  4.0 Bit/pixel</option>
-        <option value="HAM_32BIT_63436343" selected >HAM 32-Bit 63436343 (6/3/4/3/6/3/4/3)  4.0 Bit/pixel</option>
-        <option value="HAM_32BIT_6446444"          >HAM 32-Bit 6446444  (6/4/4/6/4/4/4)   4.6 Bit/pixel</option>
-        <option value="HAM_32BIT_5454545"           >HAM 32-Bit 5454545  (5/4/5/4/5/4/5)    4.6 Bit/pixel</option>
-        <option value="HAM_32BIT_6454544"           >HAM 32-Bit 6454544  (6/4/5/4/5/4/4)    4.6 Bit/pixel</option>
-        <option value="HAM_32BIT_655655"            >HAM 32-Bit 655655   (6/5/5/6/5/5)      5.3 Bit/pixel</option>
-        <option value="HAM_32BIT_86666"             >HAM 32-Bit 86666    (8/6/6/6/6)        6.4 Bit/pixel</option>
-        <option value="HAM_32BIT_8888"              >HAM 32-Bit 8888     (8/8/8/8)          8.0 Bit/pixel</option>
-        <option value="HAM12"                       >HAM12</option>
-        <option value="HAM16"                       >HAM16</option>
-    </select>
-</div>
-
-    <div class="control-group">
-        <label>Strategie:</label>
-        <select id="encode-strategy">
-            <option value="greedy" selected>Greedy (Schnell)</option>
-            <option value="lookahead_chunk">Chunk-Lookahead (Branch & Bound)</option>
-            <option value="anchor_only">Nur Anker</option>
-            <option value="delta_only">Nur Delta</option>
-        </select>
-    </div>
-	
-	<div class="control-group" style="background:#111; padding:2px 8px; border-radius:4px; border:1px solid #007bff;">
-        <label style="color:#4dabf7;" title="Smart Bandwidth Feedback">Feedback Loop:</label>
+    <div id="global-top-bar">
+        <h1>HAM LAB Pro</h1>
         
-        <label title="Anzahl der Durchläufe (1 = Standard-Codierung ohne Feedback)">Iter:</label>
-        <input type="number" id="feedback-iter" min="1" max="10" value="1" style="width:35px;">
-		
-        <!-- NEU: Toleranz-Regler -->
-        <label title="Höherer Wert = Es wird WENIGER gefiltert (mehr Pixel bleiben geschützt)">
-            Toleranz: <input type="number" id="filter-tolerance" step="0.5" min="0.5" max="15.0" value="6.5" style="width:45px;">
-        </label>
-
-        <label title="Zeigt das modifizierte Originalbild (Target für den Encoder) im Decoder-Canvas an">
-		    <input type="checkbox" id="chk-error-overlay" style="vertical-align: middle;"> Zeige mod. Original
-        </label>
+        <label for="file-img" class="btn-global" title="Originalbild (PNG/JPG) laden">1. Bild laden</label>
+        <input type="file" id="file-img" accept="image/png, image/jpeg, image/bmp, image/webp" style="display: none;">
+        
+        <label for="file-bin" class="btn-global btn-success" title="Gepacktes HAM-File laden">.ham laden</label>
+        <input type="file" id="file-bin" accept=".ham" style="display: none;">
+        
+        <!-- NEU: Modus-Tabs -->
+        <div style="margin-left: 30px; display: flex; gap: 5px;">
+            <button class="btn-tab active" data-mode="builder" style="background:#17a2b8; color:#fff; border:none; padding:8px 15px; border-radius:4px; cursor:pointer;">Builder</button>
+            <button class="btn-tab" data-mode="sprite" style="background:#444; color:#fff; border:none; padding:8px 15px; border-radius:4px; cursor:pointer;">Sprite Studio</button>
+            <button class="btn-tab" data-mode="viewer" style="background:#444; color:#fff; border:none; padding:8px 15px; border-radius:4px; cursor:pointer;">Viewer</button>
+        </div>
     </div>
     
-    <div class="control-group">
-        <label>Metrik:</label>
-        <select id="encode-metric">
-            <option value="oklab">Oklab (Perzeptuell Perfekt)</option>
-            <option value="redmean">Redmean (Schnell & Wahrnehmung)</option>
-            <option value="yuv_weight_heavy">YUV (Gewichtet Stark)</option>
-            <option value="yuv_weight" selected>YUV (Gewichtet)</option>
-            <option value="yuv">YUV (Standard)</option>
-            <option value="rgb">RGB</option>
-            <option value="rgb_ABS">RGB (ABS)</option>
-        </select>
-    </div>
-	
-	<div class="control-group">
-		<label for="lookahead-threshold" title="MSE-Schwellenwert: Blöcke unter diesem Wert überspringen den Lookahead">Lookahead Threshold:</label>
-		<input type="number" id="lookahead-threshold" value="15" min="0" max="100" step="1" style="width: 50px;">
-	</div>
-	
-	<div id="lookahead-stats" style="font-size: 11px; color: #4dabf7; margin-top: 4px;">
-		Lookahead übersprungen: <span id="skip-percent-val">0.0</span>%
-	</div>
-
-    <div class="control-group" id="ham-step-group">
-        <label>Schritt:</label>
-        <div style="display:flex; gap:2px;">
-            <input type="number" id="ham-step-r" min="1" max="128" value="4" style="width:35px; color:#ff6b6b; font-weight:bold;" title="Rot">
-            <input type="number" id="ham-step-g" min="1" max="128" value="4" style="width:35px; color:#28a745; font-weight:bold;" title="Grün">
-            <input type="number" id="ham-step-b" min="1" max="128" value="4" style="width:35px; color:#4dabf7; font-weight:bold;" title="Blau">
-        </div>
-        <div style="display:flex; align-items:center; gap:2px; background:#111; padding:2px 4px; border-radius:4px; border:1px solid #444;">
-            <label style="font-size:10px;">Min:</label>
-            <input type="number" id="auto-min-step" min="1" max="128" value="4" style="width:30px;">
-            <label style="font-size:10px;">Max:</label>
-            <input type="number" id="auto-max-step" min="1" max="128" value="16" style="width:30px;">
-        </div>
-        <button id="btn-auto-step" title="Teste Schrittweitenbereich">Auto</button>
+    <div id="app-container">
+        <div style="padding: 20px; color: #aaa; font-size: 14px;">Warte auf Bilddaten... Bitte lade oben ein Bild.</div>
     </div>
 
-    <div id="palette-box">
-        <label title="Startindex im 256er RAM (0-255)">Offset:</label>
-        <input type="number" id="pal-offset-input" min="0" max="255" value="0" style="width:40px;">
-        <div id="palette-pickers-container"></div>
-        <button id="btn-builder" disabled>Build Set</button>
-    </div>
-
-    <div class="divider"></div>
-    <div class="control-group">
-        <button id="btn-zoom-fit" class="btn-zoom active">Fit</button>
-        <button id="btn-zoom-1x" class="btn-zoom">1x</button>
-        <button id="btn-zoom-2x" class="btn-zoom">2x</button>
-        <button id="btn-zoom-4x" class="btn-zoom">4x</button>
-        <button id="btn-zoom-8x" class="btn-zoom">8x</button>
-        <button id="btn-zoom-16x" class="btn-zoom">16x</button>
-        <button id="btn-zoom-32x" class="btn-zoom">32x</button>
-    </div>
-    
-    <div class="control-group">
-        <button id="btn-analysis" disabled>Fehler-Analyse</button>
-        <div id="avg-mse-display" style="display:none;">⌀ RGB: 0.0 | ⌀ YUV: 0.0</div>
-    </div>
-
-    <div class="status-container">
-        <div class="status-row">
-            <span id="img-dim-text">Größe: - | Farben: - | Modus: -</span>
-            <span id="mouse-pos-text">X: - | Y: - | Px: -</span>
-        </div>
-        <progress id="progress" value="0" max="100"></progress>
-        <div class="status-row"><span id="status-text">Warte auf Bild...</span></div>
-    </div>
-    <input type="file" id="file-img" accept="image/png, image/jpeg, image/bmp, image/webp" style="display: none;">
-    <input type="file" id="file-bin" accept=".ham" style="display: none;">
-</div>
-
-<div id="history-panel" style="background: #181a1c; padding: 8px 20px; border-bottom: 1px solid #444; display: flex; gap: 15px; align-items: center; font-size: 11px;">
-    <span style="font-weight:bold; color:#ffc107;">Verlauf (Letzte 10):</span>
-    <div id="history-list" style="display: flex; gap: 5px; flex-wrap: wrap; max-height: 35px; overflow-y: auto; align-items: center;">
-        <i>Noch keine Einträge.</i>
-    </div>
-</div>
-
-<div id="image-area">
-    <div class="view-pane" id="pane-left"><div class="pane-label">ORIGINAL</div><canvas id="canvas-original"></canvas></div>
-    <div class="view-pane" id="pane-right"><div class="pane-label" id="decoded-label">DEKODIERT</div><canvas id="canvas-decoded"></canvas></div>
-</div>
-
-<!-- Builder Modal (Absolut und verschiebbar) -->
-<div id="builder-modal" class="modal-overlay">
-   <div class="modal-content" style="width: 900px;">
-      <h3 title="Zum Verschieben gedrückt halten">Optimierer ab <span id="b-bank-title" style="color:#4dabf7;">Offset 0</span> (<span id="b-fmt"></span>)</h3>
-      <div id="builder-status" style="color:#aaa; font-size:13px;">Initialisiere...</div>
-      <div style="font-size:11px; color:#aaa; margin-top:6px;">Klicke auf einen Slot, um die Farbe direkt zu wählen:</div>
-      <div id="builder-palette-preview" style="display:flex; flex-wrap:wrap; gap:3px; margin:6px 0; background:#000; padding:6px; border-radius:4px; max-height:75px; overflow-y:auto;"></div>
-
-      <div style="display:flex; gap:15px; margin-top:12px;">
-          <div style="flex:2; display:flex; flex-direction:column;">
-              <h4 style="margin:0 0 6px 0; color:#ff6b6b; font-size:13px;">Top 10 Fehler (Nach Bit-Tiefe separiert)</h4>
-              <div id="builder-mse-list" style="display:flex; gap:10px; overflow-x:auto; padding-bottom:5px;"></div>
-          </div>
-          <div style="flex:1; display:flex; flex-direction:column;">
-              <h4 style="margin:0 0 6px 0; color:#4dabf7; font-size:13px;">Top 10 Bild-Histogramm</h4>
-              <div id="builder-hist-list"></div>
-          </div>
-      </div>
-      
-      <div style="margin-top:15px; display:flex; justify-content:space-between; align-items:center;">
-          <button id="btn-builder-cancel" style="background:#555; color:#fff;">Schließen / Übernehmen</button>
-          
-          <div style="display:flex; align-items:center; gap:8px;">
-              <span style="font-size:11px; color:#ccc;" id="builder-current-metric-label">Nutzt globale Metrik</span>
-              <button id="btn-sort-slots" style="background:#17a2b8; color:#fff;" title="Sortiert Slots nach Häufigkeit (seltenste rechts)">Slots sortieren</button>
-              <button id="btn-builder-auto" style="background:#28a745; color:#fff;">Auto-Füllen</button>
-              <button id="btn-reset-slots" style="background:#6c757d; color:#fff;" title="Alle Slots (außer Slot 0) auf schwarz zurücksetzen">Slots zurücksetzen</button>
-          </div>
-      </div>
-   </div>
-</div>
-<!-- Auto-Step Result Modal -->
-<div id="auto-step-modal" class="modal-overlay">
-   <div class="modal-content" style="width: 700px;">
-      <h3 title="Zum Verschieben gedrückt halten">Auto-Schrittweiten-Analyse</h3>
-      <div id="auto-step-status" style="color:#aaa; font-size:13px; margin-bottom:10px;">Berechne...</div>
-      <div style="max-height: 350px; overflow-y: auto;">
-          <table class="analysis-table">
-              <thead><tr><th>Schrittweite (±)</th><th>⌀ RGB MSE</th><th>⌀ Metrik MSE</th><th>Max Metrik MSE</th><th>Aktion</th></tr></thead>
-              <tbody id="auto-step-body"></tbody>
-          </table>
-      </div>
-      <div style="margin-top:10px; text-align:right;"><button id="btn-auto-step-close" style="background:#555; color:#fff;">Schließen</button></div>
-   </div>
-</div>
-
-<!-- Fehler-Analyse Modal -->
-<div id="analysis-modal" class="modal-overlay">
-   <div class="modal-content" style="width: 850px;">
-      <h3 title="Zum Verschieben gedrückt halten">Fehler- & Histogramm-Analyse</h3>
-      <h4 style="margin:10px 0 5px 0; color:#ffc107;">Gesamtbild: Top 10 Max MSE Abweichungen</h4>
-      <div id="analysis-top5" style="background:#111; padding:8px; border-radius:4px; font-size:12px; max-height:200px; overflow-y:auto;"></div>
-      
-      <h4 style="margin:15px 0 5px 0; color:#4dabf7;">Fehler-Histogramm (Gesamtbild)</h4>
-      <div style="max-height: 300px; overflow-y: auto;">
-          <table class="analysis-table">
-              <thead><tr><th>Intervall</th><th>RGB MSE Count</th><th>RGB %</th><th>Metrik MSE Count</th><th>Metrik %</th></tr></thead>
-              <tbody id="analysis-histogram-body"></tbody>
-          </table>
-      </div>
-      <div style="margin-top:20px; text-align:right;"><button id="btn-analysis-close" style="background:#555; color:#fff;">Schließen</button></div>
-   </div>
-</div>
-
-<script type="module" src="/src/main.js"></script>
+    <script type="module" src="/src/main.js"></script>
 </body>
 </html>

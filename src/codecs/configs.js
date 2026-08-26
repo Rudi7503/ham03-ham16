@@ -64,7 +64,7 @@ export const HAM_CONFIGS = {
         bits: 16
     },
 
-    // --- 32-Bit Mischmodi (Exakt 4,0 Bit / Pixel im Schnitt) ---
+    // --- 32-Bit Mischmodi (Exakt 4,0 Bit / Pixel im Schnitt 8 Pixel) ---
     "HAM_32BIT_44444444": {
         isPaletted: true,
         isMixed: true,
@@ -77,19 +77,13 @@ export const HAM_CONFIGS = {
         slotsPerBank: 16,
         sequence: ["HAM05", "HAM03", "HAM05", "HAM03", "HAM05", "HAM03", "HAM05", "HAM03"]
     },
-    "HAM_32BIT_44444444": {
-        isPaletted: true,
-        isMixed: true,
-        slotsPerBank: 32,
-        sequence: ["HAM04", "HAM04", "HAM04", "HAM04", "HAM04", "HAM04", "HAM04", "HAM04"]
-    },
     "HAM_32BIT_63436343": {
         isPaletted: true,
         isMixed: true,
         slotsPerBank: 32,
         sequence: ["HAM06", "HAM03", "HAM04", "HAM03", "HAM06", "HAM03", "HAM04", "HAM03"]
     },
-     // --- Weitere gemischte Bestandskonfigurationen ---
+     // --- 32-Bit Mischmodi (Exakt 4,6 Bit / Pixel im Schnitt 7 Pixel) ---
     "HAM_32BIT_6446444": {
         isPaletted: true,
         isMixed: true,
@@ -108,22 +102,53 @@ export const HAM_CONFIGS = {
         slotsPerBank: 32,
         sequence: ["HAM06", "HAM04", "HAM05", "HAM04", "HAM05", "HAM04", "HAM04"]
     },
-    "HAM_32BIT_655655": {
+    // --- 32-Bit Mischmodi (Exakt 5,3 Bit / Pixel im Schnitt 6 Pixel) ---
+   
+     "HAM_32BIT_655655": {
         isPaletted: true,
         isMixed: true,
         slotsPerBank: 32,
         sequence: ["HAM06", "HAM05", "HAM05", "HAM06", "HAM05", "HAM05"]
     },
+     "HAM_32BIT_844844": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 127,
+        sequence: ["HAM08", "HAM04", "HAM04", "HAM08", "HAM04", "HAM04"]
+    },
+     "HAM_32BIT_846554": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 127,
+        sequence: ["HAM08", "HAM04", "HAM06", "HAM05", "HAM05", "HAM04"]
+    },
+     "HAM_32BIT_646565": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 32,
+        sequence: ["HAM06", "HAM04", "HAM06", "HAM05", "HAM06", "HAM05"]
+    },
+
+    // --- 32-Bit Mischmodi (Exakt 6,4 Bit / Pixel im Schnitt 5 Pixel) ---
     "HAM_32BIT_86666": {
         isPaletted: true,
         isMixed: true,
         slotsPerBank: 128,
         sequence: ["HAM08", "HAM06", "HAM06", "HAM06", "HAM06"]
     },
+    "HAM_32BIT_85865": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 128,
+        sequence: ["HAM08", "HAM05", "HAM08", "HAM06", "HAM05"]
+    },
+    // --- 32-Bit Mischmodi (Exakt 8,0 Bit / Pixel im Schnitt 4 Pixel) ---
     "HAM_32BIT_8888": {
         isPaletted: true,
         isMixed: true,
         slotsPerBank: 128,
         sequence: ["HAM08", "HAM08", "HAM08", "HAM08"]
     }
+    
+
 };
