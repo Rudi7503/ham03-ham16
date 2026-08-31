@@ -148,6 +148,14 @@ export const HAM_CONFIGS = {
         isMixed: true,
         slotsPerBank: 128,
         sequence: ["HAM08", "HAM08", "HAM08", "HAM08"]
+    },
+
+    // ... andere Formate ...
+    "DXT1": {
+        isPaletted: false,
+        isMixed: false,
+        isBlockBased: true,
+        bits: 4
     }
     
 

@@ -13,13 +13,13 @@ function getMetricDistFunc(metric) {
 }
 
 const CHANNEL_DEFS = {
-    "HAM01": { r: [1, -1], g: [1, -1], b: [1, -1] },
-    "HAM02": { r: [1, -1], g: [1, -1], b: [1, -1] },
-    "HAM03": { r: [1, -1], g: [1, -1], b: [1, -1] },
-    "HAM04": { r: [-1, 1], g: [-1, 1], b: [-1, 1] },
+    "HAM01": { r: [-2, 2], g: [-2, 2], b: [-2, 2] },
+    "HAM02": { r: [-2, 2], g: [-2, 2], b: [-2, 2] },
+    "HAM03": { r: [-2, 2], g: [-2, 2], b: [-2, 2] },
+    "HAM04": { r: [-2, 2], g: [-2, 2], b: [-2, 2] },
     "HAM05": { r: [-1, 1], g: [-1, 1], b: [-1, 1] },
     "HAM06": { r: [-1, 1], g: [-2, -1, 1, 2], b: [-1, 1] },
-    "HAM08_PAL": { r: [-2, -1, 1, 2], g: [-2, -1, 1, 2], b: [-2, -1, 1, 2] }
+    "HAM08": { r: [-2, -1, 1, 2], g: [-2, -1, 1, 2], b: [-2, -1, 1, 2] }
 };
 
 export async function encodePaletted(origData, imgW, imgH, format, stepVal, paletteRAM, offset, strategy="greedy", metric="yuv_weight", progressCallback=null, startOverride=0, endOverride=0, errorThreshold = 15.0, beamWidth = 6) {
@@ -59,7 +59,7 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
                     for (let bi = 0; bi < bChan.length; bi++) {
                         
                         if (fmt === "HAM01" && (gi !== ri || bi !== ri)) continue;
-                        if ((fmt === "HAM02" || fmt === "HAM03") && (bi !== ri)) continue;
+                        if (fmt === "HAM02"  && (bi !== ri)) continue;
 
                         cache.push({
                             cmd: { isAnchor: false, format: fmt, isTurbo: (m===4), rIndex: ri, gIndex: gi, bIndex: bi },
@@ -241,8 +241,7 @@ function getCmdVal(cmd) {
         bits = 2; v = ((cmd.rIndex & 1) << 1) | (cmd.gIndex & 1);
     } else if (fmt === "HAM03") {
         bits = 3;
-        if (cmd.isAnchor) v = 4 | (cmd.anchorIdx & 3);
-        else v = ((cmd.rIndex & 1) << 1) | (cmd.gIndex & 1);
+        v = (((cmd.rIndex||0) & 1) << 2) | (((cmd.gIndex||0) & 1) << 1) | ((cmd.bIndex||0) & 1);
     } else if (fmt === "HAM04") {
         bits = 4;
         if (cmd.isAnchor) v = 8 | (cmd.anchorIdx & 7);
@@ -255,7 +254,7 @@ function getCmdVal(cmd) {
         bits = 6;
         if (cmd.isAnchor) v = 32 | (cmd.anchorIdx & 31);
         else v = (((cmd.isTurbo?1:0)<<4) | ((cmd.rIndex||0)<<3) | ((cmd.gIndex||0)<<1) | (cmd.bIndex||0));
-    } else if (fmt === "HAM08_PAL") {
+    } else if (fmt === "HAM08") {
         bits = 8;
         if (cmd.isAnchor) v = 128 | (cmd.anchorIdx & 127);
         else v = (((cmd.isTurbo?1:0)<<6) | ((cmd.rIndex||0)<<4) | ((cmd.gIndex||0)<<2) | (cmd.bIndex||0));
@@ -293,8 +292,7 @@ export function unpackPaletted(packedData, format, totalPixels) {
         } else if (fmt === "HAM02") {
             let rbDir = (v >> 1) & 1, gDir = v & 1; return { isAnchor: false, format: fmt, rIndex: rbDir, gIndex: gDir, bIndex: rbDir };
         } else if (fmt === "HAM03") {
-            if (v & 4) return { isAnchor: true, format: fmt, anchorIdx: v & 3 };
-            let rbDir = (v >> 1) & 1, gDir = v & 1; return { isAnchor: false, format: fmt, isTurbo: false, rIndex: rbDir, gIndex: gDir, bIndex: rbDir };
+            return { isAnchor: false, format: fmt, isTurbo: false, rIndex: (v >> 2) & 1, gIndex: (v >> 1) & 1, bIndex: v & 1 };
         } else if (fmt === "HAM04") {
             if (v & 8) return { isAnchor: true, format: fmt, anchorIdx: v & 7 };
             return { isAnchor: false, format: fmt, isTurbo: false, rIndex: (v >> 2) & 1, gIndex: (v >> 1) & 1, bIndex: v & 1 };
@@ -304,7 +302,7 @@ export function unpackPaletted(packedData, format, totalPixels) {
         } else if (fmt === "HAM06") {
             if (v & 32) return { isAnchor: true, format: fmt, anchorIdx: v & 31 };
             return { isAnchor: false, format: fmt, isTurbo: ((v >> 4) & 1) === 1, rIndex: (v >> 3) & 1, gIndex: (v >> 1) & 3, bIndex: v & 1 };
-        } else if (fmt === "HAM08_PAL") {
+        } else if (fmt === "HAM08") {
             if (v & 128) return { isAnchor: true, format: fmt, anchorIdx: v & 127 };
             return { isAnchor: false, format: fmt, isTurbo: ((v >> 6) & 1) === 1, rIndex: (v >> 4) & 3, gIndex: (v >> 2) & 3, bIndex: v & 3 };
         }
