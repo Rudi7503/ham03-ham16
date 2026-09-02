@@ -7,7 +7,7 @@ import { computeDetailedAnalysis } from './analysis.js';
 self.onmessage = async (e) => {
     const { 
         candidate, origData, imgW, imgH, format, 
-        step, metric, offset, basePaletteRAM, slotToFill 
+        step, metric, offset, basePaletteRAM, slotToFill, optRegion 
     } = e.data;
 
     try {
@@ -29,10 +29,10 @@ self.onmessage = async (e) => {
         // 3. Bild decodieren
         let decodedPixels = decodePaletted(encodeRes.commands, imgW, imgH, step, localPalette, offset);
 
-        // 4. Fehlerwert (MSE) exakt berechnen
+        // 4. Fehlerwert (MSE) exakt berechnen — nur innerhalb der gewählten Region
         let stats = computeDetailedAnalysis(
             origData, decodedPixels, imgW, imgH, 0, totalPixels, 
-            step, metric, config, null
+            step, metric, config, optRegion
         );
 
         // 5. Ergebnis (Score) an den Haupt-Thread zurückschicken

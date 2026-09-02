@@ -1,16 +1,5 @@
 import { HAM_CONFIGS } from '../codecs/configs.js';
-import { clamp, get_yuv_dist, get_yuv_dist_weight, get_rgb_dist, get_yuv_dist_weight_heavy, get_rgb_abs_dist, get_redmean_dist, get_oklab_dist } from '../codecs/utils.js';
-
-// Funktions-Pointer zurückgeben, statt bei jedem Aufruf Strings zu vergleichen
-function getMetricDistFunc(metric) {
-    if (metric === 'oklab') return get_oklab_dist;
-    if (metric === 'redmean') return get_redmean_dist;
-    if (metric === 'yuv_weight_heavy') return get_yuv_dist_weight_heavy;
-    if (metric === 'rgb') return get_rgb_dist;
-    if (metric === 'rgb_ABS') return get_rgb_abs_dist;
-    if (metric === 'yuv') return get_yuv_dist;
-    return get_yuv_dist_weight;
-}
+import { clamp, getMetricDistFunc } from '../codecs/utils.js';
 
 const CHANNEL_DEFS = {
     "HAM01": { r: [-2, 2], g: [-2, 2], b: [-2, 2] },
@@ -33,9 +22,6 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
     paletteRAM[0] = 0; paletteRAM[1] = 0; paletteRAM[2] = 0;
 
     let chunkSize = (config.isMixed && config.sequence) ? config.sequence.length : 1;
-    let totalChunksCount = 0;
-    let skippedChunksCount = 0;
-    let optimizedOverlay = new Uint8Array(totalPixels);
 
     // OPTIMIERUNG 1: Metrik-Funktion einmalig auflösen
     const distFunc = getMetricDistFunc(metric);
@@ -119,8 +105,6 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         let currentGreedyAcc = { ...acc };
         let greedyPath = [];
 
-        totalChunksCount++;
-
         // 1. Greedy Pre-Pass
         for (let c = 0; c < actualChunkSize; c++) {
             let pxIdx = i + c;
@@ -147,13 +131,11 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         let greedyAvgCost = greedyCost / actualChunkSize;
 
         let startsWithAnchor = greedyPath[0].cmd.isAnchor;
-        let wasOptimized = false;
         
         let needsLookahead = (greedyAvgCost > errorThreshold) || (forceLookahead && !startsWithAnchor);
 
         // 2. Beschleunigte Suche (Beam Search)
         if (strategy === 'lookahead_chunk' && actualChunkSize > 1 && needsLookahead) {
-            wasOptimized = true;
             let bestDfsCost = greedyCost;
             let bestChunkPath = greedyPath;
 
@@ -201,14 +183,12 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
             
             forceLookahead = true; 
         } else {
-            skippedChunksCount++;
             forceLookahead = false; 
         }
 
         for (let c = 0; c < actualChunkSize; c++) {
             let pxIdx = i + c;
             commands[pxIdx] = bestChunkCmds[c];
-            optimizedOverlay[pxIdx] = wasOptimized ? 1 : 0;
         }
         acc = finalAcc;
 
@@ -218,17 +198,7 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         }
     }
 
-    let skipPercent = totalChunksCount > 0 ? ((skippedChunksCount / totalChunksCount) * 100).toFixed(1) : 0;
-    
-    return {
-        commands,
-        stats: {
-            totalChunks: totalChunksCount,
-            skippedChunks: skippedChunksCount,
-            skipPercent: parseFloat(skipPercent)
-        },
-        overlay: optimizedOverlay
-    };
+    return { commands };
 }
 
 function getCmdVal(cmd) {

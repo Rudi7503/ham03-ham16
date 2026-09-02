@@ -1,20 +1,6 @@
-import { HAM_CONFIGS } from '../codecs/configs.js';
-import { get_rgb_dist, get_rgb_abs_dist, get_yuv_dist, get_yuv_dist_weight, get_yuv_dist_weight_heavy, get_redmean_dist, get_oklab_dist } from '../codecs/utils.js';
-import { decodeStream } from './decoder.js';
-import { encodeStream } from './engine-stream.js';
+import { get_rgb_dist, getMetricDistFunc } from '../codecs/utils.js';
 
 export const errorBins = [0, 5, 10, 20, 50, 100];
-
-function getAnalysisDist(metric, r1, g1, b1, r2, g2, b2) {
-    if (metric === 'oklab') return get_oklab_dist(r1, g1, b1, r2, g2, b2);
-    if (metric === 'redmean') return get_redmean_dist(r1, g1, b1, r2, g2, b2);
-    if (metric === 'yuv_weight_heavy') return get_yuv_dist_weight_heavy(r1, g1, b1, r2, g2, b2);
-    if (metric === 'yuv_weight') return get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
-    if (metric === 'yuv') return get_yuv_dist(r1, g1, b1, r2, g2, b2);
-    if (metric === 'rgb') return get_rgb_dist(r1, g1, b1, r2, g2, b2);
-    if (metric === 'rgb_ABS') return get_rgb_abs_dist(r1, g1, b1, r2, g2, b2);
-    return get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
-}
 
 export function getImageHistogram(imgData, imgW, imgH, stepVal, topN = 10, paletteRAM = null, offset = 0, optRegion = null) {
     let data = imgData.data;
@@ -65,23 +51,6 @@ export function getImageHistogram(imgData, imgW, imgH, stepVal, topN = 10, palet
         });
 }
 
-export function autoFillPaletteFromImage(imgData, imgW, imgH, paletteRAM, offset, slots, stepVal) {
-    let topColors = getImageHistogram(imgData, imgW, imgH, stepVal, slots, paletteRAM, offset);
-    
-    for (let i = 0; i < slots; i++) {
-        let absSlot = (offset + i) % 256;
-        if (i < topColors.length) {
-            paletteRAM[absSlot * 3] = topColors[i].r;
-            paletteRAM[absSlot * 3 + 1] = topColors[i].g;
-            paletteRAM[absSlot * 3 + 2] = topColors[i].b;
-        } else {
-            paletteRAM[absSlot * 3] = 0;
-            paletteRAM[absSlot * 3 + 1] = 0;
-            paletteRAM[absSlot * 3 + 2] = 0;
-        }
-    }
-}
-
 export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, endPx, stepVal = {r:4, g:4, b:4}, metric = 'yuv_weight', config = null, optRegion = null) {
     let stats = {
         global: { top10: [], avgRgb: 0, avgYuv: 0, byBitDepth: {} },
@@ -99,6 +68,7 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
     let totalPixels = imgW * imgH;
     
     let clusterRadius = Math.max(2, Math.floor((stepVal.r + stepVal.g + stepVal.b) / 3));
+    const distFunc = getMetricDistFunc(metric);
 
     for (let i = 0; i < totalPixels; i++) {
         if (optRegion) {
@@ -114,7 +84,7 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
         let r2 = decData[idx], g2 = decData[idx+1], b2 = decData[idx+2];
 
         let rMse = get_rgb_dist(r1, g1, b1, r2, g2, b2);
-        let metricMse = getAnalysisDist(metric, r1, g1, b1, r2, g2, b2);
+        let metricMse = distFunc(r1, g1, b1, r2, g2, b2);
 
         g_rgbSum += rMse;
         g_metricSum += metricMse;
@@ -171,8 +141,7 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
         }
     }
 
-    let validPixels = g_rgbSum === 0 ? 1 : (g_rgbSum / totalPixels); 
-    if(optRegion && optRegion.width > 0) validPixels = optRegion.width * optRegion.height;
+    const validPixels = (optRegion && optRegion.width > 0) ? optRegion.width * optRegion.height : totalPixels;
 
     stats.global.avgRgb = g_rgbSum / validPixels;
     stats.global.avgYuv = g_metricSum / validPixels;
@@ -218,48 +187,4 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
     }
 
     return stats;
-}
-
-export async function runSimulationWithStrategy(sPx, ePx, origData, imgW, palette, stepVal, strategy, metric, max_depth, format, currentOffset = 0, optRegion = null) {
-    let imgH = origData.length / (imgW * 4);
-    let segs = [{ absEnd: origData.length / 4, waitPixels: origData.length / 4, offset: currentOffset, step: stepVal }];
-    
-    let encodeResult = await encodeStream(origData, imgW, imgH, format, segs, palette, strategy, metric, max_depth, null, sPx, ePx);
-    let config = HAM_CONFIGS[format];
-    let decoded = decodeStream(encodeResult.commandArray, imgW, imgH, palette, segs, config);
-    
-    let yuvSum = 0, rgbSum = 0, maxYuv = 0, count = 0;
-    
-    for (let i = sPx; i < ePx; i++) { 
-        if (optRegion) {
-            let x = i % imgW;
-            let y = Math.floor(i / imgW);
-            if (x < optRegion.x || x >= optRegion.x + optRegion.width || y < optRegion.y || y >= optRegion.y + optRegion.height) {
-                continue;
-            }
-        }
-
-        let idx = i * 4;
-        let r1 = origData[idx], g1 = origData[idx+1], b1 = origData[idx+2];
-        let r2 = decoded[idx], g2 = decoded[idx+1], b2 = decoded[idx+2];
-        
-        let yDist = getAnalysisDist(metric, r1, g1, b1, r2, g2, b2);
-        let rDist = get_rgb_dist(r1, g1, b1, r2, g2, b2);
-        
-        yuvSum += yDist;
-        rgbSum += rDist;
-        if (yDist > maxYuv) maxYuv = yDist;
-        count++;
-    }
-
-    if (count === 0) count = 1;
-
-    let avgRgb = rgbSum / count;
-    let avgYuv = yuvSum / count;
-    let alpha = 0.2;
-    let beta = 0.5;  
-    let stepPenalty = stepVal.r + stepVal.g + stepVal.b;
-    let score = avgYuv + (alpha * maxYuv) + (beta * stepPenalty);
-
-    return { avgRgb, avgYuv, maxYuv, score };
 }

@@ -89,6 +89,16 @@ export function get_rgb_abs_dist(r1, g1, b1, r2, g2, b2) {
     return Math.abs(r1 - r2) + Math.abs(g1 - g2) + Math.abs(b1 - b2);
 }
 
+export function getMetricDistFunc(metric) {
+    if (metric === 'oklab') return get_oklab_dist;
+    if (metric === 'redmean') return get_redmean_dist;
+    if (metric === 'yuv_weight_heavy') return get_yuv_dist_weight_heavy;
+    if (metric === 'rgb') return get_rgb_dist;
+    if (metric === 'rgb_ABS') return get_rgb_abs_dist;
+    if (metric === 'yuv') return get_yuv_dist;
+    return get_yuv_dist_weight;
+}
+
 export function hexToRgb(h) { 
     let b = parseInt(h.slice(1), 16); 
     return [(b >> 16) & 255, (b >> 8) & 255, b & 255]; 
@@ -96,43 +106,4 @@ export function hexToRgb(h) {
 
 export function rgbToHex(r, g, b) { 
     return "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).padStart(6, '0'); 
-}
-
-export function pack_nbit(w, n) {
-    let o = [], b = 0, bi = 0, m = (1 << n) - 1;
-    for (let i = 0; i < w.length; i++) {
-        b = (b << n) | (w[i] & m);
-        bi += n;
-        while (bi >= 8) {
-            bi -= 8;
-            o.push((b >> bi) & 0xFF);
-        }
-    }
-    if (bi > 0) o.push((b << (8 - bi)) & 0xFF);
-    return new Uint8Array(o);
-}
-
-export function unpack_nbit(d, n, c) {
-    let w = new Uint8Array(c), b = 0, bi = 0, p = 0, m = (1 << n) - 1;
-    for (let i = 0; i < c; i++) {
-        while (bi < n && p < d.length) {
-            b = (b << 8) | d[p++];
-            bi += 8;
-        }
-        if (bi >= n) {
-            bi -= n;
-            w[i] = (b >> bi) & m;
-        } else {
-            w[i] = 0;
-        }
-    }
-    return w;
-}
-
-export function countUniqueColors(imgData) {
-    let set = new Set();
-    for (let i = 0; i < imgData.length; i += 4) { 
-        set.add((imgData[i] << 16) | (imgData[i+1] << 8) | imgData[i+2]); 
-    }
-    return set.size;
 }

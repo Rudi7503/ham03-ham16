@@ -1,7 +1,5 @@
 // core/feedback.js
 
-import { HAM_CONFIGS } from '../codecs/configs.js';
-
 // Hilfsfunktion zum Extrahieren der Bit-Tiefe
 function getFormatBits(fmt) {
     if (!fmt) return 8;

@@ -1,14 +1,4 @@
-import { clamp, get_yuv_dist, get_yuv_dist_weight, get_rgb_dist, get_yuv_dist_weight_heavy, get_rgb_abs_dist, get_redmean_dist, get_oklab_dist } from '../codecs/utils.js';
-
-function getMetricDist(metric, r1, g1, b1, r2, g2, b2) {
-    if (metric === 'oklab') return get_oklab_dist(r1, g1, b1, r2, g2, b2);
-    if (metric === 'redmean') return get_redmean_dist(r1, g1, b1, r2, g2, b2);
-    if (metric === 'yuv_weight_heavy') return get_yuv_dist_weight_heavy(r1, g1, b1, r2, g2, b2);
-    if (metric === 'yuv') return get_yuv_dist(r1, g1, b1, r2, g2, b2);
-    if (metric === 'rgb') return get_rgb_dist(r1, g1, b1, r2, g2, b2);
-    if (metric === 'rgb_ABS') return get_rgb_abs_dist(r1, g1, b1, r2, g2, b2);
-    return get_yuv_dist_weight(r1, g1, b1, r2, g2, b2);
-}
+import { clamp, getMetricDistFunc } from '../codecs/utils.js';
 
 export async function encodeHam12_16(origData, imgW, imgH, format, stepVal, strategy="both", metric="yuv_weight", max_depth=1, progressCallback=null, startOverride=0, endOverride=0, hybridPercent=5.0) {
     let totalPixels = imgW * imgH;
@@ -21,6 +11,7 @@ export async function encodeHam12_16(origData, imgW, imgH, format, stepVal, stra
     let hybrid_depth = isHybrid ? (parseInt(strategy.split('_')[1]) || 3) : max_depth;
     let currentStrategy = isHybrid ? 'both' : strategy;
     let sr = stepVal.r, sg = stepVal.g, sb = stepVal.b;
+    const distFunc = getMetricDistFunc(metric);
 
     function findBestBranch(x, y, c_acc, d, max_d) {
         if (d === max_d || x >= imgW) return { cost: 0, cmd: null, r: c_acc.r, g: c_acc.g, b: c_acc.b };
@@ -63,7 +54,7 @@ export async function encodeHam12_16(origData, imgW, imgH, format, stepVal, stra
         }
 
         for (let b of branches) {
-            b.baseCost = getMetricDist(metric, tr, tg, tb, b.r, b.g, b.b);
+            b.baseCost = distFunc(tr, tg, tb, b.r, b.g, b.b);
         }
         branches.sort((a, b) => a.baseCost - b.baseCost);
         
@@ -120,7 +111,7 @@ export async function encodeHam12_16(origData, imgW, imgH, format, stepVal, stra
             let blockError = 0;
             for (let i = blockStart; i < blockEnd; i++) {
                 let origIdx = i * 4, st = pixelStates[i];
-                blockError += getMetricDist(metric, origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
+                blockError += distFunc(origData[origIdx], origData[origIdx+1], origData[origIdx+2], st.r, st.g, st.b);
             }
             allBlocks.push({start: blockStart, end: blockEnd, err: blockError / (blockEnd - blockStart)});
             blockStart = blockEnd;

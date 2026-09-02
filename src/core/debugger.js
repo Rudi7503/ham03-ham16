@@ -34,9 +34,9 @@ export async function debugRoundtripPaletted(origData, imgW, imgH, format, stepV
     console.log(`--- START DEBUG ROUNDTRIP [MODUL: ${format} | ${strategy} | ${metric}] ---`);
     
     let cmds = await encodePaletted(origData, imgW, imgH, format, stepVal, paletteRAM, offset, strategy, metric, 1);
-    let decodedOriginal = decodePaletted(cmds, imgW, imgH, stepVal, paletteRAM, offset);
+    let decodedOriginal = decodePaletted(cmds.commands, imgW, imgH, stepVal, paletteRAM, offset);
     
-    let packed = packPaletted(cmds, format);
+    let packed = packPaletted(cmds.commands, format);
     let unpackedCmds = unpackPaletted(packed, format, imgW * imgH);
     let decodedLoaded = decodePaletted(unpackedCmds, imgW, imgH, stepVal, paletteRAM, offset);
 
