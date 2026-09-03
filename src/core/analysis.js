@@ -2,6 +2,37 @@ import { get_rgb_dist, getMetricDistFunc } from '../codecs/utils.js';
 
 export const errorBins = [0, 5, 10, 20, 50, 100];
 
+/**
+ * Schlanke Variante von computeDetailedAnalysis, die NUR den globalen
+ * Durchschnitts-Fehler (global.avgYuv) liefert — ohne Top10-/Histogramm-
+ * Maps, Bit-Tiefen-Buckets und String-Allokationen pro Pixel. Das Ergebnis
+ * ist bitidentisch zu computeDetailedAnalysis(...).global.avgYuv (gleiche
+ * Distanz-Funktion, gleiche Regions-Logik, gleiche Division durch die
+ * Regionsfläche), daher qualitätsneutral. Wird in den Worker-Battles
+ * verwendet, wo pro Kandidat ausschließlich der Score zählt.
+ */
+export function computeAvgYuvScore(origData, decData, imgW, imgH, metric = 'yuv_weight', optRegion = null) {
+    const distFunc = getMetricDistFunc(metric);
+    const totalPixels = imgW * imgH;
+    let sum = 0;
+    let count = 0;
+    for (let i = 0; i < totalPixels; i++) {
+        if (optRegion) {
+            const x = i % imgW;
+            const y = Math.floor(i / imgW);
+            if (x < optRegion.x || x >= optRegion.x + optRegion.width ||
+                y < optRegion.y || y >= optRegion.y + optRegion.height) continue;
+        }
+        const idx = i * 4;
+        sum += distFunc(
+            origData[idx], origData[idx + 1], origData[idx + 2],
+            decData[idx], decData[idx + 1], decData[idx + 2]
+        );
+        count++;
+    }
+    return count > 0 ? sum / count : Infinity;
+}
+
 export function getImageHistogram(imgData, imgW, imgH, stepVal, topN = 10, paletteRAM = null, offset = 0, optRegion = null) {
     let data = imgData.data;
     let colorMap = new Map();

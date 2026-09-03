@@ -32,12 +32,12 @@ export function initPaletteBuilderUI(appState, deps) {
             box.innerHTML = `
                 <h3 style="margin-top:0; color:#ffc107; font-family:sans-serif;">Auto-Füllen: Modus wählen</h3>
                 <p style="color:#ccc; font-size:14px; margin-bottom:20px; font-family:sans-serif; line-height:1.4;">
-                    Soll nach Durchlauf 1 (Reines Battle) ein 2. Durchlauf zur Feinoptimierung (Hill Climbing) gestartet werden?<br>
-                    <span style="font-size:12px; color:#888;">(Der 2. Durchlauf drückt den MSE noch weiter, dauert aber länger)</span>
+                    Soll nach Durchlauf 1 (Battle + Clustering) die Vektor-Feinoptimierung (Durchlauf 2 + 3) gestartet werden?<br>
+                    <span style="font-size:12px; color:#888;">(Die Durchläufe 2 + 3 drücken den MSE weiter, dauern aber länger)</span>
                 </p>
                 <div style="display:flex; justify-content:center; gap:12px;">
                     <button id="btn-af-1" style="background:#17a2b8; color:#fff; border:none; padding:8px 15px; border-radius:4px; cursor:pointer; font-weight:bold;">Nein (Nur Durchlauf 1)</button>
-                    <button id="btn-af-2" style="background:#28a745; color:#fff; border:none; padding:8px 15px; border-radius:4px; cursor:pointer; font-weight:bold;">Ja (Mit Durchlauf 2)</button>
+                    <button id="btn-af-2" style="background:#28a745; color:#fff; border:none; padding:8px 15px; border-radius:4px; cursor:pointer; font-weight:bold;">Ja (Mit Durchlauf 2 + 3)</button>
                     <button id="btn-af-0" style="background:#555; color:#fff; border:none; padding:8px 15px; border-radius:4px; cursor:pointer; font-weight:bold;">Abbrechen</button>
                 </div>
             `;
@@ -52,16 +52,35 @@ export function initPaletteBuilderUI(appState, deps) {
 
     const liveUpdateUI = () => {
         renderPaletteWithLocks(appState);
-        let slots = document.querySelectorAll('.builder-slot');
-        if (slots.length > 0) {
+        let slotDivs = document.querySelectorAll('.builder-slot');
+        if (slotDivs.length > 0) {
             let currentOffset = getCurrentOffset();
-            slots.forEach((slot, i) => {
+
+            // Nutzung aus dem FRISCHEN Command-Array neu ermitteln (wird bei jedem
+            // Re-Encode aktualisiert), damit die Anzeige nicht auf 0x stehen bleibt.
+            let usage = new Array(slotDivs.length).fill(0);
+            if (appState.latestCommandArray) {
+                for (let cmd of appState.latestCommandArray) {
+                    if (cmd && cmd.isAnchor && cmd.anchorIdx !== undefined && cmd.anchorIdx >= 0 && cmd.anchorIdx < slotDivs.length) {
+                        usage[cmd.anchorIdx]++;
+                    }
+                }
+            }
+
+            let usageLabels = document.querySelectorAll('.builder-usage');
+
+            slotDivs.forEach((slot, i) => {
                 let absSlot = (currentOffset + i) % 256;
                 let r = appState.globalPaletteRAM[absSlot*3];
                 let g = appState.globalPaletteRAM[absSlot*3+1];
                 let b = appState.globalPaletteRAM[absSlot*3+2];
                 slot.style.backgroundColor = rgbToHex(r, g, b);
-                slot.title = `Slot ${i} (Abs: ${absSlot})\nRGB(${r}, ${g}, ${b})`;
+                slot.title = `Slot ${i} (Abs: ${absSlot})\nRGB(${r}, ${g}, ${b})\nVerwendung: ${usage[i]}x`;
+
+                if (usageLabels[i]) {
+                    usageLabels[i].innerText = `${usage[i]}x`;
+                    usageLabels[i].style.color = usage[i] > 0 ? '#4dabf7' : '#777';
+                }
             });
         }
     };
@@ -137,6 +156,7 @@ export function initPaletteBuilderUI(appState, deps) {
                 if (selectedTargetSlot && selectedTargetSlot.index === i) slotDiv.style.border = '2px solid #ffc107';
 
                 let usageLabel = document.createElement('span');
+                usageLabel.className = 'builder-usage';
                 usageLabel.style.color = usageCount > 0 ? '#4dabf7' : '#777';
                 usageLabel.innerText = `${usageCount}x`;
 
@@ -316,7 +336,7 @@ export function initPaletteBuilderUI(appState, deps) {
         let mode = await askAutoFillMode();
         if (mode === 0) return; 
         
-        let run2ndPass = (mode === 2);
+        let runRefinementPasses = (mode === 2);
         
         let statusDiv = document.getElementById('builder-status');
         let currentOffset = getCurrentOffset();
@@ -330,7 +350,7 @@ export function initPaletteBuilderUI(appState, deps) {
             (msg) => { if (statusDiv) statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ ${msg}</span>`; },
             triggerEncode,
             liveUpdateUI,
-            run2ndPass
+            runRefinementPasses
         );
 
         if (statusDiv) statusDiv.innerHTML = `<span style='color:#28a745; font-weight:bold;'>✅ Optimierung beendet!</span>`;

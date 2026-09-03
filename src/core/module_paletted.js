@@ -301,7 +301,7 @@ export function decodePaletted(commands, imgW, imgH, stepVal, paletteRAM, offset
 
     for (let i = 0; i < commands.length; i++) {
         let cmd = commands[i];
-        if (cmd.isAnchor) {
+        if (cmd.isAnchor && (HAM_CONFIGS[cmd.format]?.slotsPerBank > 0)) {
             let absSlot = (offset + cmd.anchorIdx) % 256;
             acc.r = paletteRAM[absSlot*3]; acc.g = paletteRAM[absSlot*3+1]; acc.b = paletteRAM[absSlot*3+2];
         } else {

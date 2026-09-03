@@ -2,7 +2,7 @@
 
 import { HAM_CONFIGS } from '../codecs/configs.js';
 import { encodePaletted, decodePaletted } from './module_paletted.js';
-import { computeDetailedAnalysis } from './analysis.js';
+import { computeAvgYuvScore } from './analysis.js';
 // Der Worker lauscht auf Nachrichten vom Haupt-Thread
 self.onmessage = async (e) => {
     const { 
@@ -18,9 +18,6 @@ self.onmessage = async (e) => {
         localPalette[slotToFill * 3 + 2] = candidate.b;
 
         // 2. Bild mit dieser Test-Palette encodieren (progressCallback = null, damit es extrem schnell läuft)
-        let config = HAM_CONFIGS[format];
-        let totalPixels = imgW * imgH;
-        
         let encodeRes = await encodePaletted(
             origData, imgW, imgH, format, step, localPalette, offset, 
             "greedy", metric, null, 0, 0, 15.0 
@@ -29,14 +26,14 @@ self.onmessage = async (e) => {
         // 3. Bild decodieren
         let decodedPixels = decodePaletted(encodeRes.commands, imgW, imgH, step, localPalette, offset);
 
-        // 4. Fehlerwert (MSE) exakt berechnen — nur innerhalb der gewählten Region
-        let stats = computeDetailedAnalysis(
-            origData, decodedPixels, imgW, imgH, 0, totalPixels, 
-            step, metric, config, optRegion
-        );
+        // 4. Fehlerwert (Score) berechnen. Bewusst NICHT computeDetailedAnalysis:
+        //    die schlanke Variante liefert exakt denselben avgYuv-Wert, spart aber
+        //    die teure Top10-/Histogramm-Analyse (Maps + String-Keys pro Pixel),
+        //    die in jedem Battle-Kandidaten nur den Score liefern würde.
+        let score = computeAvgYuvScore(origData, decodedPixels, imgW, imgH, metric, optRegion);
 
         // 5. Ergebnis (Score) an den Haupt-Thread zurückschicken
-        self.postMessage({ candidate: candidate, score: stats.global.avgYuv });
+        self.postMessage({ candidate: candidate, score: score });
 
     } catch (error) {
         // Falls was crasht, geben wir einen unendlichen Fehlerwert zurück, 
