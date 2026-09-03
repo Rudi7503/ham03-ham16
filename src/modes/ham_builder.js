@@ -6,13 +6,12 @@ import { encodePaletted, decodePaletted, packPaletted } from '../core/module_pal
 import { encodeHam12_16, decodeHam12_16, packHam12_16 } from '../core/module_ham12_16.js';
 import { debugRoundtripHam12_16, debugRoundtripPaletted } from '../core/debugger.js';
 import { computeDetailedAnalysis, errorBins } from '../core/analysis.js';
-import { applySmartBandwidthFilter } from '../core/feedback.js';
+import { generateSmartTarget } from '../core/smart_target.js';
 import { setZoomMode, centerOnCoordinate, setupCanvasEvents } from '../ui/canvas-view.js';
 import { encodeDXT1, decodeDXT1 } from '../core/module_dxt1.js';
 import { initPaletteBuilderUI } from '../ui/palette_builder.js';
 
 let lockedSlots = new Set();
-let latestErrorOverlayData = null;
 let optRegion = { x: 0, y: 0, width: 0, height: 0 };
 let isRegionModeActive = false;
 let isDrawingRegion = false;
@@ -86,6 +85,12 @@ export function initHamBuilderMode(appState, containerEl) {
             #btn-analysis { background-color: #6f42c1; color: white; } #btn-analysis:hover { background-color: #5a32a3; }
             #btn-encode:disabled, #btn-save:disabled, #btn-builder:disabled, #btn-analysis:disabled, #btn-debug-roundtrip:disabled { background-color: #555; cursor: not-allowed; color: #888; }
             .btn-zoom { background-color: #6c757d; color: white; } .btn-zoom.active { background-color: #17a2b8; }
+            .target-sw { background-color: #333; color: #aaa; padding: 5px 10px; font-size: 12px; font-weight: bold; border: none; border-radius: 0; cursor: pointer; }
+            .target-sw.active { background-color: #17a2b8; color: #fff; }
+            .target-sw:disabled { background-color: #222; color: #555; cursor: not-allowed; }
+            #btn-modify-image { background-color: #e83e8c; color: white; } #btn-modify-image:hover:not(:disabled) { background-color: #d63384; }
+            #btn-replace-original { background-color: #fd7e14; color: white; padding: 4px 8px; font-size: 11px; } #btn-replace-original:hover:not(:disabled) { background-color: #e96b02; }
+            #btn-modify-image:disabled, #btn-replace-original:disabled { background-color: #555; color: #888; cursor: not-allowed; }
             #palette-box { display: flex; background: #111; padding: 3px 6px; border-radius: 4px; border: 1px solid #444; align-items: center; gap: 6px; }
             #palette-pickers-container { display: flex; gap: 2px; flex-wrap: wrap; max-width: 260px; max-height: 120px; overflow-y: auto; }
             .palette-picker { width: 18px; height: 18px; border: none; cursor: pointer; padding: 0; background: none; }
@@ -154,12 +159,14 @@ export function initHamBuilderMode(appState, containerEl) {
                     </select>
                 </div>
                 
-                <div class="control-group" style="background:#111; padding:2px 8px; border-radius:4px; border:1px solid #007bff;">
-                    <label style="color:#4dabf7;">Feedback Loop:</label>
-                    <label>Iter:</label>
-                    <input type="number" id="feedback-iter" min="1" max="10" value="1" style="width:35px;">
-                    <label>Toleranz: <input type="number" id="filter-tolerance" step="0.5" min="0.5" max="15.0" value="6.5" style="width:45px;"></label>
-                    <label><input type="checkbox" id="chk-error-overlay" style="vertical-align: middle;"> Zeige mod. Original</label>
+                <div class="control-group" id="smart-target-group" style="background:#111; padding:2px 8px; border-radius:4px; border:1px solid #007bff;">
+                    <label style="color:#4dabf7;">Smart Target:</label>
+                    <button id="btn-modify-image" title="Originalbild wavelet-basiert modifizieren, damit der HAM-Codec es artefaktfrei codiert">Originalbild modifizieren</button>
+                    <div id="target-switch" style="display:inline-flex; border:1px solid #444; border-radius:4px; overflow:hidden;">
+                        <button id="sw-original" class="target-sw active" title="Linke Anzeige: Originalbild">Original</button>
+                        <button id="sw-modified" class="target-sw" disabled title="Linke Anzeige: modifiziertes Bild">Modifiziert</button>
+                    </div>
+                    <button id="btn-replace-original" disabled title="Modifiziertes Bild als neues Original übernehmen (ermöglicht mehrfaches Modifizieren)">Mod. übernehmen</button>
                 </div>
                 
                 <div class="control-group">
@@ -219,7 +226,7 @@ export function initHamBuilderMode(appState, containerEl) {
 
             <!-- Image Area -->
             <div id="image-area">
-                <div class="view-pane" id="pane-left"><div class="pane-label">ORIGINAL</div><canvas id="canvas-original"></canvas></div>
+                <div class="view-pane" id="pane-left"><div class="pane-label" id="source-label">ORIGINAL</div><canvas id="canvas-original"></canvas></div>
                 <div class="view-pane" id="pane-right"><div class="pane-label" id="decoded-label">DEKODIERT</div><canvas id="canvas-decoded"></canvas></div>
             </div>
         </div>
@@ -279,9 +286,36 @@ export function initHamBuilderMode(appState, containerEl) {
     const ctxOrig = canvasOrig.getContext('2d');
     const ctxDec = canvasDec.getContext('2d');
 
+    // Aktuell angezeigte Quelle (Original oder Smart Target) bestimmen.
+    function getShownSourceImageData() {
+        return (appState.showModified && appState.modifiedImageData)
+            ? appState.modifiedImageData
+            : appState.originalImageData;
+    }
+    function getShownSourceData() {
+        return getShownSourceImageData().data;
+    }
+    function renderSourcePane() {
+        const data = getShownSourceImageData();
+        if (data) ctxOrig.putImageData(data, 0, 0);
+        updateToggleUI();
+    }
+    function updateToggleUI() {
+        const hasMod = !!appState.modifiedImageData;
+        const showMod = appState.showModified && hasMod;
+        const swOrig = document.getElementById('sw-original');
+        const swMod = document.getElementById('sw-modified');
+        const btnRep = document.getElementById('btn-replace-original');
+        const lbl = document.getElementById('source-label');
+        if (swOrig) swOrig.classList.toggle('active', !showMod);
+        if (swMod) { swMod.classList.toggle('active', showMod); swMod.disabled = !hasMod; }
+        if (btnRep) btnRep.disabled = !hasMod;
+        if (lbl) lbl.innerText = showMod ? 'SMART TARGET' : 'ORIGINAL';
+    }
+
     canvasOrig.width = appState.currentImgW; canvasOrig.height = appState.currentImgH;
     canvasDec.width = appState.currentImgW; canvasDec.height = appState.currentImgH;
-    ctxOrig.putImageData(appState.originalImageData, 0, 0);
+    renderSourcePane();
 
     if (appState.decodedImageData) {
         ctxDec.putImageData(appState.decodedImageData, 0, 0);
@@ -291,7 +325,7 @@ export function initHamBuilderMode(appState, containerEl) {
 
     setupCanvasEvents(
         () => ({ w: appState.currentImgW, h: appState.currentImgH }),
-        () => ({ original: appState.originalImageData, decoded: appState.decodedImageData })
+        () => ({ original: getShownSourceImageData(), decoded: appState.decodedImageData })
     );
 
     ['fit', '1x', '2x', '4x', '8x', '16x', '32x'].forEach(mode => {
@@ -311,7 +345,7 @@ export function initHamBuilderMode(appState, containerEl) {
         isRegionModeActive = false; canvasOrig.style.cursor = 'grab';
         optRegion = { x: 0, y: 0, width: appState.currentImgW, height: appState.currentImgH };
         document.getElementById('region-info').innerText = 'Bereich: Ganzes Bild';
-        ctxOrig.putImageData(appState.originalImageData, 0, 0);
+        ctxOrig.putImageData(getShownSourceImageData(), 0, 0);
     });
 
     canvasOrig.addEventListener('mousedown', (e) => {
@@ -326,7 +360,7 @@ export function initHamBuilderMode(appState, containerEl) {
         let rect = canvasOrig.getBoundingClientRect();
         let curX = Math.floor((e.clientX - rect.left) * (canvasOrig.width / rect.width));
         let curY = Math.floor((e.clientY - rect.top) * (canvasOrig.height / rect.height));
-        ctxOrig.putImageData(appState.originalImageData, 0, 0);
+        ctxOrig.putImageData(getShownSourceImageData(), 0, 0);
         ctxOrig.strokeStyle = "rgba(255,0,0,0.8)"; ctxOrig.lineWidth = 2; ctxOrig.setLineDash([5,5]);
         ctxOrig.strokeRect(startX, startY, curX - startX, curY - startY);
     });
@@ -342,7 +376,7 @@ export function initHamBuilderMode(appState, containerEl) {
         if (optRegion.width === 0) optRegion.width = 1;
         if (optRegion.height === 0) optRegion.height = 1;
         document.getElementById('region-info').innerText = `Bereich: X:${optRegion.x} Y:${optRegion.y} B:${optRegion.width} H:${optRegion.height}`;
-        ctxOrig.putImageData(appState.originalImageData, 0, 0);
+        ctxOrig.putImageData(getShownSourceImageData(), 0, 0);
         ctxOrig.strokeRect(optRegion.x, optRegion.y, optRegion.width, optRegion.height);
     });
 
@@ -360,6 +394,11 @@ export function initHamBuilderMode(appState, containerEl) {
         
         let btnBuilder = document.getElementById('btn-builder');
         if (btnBuilder) btnBuilder.disabled = !isPalFormat || !appState.originalImageData;
+        
+        let smartGroup = document.getElementById('smart-target-group');
+        if (smartGroup) smartGroup.style.display = isPalFormat ? 'flex' : 'none';
+        let btnModify = document.getElementById('btn-modify-image');
+        if (btnModify) btnModify.disabled = !isPalFormat || !appState.originalImageData;
         
         renderPaletteWithLocks(appState);
     }
@@ -392,12 +431,6 @@ export function initHamBuilderMode(appState, containerEl) {
     // 5. HAUPT-ENCODER LOGIK
     const btnEncode = document.getElementById('btn-encode');
     const btnSave = document.getElementById('btn-save');
-    const chkErrorOverlay = document.getElementById('chk-error-overlay');
-    
-    chkErrorOverlay.addEventListener('change', (e) => {
-        if (!appState.decodedImageData) return;
-        ctxDec.putImageData(e.target.checked && latestErrorOverlayData ? latestErrorOverlayData : appState.decodedImageData, 0, 0);
-    });
 
     async function triggerEncode() {
         let format = appState.currentFormat;
@@ -408,52 +441,34 @@ export function initHamBuilderMode(appState, containerEl) {
         };
         let strategy = document.getElementById('encode-strategy').value;
         let metric = document.getElementById('encode-metric').value;
-        let iter = parseInt(document.getElementById('feedback-iter').value) || 1;
-        let tolerance = parseFloat(document.getElementById('filter-tolerance').value) || 6.5;
         let offset = parseInt(document.getElementById('pal-offset-input')?.value || 0);
 
         let is16BitClass = (format === "HAM12" || format === "HAM16");
-        let config = HAM_CONFIGS[format];
         appState.globalPaletteRAM[0] = 0; appState.globalPaletteRAM[1] = 0; appState.globalPaletteRAM[2] = 0;
 
-        let currentTargetData = new Uint8ClampedArray(appState.originalImageData.data);
+        // Codiert wird die aktuell angezeigte Quelle (Original oder Smart Target).
+        let sourceData = getShownSourceData();
         let decodedPixels = null;
-        latestErrorOverlayData = null;
 
-        for (let i = 1; i <= iter; i++) {
-            updateProgress(iter > 1 ? `[Iter ${i}/${iter}] Starte Codierung...` : `Starte Codierung...`, 0, 100);
+        updateProgress("Starte Codierung...", 0, 100);
 
-            if (format === "DXT1") {
-                appState.latestPackedData = encodeDXT1(currentTargetData, appState.currentImgW, appState.currentImgH);
-                decodedPixels = decodeDXT1(appState.latestPackedData, appState.currentImgW, appState.currentImgH);
-                appState.latestCommandArray = [];
-            } else if (is16BitClass) {
-                appState.latestCommandArray = await encodeHam12_16(currentTargetData, appState.currentImgW, appState.currentImgH, format, step, strategy, metric, 1, updateProgress, 0, 0);
-                appState.latestPackedData = packHam12_16(appState.latestCommandArray, format);
-                decodedPixels = decodeHam12_16(appState.latestCommandArray, appState.currentImgW, appState.currentImgH, step);
-            } else {
-                let encodeRes = await encodePaletted(currentTargetData, appState.currentImgW, appState.currentImgH, format, step, appState.globalPaletteRAM, offset, strategy, metric, updateProgress, 0, 0, 15.0);
-                appState.latestCommandArray = encodeRes.commands;
-                appState.latestPackedData = packPaletted(appState.latestCommandArray, format);
-                decodedPixels = decodePaletted(appState.latestCommandArray, appState.currentImgW, appState.currentImgH, step, appState.globalPaletteRAM, offset);
-            }
-
-            appState.decodedImageData = new ImageData(decodedPixels, appState.currentImgW, appState.currentImgH);
-            ctxDec.putImageData((chkErrorOverlay.checked && latestErrorOverlayData) ? latestErrorOverlayData : appState.decodedImageData, 0, 0);
-
-            if (i < iter) {
-                updateProgress(`[Iter ${i}/${iter}] Berechne Smart Target...`, 50, 100);
-                await new Promise(r => setTimeout(r, 10));
-                let filterResult = applySmartBandwidthFilter(appState.originalImageData.data, decodedPixels, appState.currentImgW, appState.currentImgH, step, config, format, tolerance);
-                currentTargetData = filterResult.target;
-            }
+        if (format === "DXT1") {
+            appState.latestPackedData = encodeDXT1(sourceData, appState.currentImgW, appState.currentImgH);
+            decodedPixels = decodeDXT1(appState.latestPackedData, appState.currentImgW, appState.currentImgH);
+            appState.latestCommandArray = [];
+        } else if (is16BitClass) {
+            appState.latestCommandArray = await encodeHam12_16(sourceData, appState.currentImgW, appState.currentImgH, format, step, strategy, metric, 1, updateProgress, 0, 0);
+            appState.latestPackedData = packHam12_16(appState.latestCommandArray, format);
+            decodedPixels = decodeHam12_16(appState.latestCommandArray, appState.currentImgW, appState.currentImgH, step);
+        } else {
+            let encodeRes = await encodePaletted(sourceData, appState.currentImgW, appState.currentImgH, format, step, appState.globalPaletteRAM, offset, strategy, metric, updateProgress, 0, 0, 15.0);
+            appState.latestCommandArray = encodeRes.commands;
+            appState.latestPackedData = packPaletted(appState.latestCommandArray, format);
+            decodedPixels = decodePaletted(appState.latestCommandArray, appState.currentImgW, appState.currentImgH, step, appState.globalPaletteRAM, offset);
         }
 
-        if (iter > 1) {
-            let filterResult = applySmartBandwidthFilter(appState.originalImageData.data, decodedPixels, appState.currentImgW, appState.currentImgH, step, config, format, tolerance);
-            latestErrorOverlayData = new ImageData(filterResult.target, appState.currentImgW, appState.currentImgH);
-            if (chkErrorOverlay.checked) ctxDec.putImageData(latestErrorOverlayData, 0, 0);
-        }
+        appState.decodedImageData = new ImageData(decodedPixels, appState.currentImgW, appState.currentImgH);
+        ctxDec.putImageData(appState.decodedImageData, 0, 0);
 
         updateProgress("Fertig", 100, 100);
         btnSave.disabled = false;
@@ -467,6 +482,81 @@ export function initHamBuilderMode(appState, containerEl) {
         btnEncode.disabled = true; btnSave.disabled = true;
         await triggerEncode();
         btnEncode.disabled = false;
+    });
+
+    // 5b. SMART TARGET (Wavelet-Feedback-Loop) LOGIK
+    const btnModify = document.getElementById('btn-modify-image');
+    const swOrig = document.getElementById('sw-original');
+    const swMod = document.getElementById('sw-modified');
+    const btnReplace = document.getElementById('btn-replace-original');
+
+    function originalIsDummy() {
+        if (!appState.originalImageData) return true;
+        const d = appState.originalImageData.data;
+        for (let i = 0; i < d.length; i++) { if (d[i] !== 0) return false; }
+        return true;
+    }
+
+    btnModify.addEventListener('click', async () => {
+        if (originalIsDummy()) {
+            alert("Für die Bild-Modifikation musst du zuerst ein echtes Originalbild (.png/.jpg) laden!");
+            return;
+        }
+        let format = appState.currentFormat;
+        let config = HAM_CONFIGS[format];
+        if (!config || !config.isPaletted) return;
+        let step = {
+            r: parseInt(document.getElementById('ham-step-r').value) || 8,
+            g: parseInt(document.getElementById('ham-step-g').value) || 8,
+            b: parseInt(document.getElementById('ham-step-b').value) || 8
+        };
+        let metric = document.getElementById('encode-metric').value;
+        let strategy = document.getElementById('encode-strategy').value;
+        let offset = parseInt(document.getElementById('pal-offset-input')?.value || 0);
+
+        btnModify.disabled = true; btnEncode.disabled = true; btnSave.disabled = true;
+        try {
+            const { target, log } = await generateSmartTarget({
+                sourceData: getShownSourceData(),
+                width: appState.currentImgW,
+                height: appState.currentImgH,
+                step, metric, format,
+                paletteRAM: appState.globalPaletteRAM,
+                offset, strategy,
+                onProgress: updateProgress
+            });
+            appState.modifiedImageData = new ImageData(new Uint8ClampedArray(target), appState.currentImgW, appState.currentImgH);
+            appState.showModified = true;
+            renderSourcePane();
+            const summary = log.length > 0 ? log[log.length - 1] : 'fertig';
+            updateProgress(`Smart Target: ${summary}`, 100, 100);
+            // Modifiziertes Bild direkt codieren, damit der Effekt sichtbar wird.
+            await triggerEncode();
+        } finally {
+            btnModify.disabled = false;
+            btnEncode.disabled = false;
+        }
+    });
+
+    swOrig.addEventListener('click', () => {
+        appState.showModified = false;
+        renderSourcePane();
+    });
+
+    swMod.addEventListener('click', () => {
+        if (!appState.modifiedImageData) return;
+        appState.showModified = true;
+        renderSourcePane();
+    });
+
+    btnReplace.addEventListener('click', () => {
+        if (!appState.modifiedImageData) return;
+        if (!confirm("Modifiziertes Bild als neues Original übernehmen? (Das bisherige Original wird ersetzt)")) return;
+        appState.originalImageData = appState.modifiedImageData;
+        appState.modifiedImageData = null;
+        appState.showModified = false;
+        renderSourcePane();
+        updateProgress("Modifiziertes Bild als neues Original übernommen", 100, 100);
     });
 
     btnSave.addEventListener('click', () => {

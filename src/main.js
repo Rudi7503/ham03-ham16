@@ -12,6 +12,8 @@ import { unpackPaletted, decodePaletted } from './core/module_paletted.js';
 const appState = {
     originalImageData: null,
     decodedImageData: null,
+    modifiedImageData: null,
+    showModified: false,
     currentImgW: 0,
     currentImgH: 0,
     currentFormat: "HAM_32BIT_63436343",
@@ -85,6 +87,8 @@ fileImg.addEventListener('change', (e) => {
             
             appState.originalImageData = ctx.getImageData(0, 0, img.width, img.height);
             appState.decodedImageData = null; 
+            appState.modifiedImageData = null;
+            appState.showModified = false;
             
             appState.globalPaletteRAM.fill(0); // RAM reset
             
@@ -137,6 +141,9 @@ fileBin.addEventListener('change', (e) => {
         if (!appState.originalImageData) {
             appState.originalImageData = new ImageData(appState.currentImgW, appState.currentImgH);
         }
+        
+        appState.modifiedImageData = null;
+        appState.showModified = false;
         
         loadCurrentMode();
         
