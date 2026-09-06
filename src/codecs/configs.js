@@ -17,7 +17,7 @@ export const HAM_CONFIGS = {
     "HAM03": {
         isPaletted: true,
         isMixed: false,
-        slotsPerBank: 0,
+        slotsPerBank: 4,
         hasTurbo: false,
         bits: 3
     },

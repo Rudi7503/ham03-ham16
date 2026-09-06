@@ -23,10 +23,8 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
 
     let chunkSize = (config.isMixed && config.sequence) ? config.sequence.length : 1;
 
-    // OPTIMIERUNG 1: Metrik-Funktion einmalig auflösen
     const distFunc = getMetricDistFunc(metric);
 
-    // OPTIMIERUNG 2: Delta-Branches einmalig vorberechnen (spart Millionen von IF-Abfragen)
     let deltaCache = {};
     let formatsToCache = config.isMixed ? config.sequence : [format];
     
@@ -45,7 +43,8 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
                     for (let bi = 0; bi < bChan.length; bi++) {
                         
                         if (fmt === "HAM01" && (gi !== ri || bi !== ri)) continue;
-                        if (fmt === "HAM02"  && (bi !== ri)) continue;
+                        if (fmt === "HAM02" && (bi !== ri)) continue;
+                        if (fmt === "HAM03" && (bi !== ri)) continue; // R+B gekoppelt
 
                         cache.push({
                             cmd: { isAnchor: false, format: fmt, isTurbo: (m===4), rIndex: ri, gIndex: gi, bIndex: bi },
@@ -60,7 +59,6 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         deltaCache[fmt] = cache;
     }
 
-    // Extrem verschlankte Branch-Generierung
     function getBranches(pxIdx, c_acc) {
         let branches = [];
         let effFormat = config.isMixed ? config.sequence[pxIdx % config.sequence.length] : format;
@@ -105,23 +103,58 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         let currentGreedyAcc = { ...acc };
         let greedyPath = [];
 
-        // 1. Greedy Pre-Pass
         for (let c = 0; c < actualChunkSize; c++) {
             let pxIdx = i + c;
             let branches = getBranches(pxIdx, currentGreedyAcc);
-            let bestDist = Infinity;
-            let bestBranch = branches[0];
+            
+            let effFormat = config.isMixed ? config.sequence[pxIdx % config.sequence.length] : format;
+            let effConfig = HAM_CONFIGS[effFormat] || { slotsPerBank: 0 };
+            let canAnchor = (effConfig.slotsPerBank > 0);
+            
+            let nextPxIdx = pxIdx + 1;
+            let nextFormat = null;
+            if (nextPxIdx < simEnd) {
+                nextFormat = config.isMixed ? config.sequence[nextPxIdx % config.sequence.length] : format;
+            }
+            
+            let isNextHam03 = (nextFormat === "HAM03");
+            let do2PxLookahead = canAnchor && isNextHam03;
 
             let tr = origData[pxIdx*4], tg = origData[pxIdx*4+1], tb = origData[pxIdx*4+2];
+            let tr2 = 0, tg2 = 0, tb2 = 0;
+            
+            if (do2PxLookahead) {
+                tr2 = origData[nextPxIdx*4];
+                tg2 = origData[nextPxIdx*4+1];
+                tb2 = origData[nextPxIdx*4+2];
+            }
+
+            let bestScore = Infinity;   
+            let bestDist1 = Infinity;   
+            let bestBranch = branches[0];
 
             for (let b of branches) {
-                let dist = distFunc(tr, tg, tb, b.r, b.g, b.b);
-                if (dist < bestDist) {
-                    bestDist = dist;
+                let dist1 = distFunc(tr, tg, tb, b.r, b.g, b.b);
+                let score = dist1;
+
+                if (do2PxLookahead) {
+                    let nextBranches = getBranches(nextPxIdx, { r: b.r, g: b.g, b: b.b });
+                    let bestDist2 = Infinity;
+                    for (let b2 of nextBranches) {
+                        let d2 = distFunc(tr2, tg2, tb2, b2.r, b2.g, b2.b);
+                        if (d2 < bestDist2) bestDist2 = d2;
+                    }
+                    score += bestDist2;
+                }
+
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestDist1 = dist1;
                     bestBranch = b;
                 }
             }
-            greedyCost += bestDist;
+            
+            greedyCost += bestDist1; 
             currentGreedyAcc = { r: bestBranch.r, g: bestBranch.g, b: bestBranch.b };
             greedyPath.push(bestBranch);
         }
@@ -129,12 +162,10 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         let bestChunkCmds = greedyPath.map(b => b.cmd);
         let finalAcc = currentGreedyAcc;
         let greedyAvgCost = greedyCost / actualChunkSize;
-
         let startsWithAnchor = greedyPath[0].cmd.isAnchor;
         
         let needsLookahead = (greedyAvgCost > errorThreshold) || (forceLookahead && !startsWithAnchor);
 
-        // 2. Beschleunigte Suche (Beam Search)
         if (strategy === 'lookahead_chunk' && actualChunkSize > 1 && needsLookahead) {
             let bestDfsCost = greedyCost;
             let bestChunkPath = greedyPath;
@@ -180,7 +211,6 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
                 bestChunkCmds = bestChunkPath.map(b => b.cmd);
                 finalAcc = { r: bestChunkPath[actualChunkSize-1].r, g: bestChunkPath[actualChunkSize-1].g, b: bestChunkPath[actualChunkSize-1].b };
             }
-            
             forceLookahead = true; 
         } else {
             forceLookahead = false; 
@@ -211,7 +241,8 @@ function getCmdVal(cmd) {
         bits = 2; v = ((cmd.rIndex & 1) << 1) | (cmd.gIndex & 1);
     } else if (fmt === "HAM03") {
         bits = 3;
-        v = (((cmd.rIndex||0) & 1) << 2) | (((cmd.gIndex||0) & 1) << 1) | ((cmd.bIndex||0) & 1);
+        if (cmd.isAnchor) v = 4 | (cmd.anchorIdx & 3);
+        else v = (((cmd.rIndex||0) & 1) << 1) | ((cmd.gIndex||0) & 1);
     } else if (fmt === "HAM04") {
         bits = 4;
         if (cmd.isAnchor) v = 8 | (cmd.anchorIdx & 7);
@@ -262,7 +293,9 @@ export function unpackPaletted(packedData, format, totalPixels) {
         } else if (fmt === "HAM02") {
             let rbDir = (v >> 1) & 1, gDir = v & 1; return { isAnchor: false, format: fmt, rIndex: rbDir, gIndex: gDir, bIndex: rbDir };
         } else if (fmt === "HAM03") {
-            return { isAnchor: false, format: fmt, isTurbo: false, rIndex: (v >> 2) & 1, gIndex: (v >> 1) & 1, bIndex: v & 1 };
+            if (v & 4) return { isAnchor: true, format: fmt, anchorIdx: v & 3 };
+            let rbDir = (v >> 1) & 1;
+            return { isAnchor: false, format: fmt, isTurbo: false, rIndex: rbDir, gIndex: v & 1, bIndex: rbDir };
         } else if (fmt === "HAM04") {
             if (v & 8) return { isAnchor: true, format: fmt, anchorIdx: v & 7 };
             return { isAnchor: false, format: fmt, isTurbo: false, rIndex: (v >> 2) & 1, gIndex: (v >> 1) & 1, bIndex: v & 1 };

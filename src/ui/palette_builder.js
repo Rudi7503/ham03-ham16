@@ -23,30 +23,40 @@ export function initPaletteBuilderUI(appState, deps) {
 
     if (!builderModal || !btnBuilder) return;
 
+    // NEU: Auswahl-Dialog für die drei Intensitätsstufen
     async function askAutoFillMode() {
         return new Promise((resolve) => {
             const overlay = document.createElement('div');
             overlay.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.75); z-index:10000; display:flex; justify-content:center; align-items:center;";
             const box = document.createElement('div');
-            box.style.cssText = "background:#1e2124; padding:25px; border-radius:8px; border:1px solid #555; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,0.5); max-width: 500px;";
+            box.style.cssText = "background:#1e2124; padding:25px; border-radius:8px; border:1px solid #555; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,0.5); max-width: 450px;";
             box.innerHTML = `
-                <h3 style="margin-top:0; color:#ffc107; font-family:sans-serif;">Auto-Füllen: Modus wählen</h3>
-                <p style="color:#ccc; font-size:14px; margin-bottom:20px; font-family:sans-serif; line-height:1.4;">
-                    Soll nach Durchlauf 1 (Battle + Clustering) die Vektor-Feinoptimierung (Durchlauf 2 + 3) gestartet werden?<br>
-                    <span style="font-size:12px; color:#888;">(Die Durchläufe 2 + 3 drücken den MSE weiter, dauern aber länger)</span>
+                <h3 style="margin-top:0; color:#ffc107; font-family:sans-serif;">Auto-Füllen: Intensität wählen</h3>
+                <p style="color:#ccc; font-size:13px; margin-bottom:20px; font-family:sans-serif; line-height:1.4;">
+                    Wähle aus, wie intensiv die Palette optimiert werden soll:
                 </p>
-                <div style="display:flex; justify-content:center; gap:12px;">
-                    <button id="btn-af-1" style="background:#17a2b8; color:#fff; border:none; padding:8px 15px; border-radius:4px; cursor:pointer; font-weight:bold;">Nein (Nur Durchlauf 1)</button>
-                    <button id="btn-af-2" style="background:#28a745; color:#fff; border:none; padding:8px 15px; border-radius:4px; cursor:pointer; font-weight:bold;">Ja (Mit Durchlauf 2 + 3)</button>
-                    <button id="btn-af-0" style="background:#555; color:#fff; border:none; padding:8px 15px; border-radius:4px; cursor:pointer; font-weight:bold;">Abbrechen</button>
+                <div style="display:flex; flex-direction:column; gap:10px; margin-bottom:20px;">
+                    <button id="btn-af-fast" style="background:#17a2b8; color:#fff; border:none; padding:10px; border-radius:4px; cursor:pointer; font-weight:bold; text-align:left;">
+                        ⚡ Sehr schnelles Füllen <span style="font-weight:normal; font-size:11px; display:block; opacity:0.8;">Nur Stufe 0.5 (Histogramm + Eradication, keine Battles)</span>
+                    </button>
+                    <button id="btn-af-norm" style="background:#ffc107; color:#000; border:none; padding:10px; border-radius:4px; cursor:pointer; font-weight:bold; text-align:left;">
+                        ⚖️ Normal <span style="font-weight:normal; font-size:11px; display:block; opacity:0.8;">Bis Stufe 1 (Inkl. Kandidaten-Battle)</span>
+                    </button>
+                    <button id="btn-af-slow" style="background:#28a745; color:#fff; border:none; padding:10px; border-radius:4px; cursor:pointer; font-weight:bold; text-align:left;">
+                        🐢 Langsam Optimum suchen <span style="font-weight:normal; font-size:11px; display:block; opacity:0.8;">Komplette Pipeline (Battles + Vektor-Zyklen)</span>
+                    </button>
+                </div>
+                <div>
+                    <button id="btn-af-cancel" style="background:#555; color:#fff; border:none; padding:8px 20px; border-radius:4px; cursor:pointer;">Abbrechen</button>
                 </div>
             `;
             overlay.appendChild(box);
             document.body.appendChild(overlay);
 
-            document.getElementById('btn-af-1').onclick = () => { document.body.removeChild(overlay); resolve(1); };
-            document.getElementById('btn-af-2').onclick = () => { document.body.removeChild(overlay); resolve(2); };
-            document.getElementById('btn-af-0').onclick = () => { document.body.removeChild(overlay); resolve(0); };
+            document.getElementById('btn-af-fast').onclick = () => { document.body.removeChild(overlay); resolve('sehr_schnell'); };
+            document.getElementById('btn-af-norm').onclick = () => { document.body.removeChild(overlay); resolve('normal'); };
+            document.getElementById('btn-af-slow').onclick = () => { document.body.removeChild(overlay); resolve('langsam'); };
+            document.getElementById('btn-af-cancel').onclick = () => { document.body.removeChild(overlay); resolve(null); };
         });
     }
 
@@ -56,8 +66,6 @@ export function initPaletteBuilderUI(appState, deps) {
         if (slotDivs.length > 0) {
             let currentOffset = getCurrentOffset();
 
-            // Nutzung aus dem FRISCHEN Command-Array neu ermitteln (wird bei jedem
-            // Re-Encode aktualisiert), damit die Anzeige nicht auf 0x stehen bleibt.
             let usage = new Array(slotDivs.length).fill(0);
             if (appState.latestCommandArray) {
                 for (let cmd of appState.latestCommandArray) {
@@ -333,10 +341,9 @@ export function initPaletteBuilderUI(appState, deps) {
     btnAuto?.addEventListener('click', async () => {
         if (!appState.originalImageData || !appState.decodedImageData) return alert("Bitte zuerst das Bild codieren.");
         
-        let mode = await askAutoFillMode();
-        if (mode === 0) return; 
-        
-        let runRefinementPasses = (mode === 2);
+        // NEU: Abfrage des gewählten Modus ('sehr_schnell', 'normal', 'langsam')
+        let intensityMode = await askAutoFillMode();
+        if (!intensityMode) return; // Abgebrochen
         
         let statusDiv = document.getElementById('builder-status');
         let currentOffset = getCurrentOffset();
@@ -345,12 +352,13 @@ export function initPaletteBuilderUI(appState, deps) {
 
         appState.globalPaletteRAM[0] = 0; appState.globalPaletteRAM[1] = 0; appState.globalPaletteRAM[2] = 0;
 
+        // NEU: Übergabe der gewählten Intensität an runHybridOptimization
         let changeLog = await runHybridOptimization(
             appState, getOptRegion(), step, metric, currentOffset, getLockedSlots(), 
             (msg) => { if (statusDiv) statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ ${msg}</span>`; },
             triggerEncode,
             liveUpdateUI,
-            runRefinementPasses
+            intensityMode
         );
 
         if (statusDiv) statusDiv.innerHTML = `<span style='color:#28a745; font-weight:bold;'>✅ Optimierung beendet!</span>`;
@@ -360,7 +368,7 @@ export function initPaletteBuilderUI(appState, deps) {
         renderPaletteWithLocks(appState);
 
         let mseListDiv = document.getElementById('builder-mse-list');
-        if (mseListDiv && changeLog.length > 0) {
+        if (mseListDiv && changeLog && changeLog.length > 0) {
             mseListDiv.innerHTML = `<div style="background:#16181a; border:1px solid #444; border-radius:4px; padding:10px; width:100%; overflow-y:auto; max-height:280px;">
                 <ul style="font-size:11px; color:#ccc; padding-left:15px; margin:0; line-height: 1.4;">
                     ${changeLog.map(log => `<li style="margin-bottom:4px; list-style:none;">${log}</li>`).join('')}
