@@ -44,6 +44,30 @@ function hlDetailAtPixels(orig, dec, width, x, y) {
     return mag;
 }
 
+// Berechnet das komplette HL-Band einmal in ein Float32Array. detectPeaks,
+// localWindowError (Quellbild) und findRasterLinks greifen danach nur noch
+// lesend zu, statt hlDetailAtPixels pro Pixel erneut auszuführen.
+function computeHlMap(orig, dec, width, height) {
+    const map = new Float32Array(width * height);
+    for (let y = 0; y < height; y++) {
+        const row = y * width;
+        for (let x = 1; x < width - 1; x++) {
+            const i = row + x;
+            const l = i - 1, r = i + 1;
+            let mag = 0;
+            for (let c = 0; c < 3; c++) {
+                const e0 = orig[i * 4 + c] - dec[i * 4 + c];
+                const el = orig[l * 4 + c] - dec[l * 4 + c];
+                const er = orig[r * 4 + c] - dec[r * 4 + c];
+                const h = e0 - ((el + er) >> 1);
+                mag += Math.abs(h) * LUMA_W[c];
+            }
+            map[i] = mag;
+        }
+    }
+    return map;
+}
+
 function localWindowError(orig, dec, width, x, y) {
     let sum = 0;
     for (let dx = -1; dx <= 1; dx++) {
@@ -54,17 +78,28 @@ function localWindowError(orig, dec, width, x, y) {
     return sum;
 }
 
+function localWindowErrorFromMap(hlMap, width, x, y) {
+    let sum = 0;
+    for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx;
+        if (xx < 1 || xx >= width - 1) continue;
+        sum += hlMap[y * width + xx];
+    }
+    return sum;
+}
+
 // ---------------------------------------------------------------------------
 // Phase 1: Peak-Detektion im HL-Band (Zero-Allocation)
 // ---------------------------------------------------------------------------
 
-function detectPeaks(orig, dec, width, height) {
+function detectPeaks(hlMap, width, height) {
     let sum = 0, sumSq = 0, count = 0;
     
-    // Pass 1: Statistische Basis ermitteln (On-the-fly)
+    // Pass 1: Statistische Basis ermitteln (liest nur aus dem HL-Band)
     for (let y = 0; y < height; y++) {
+        const row = y * width;
         for (let x = 1; x < width - 1; x++) {
-            const m = hlDetailAtPixels(orig, dec, width, x, y);
+            const m = hlMap[row + x];
             sum += m;
             sumSq += m * m;
             count++;
@@ -80,15 +115,14 @@ function detectPeaks(orig, dec, width, height) {
     // Pass 2: Kandidaten isolieren
     const candidates = [];
     for (let y = 0; y < height; y++) {
+        const row = y * width;
         for (let x = 1; x < width - 1; x++) {
-            const m = hlDetailAtPixels(orig, dec, width, x, y);
+            const m = hlMap[row + x];
             if (m < threshold) continue;
             
             // Lokale Maxima Prüfung
-            const ml = hlDetailAtPixels(orig, dec, width, x - 1, y);
-            if (m < ml) continue;
-            const mr = hlDetailAtPixels(orig, dec, width, x + 1, y);
-            if (m < mr) continue;
+            if (m < hlMap[row + (x - 1)]) continue;
+            if (m < hlMap[row + (x + 1)]) continue;
             
             candidates.push({ x, y, mag: m });
         }
@@ -172,12 +206,12 @@ function dampHlAt(target, reference, width, x, y, rest) {
     }
 }
 
-function findRasterLinks(orig, dec, width, height, x, y, threshold) {
+function findRasterLinks(hlMap, width, height, x, y, threshold) {
     const out = [];
     const minMag = threshold * RASTER_LINK_RATIO;
     const consider = (xx, yy) => {
         if (xx < 1 || xx >= width - 1 || yy < 0 || yy >= height) return;
-        if (hlDetailAtPixels(orig, dec, width, xx, yy) > minMag) out.push({ x: xx, y: yy });
+        if (hlMap[yy * width + xx] > minMag) out.push({ x: xx, y: yy });
     };
     for (let k = 1; k <= RASTER_HALF_SPAN; k++) {
         consider(x + 4 * k, y);
@@ -209,7 +243,9 @@ export async function generateSmartTarget({
     report('Phase 1/4: Scanner (Encode/Decode + HL-Peaks)', 0, 4);
     const dec = await encodeDecode(sourceData, width, height, format, step, paletteRAM, offset, strategy, metric, onProgress);
 
-    const { peaks, threshold } = detectPeaks(sourceData, dec, width, height);
+    // HL-Band einmal berechnen und für Peaks, Edge-Snapping und Raster-Links teilen.
+    const hlMap = computeHlMap(sourceData, dec, width, height);
+    const { peaks, threshold } = detectPeaks(hlMap, width, height);
     log.push(`Scanner: ${peaks.length} HL-Peaks gefunden`);
     report(`Phase 1/4: ${peaks.length} HL-Peaks gefunden`, 1, 4);
 
@@ -244,7 +280,7 @@ export async function generateSmartTarget({
         }
         if (dL > MIN_1PX_DIST_SQ && dR > MIN_1PX_DIST_SQ) { remaining.push(p); continue; }
 
-        const w0 = localWindowError(sourceData, dec, width, p.x, p.y);
+        const w0 = localWindowErrorFromMap(hlMap, width, p.x, p.y);
         const wA = localWindowError(testA, decA, width, p.x, p.y);
         const wB = localWindowError(testB, decB, width, p.x, p.y);
 
@@ -284,7 +320,7 @@ export async function generateSmartTarget({
         if (p.x < 1 || p.x >= width - 1) continue;
         const phase = raster ? ((p.x % raster.period) + raster.period) % raster.period : -1;
         const onWeakSlot = raster ? raster.weak.has(phase) : false;
-        const links = findRasterLinks(sourceData, dec, width, height, p.x, p.y, threshold);
+        const links = findRasterLinks(hlMap, width, height, p.x, p.y, threshold);
         if (onWeakSlot || links.length > 0) {
             level2Pos.add(p.y * width + p.x);
             for (const l of links) level2Pos.add(l.y * width + l.x);

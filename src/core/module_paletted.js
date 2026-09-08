@@ -59,39 +59,55 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         deltaCache[fmt] = cache;
     }
 
-    function getBranches(pxIdx, c_acc) {
-        let branches = [];
-        let effFormat = config.isMixed ? config.sequence[pxIdx % config.sequence.length] : format;
-        let effConfig = HAM_CONFIGS[effFormat] || { slotsPerBank: 0 };
+    // Vorberechnete Anker-Kommandos + Absolut-Slots pro Format. Die Anker-Cmd-
+    // Objekte sind unveränderlich und werden über alle Pixel geteilt; die Farbe
+    // wird pro Pixel direkt aus paletteRAM gelesen (die Palette kann sich ändern).
+    let anchorInfo = {};
+    for (let fmt of formatsToCache) {
+        let effConfig = HAM_CONFIGS[fmt] || { slotsPerBank: 0 };
         let slots = effConfig.slotsPerBank || 0;
+        let arr = [];
+        for (let s = 0; s < slots; s++) {
+            arr.push({ cmd: { isAnchor: true, format: fmt, anchorIdx: s }, absSlot: (offset + s) % 256 });
+        }
+        anchorInfo[fmt] = arr;
+    }
+
+    // Liefert die Kandidaten als flache Arrays (cmds/rs/gs/bs) statt als
+    // Objekt-Array pro Pixel. So entfallen die vielen kurzlebigen
+    // {cmd, r, g, b}-Wrapper-Allokationen im heißen Encode-Pfad.
+    function getBranches(pxIdx, c_acc) {
+        const effFormat = config.isMixed ? config.sequence[pxIdx % config.sequence.length] : format;
+        const cmds = [];
+        const rs = [], gs = [], bs = [];
 
         if (strategy !== 'delta_only') {
-            for (let s = 0; s < slots; s++) {
-                let absSlot = (offset + s) % 256;
-                branches.push({ 
-                    cmd: { isAnchor: true, format: effFormat, anchorIdx: s }, 
-                    r: paletteRAM[absSlot*3], 
-                    g: paletteRAM[absSlot*3+1], 
-                    b: paletteRAM[absSlot*3+2] 
-                });
+            const anchors = anchorInfo[effFormat];
+            for (let s = 0; s < anchors.length; s++) {
+                const a = anchors[s];
+                cmds.push(a.cmd);
+                rs.push(paletteRAM[a.absSlot * 3]);
+                gs.push(paletteRAM[a.absSlot * 3 + 1]);
+                bs.push(paletteRAM[a.absSlot * 3 + 2]);
             }
         }
 
         if (strategy !== 'anchor_only') {
-            let cachedDeltas = deltaCache[effFormat];
+            const cachedDeltas = deltaCache[effFormat];
             for (let i = 0; i < cachedDeltas.length; i++) {
-                let d = cachedDeltas[i];
-                branches.push({
-                    cmd: d.cmd,
-                    r: clamp(c_acc.r + d.dr, 0, 255),
-                    g: clamp(c_acc.g + d.dg, 0, 255),
-                    b: clamp(c_acc.b + d.db, 0, 255)
-                });
+                const d = cachedDeltas[i];
+                cmds.push(d.cmd);
+                rs.push(clamp(c_acc.r + d.dr, 0, 255));
+                gs.push(clamp(c_acc.g + d.dg, 0, 255));
+                bs.push(clamp(c_acc.b + d.db, 0, 255));
             }
         }
-        
-        if (branches.length === 0) branches.push({ cmd: { isAnchor: true, format: effFormat, anchorIdx: 0 }, r: c_acc.r, g: c_acc.g, b: c_acc.b });
-        return branches;
+
+        if (cmds.length === 0) {
+            cmds.push({ isAnchor: true, format: effFormat, anchorIdx: 0 });
+            rs.push(c_acc.r); gs.push(c_acc.g); bs.push(c_acc.b);
+        }
+        return { cmds, rs, gs, bs, len: cmds.length };
     }
 
     let acc = { r: 127, g: 127, b: 127 };
@@ -105,7 +121,7 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
 
         for (let c = 0; c < actualChunkSize; c++) {
             let pxIdx = i + c;
-            let branches = getBranches(pxIdx, currentGreedyAcc);
+            let { cmds, rs, gs, bs, len } = getBranches(pxIdx, currentGreedyAcc);
             
             let effFormat = config.isMixed ? config.sequence[pxIdx % config.sequence.length] : format;
             let effConfig = HAM_CONFIGS[effFormat] || { slotsPerBank: 0 };
@@ -131,17 +147,19 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
 
             let bestScore = Infinity;   
             let bestDist1 = Infinity;   
-            let bestBranch = branches[0];
+            let bestCmd = cmds[0];
+            let bestR = rs[0], bestG = gs[0], bestB = bs[0];
 
-            for (let b of branches) {
-                let dist1 = distFunc(tr, tg, tb, b.r, b.g, b.b);
+            for (let bi = 0; bi < len; bi++) {
+                const br = rs[bi], bg = gs[bi], bb = bs[bi];
+                let dist1 = distFunc(tr, tg, tb, br, bg, bb);
                 let score = dist1;
 
                 if (do2PxLookahead) {
-                    let nextBranches = getBranches(nextPxIdx, { r: b.r, g: b.g, b: b.b });
+                    const nextBranches = getBranches(nextPxIdx, { r: br, g: bg, b: bb });
                     let bestDist2 = Infinity;
-                    for (let b2 of nextBranches) {
-                        let d2 = distFunc(tr2, tg2, tb2, b2.r, b2.g, b2.b);
+                    for (let bi2 = 0; bi2 < nextBranches.len; bi2++) {
+                        let d2 = distFunc(tr2, tg2, tb2, nextBranches.rs[bi2], nextBranches.gs[bi2], nextBranches.bs[bi2]);
                         if (d2 < bestDist2) bestDist2 = d2;
                     }
                     score += bestDist2;
@@ -150,13 +168,14 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
                 if (score < bestScore) {
                     bestScore = score;
                     bestDist1 = dist1;
-                    bestBranch = b;
+                    bestCmd = cmds[bi];
+                    bestR = br; bestG = bg; bestB = bb;
                 }
             }
             
             greedyCost += bestDist1; 
-            currentGreedyAcc = { r: bestBranch.r, g: bestBranch.g, b: bestBranch.b };
-            greedyPath.push(bestBranch);
+            currentGreedyAcc = { r: bestR, g: bestG, b: bestB };
+            greedyPath.push({ cmd: bestCmd, r: bestR, g: bestG, b: bestB });
         }
 
         let bestChunkCmds = greedyPath.map(b => b.cmd);
@@ -178,17 +197,18 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
                 let nextBeam = [];
 
                 for (let node of currentBeam) {
-                    let branches = getBranches(pxIdx, node.acc);
+                    const branches = getBranches(pxIdx, node.acc);
 
-                    for (let b of branches) {
-                        let dist = distFunc(tr, tg, tb, b.r, b.g, b.b);
-                        let newCost = node.cost + dist;
+                    for (let bi = 0; bi < branches.len; bi++) {
+                        const br = branches.rs[bi], bg = branches.gs[bi], bb = branches.bs[bi];
+                        const dist = distFunc(tr, tg, tb, br, bg, bb);
+                        const newCost = node.cost + dist;
 
                         if (newCost < bestDfsCost) {
                             nextBeam.push({
                                 cost: newCost,
-                                acc: { r: b.r, g: b.g, b: b.b },
-                                path: [...node.path, b]
+                                acc: { r: br, g: bg, b: bb },
+                                path: [...node.path, { cmd: branches.cmds[bi], r: br, g: bg, b: bb }]
                             });
                         }
                     }
@@ -328,9 +348,32 @@ export function unpackPaletted(packedData, format, totalPixels) {
     return commands;
 }
 
+// Baut pro Format Tabellen mit den bereits eingerechneten Delta-Werten
+// (Kanal-Wert × Schritt × Turbo-Multiplikator). Dadurch braucht die heiße
+// Dekodier-Schleife pro Pixel nur noch einen Array-Zugriff statt der
+// CHANNEL_DEFS-Suche und mehrerer Multiplikationen.
+function buildDecodeDeltaTables(stepVal) {
+    const make = (chans, m) => ({
+        r: chans.r.map((c) => c * stepVal.r * m),
+        g: chans.g.map((c) => c * stepVal.g * m),
+        b: chans.b.map((c) => c * stepVal.b * m)
+    });
+    const tables = {};
+    for (const fmt of Object.keys(CHANNEL_DEFS)) {
+        tables[fmt] = { normal: make(CHANNEL_DEFS[fmt], 1), turbo: make(CHANNEL_DEFS[fmt], 4) };
+    }
+    // Fallback entspricht exakt dem früheren Verhalten für unbekannte Formate.
+    tables.fallback = {
+        normal: make({ r: [-1, 1], g: [-1, 1], b: [-1, 1] }, 1),
+        turbo: make({ r: [-1, 1], g: [-1, 1], b: [-1, 1] }, 4)
+    };
+    return tables;
+}
+
 export function decodePaletted(commands, imgW, imgH, stepVal, paletteRAM, offset) {
     let out = new Uint8ClampedArray(imgW * imgH * 4);
     let acc = { r: 127, g: 127, b: 127 };
+    const deltaTables = buildDecodeDeltaTables(stepVal);
 
     for (let i = 0; i < commands.length; i++) {
         let cmd = commands[i];
@@ -338,21 +381,48 @@ export function decodePaletted(commands, imgW, imgH, stepVal, paletteRAM, offset
             let absSlot = (offset + cmd.anchorIdx) % 256;
             acc.r = paletteRAM[absSlot*3]; acc.g = paletteRAM[absSlot*3+1]; acc.b = paletteRAM[absSlot*3+2];
         } else {
-            let m = cmd.isTurbo ? 4 : 1;
-            let rChan = CHANNEL_DEFS[cmd.format]?.r || [-1, 1];
-            let gChan = CHANNEL_DEFS[cmd.format]?.g || [-1, 1];
-            let bChan = CHANNEL_DEFS[cmd.format]?.b || [-1, 1];
-            
-            let dr = rChan[cmd.rIndex || 0] || 0;
-            let dg = gChan[cmd.gIndex || 0] || 0;
-            let db = bChan[cmd.bIndex || 0] || 0;
-
-            acc.r = clamp(acc.r + dr * (stepVal.r * m), 0, 255);
-            acc.g = clamp(acc.g + dg * (stepVal.g * m), 0, 255);
-            acc.b = clamp(acc.b + db * (stepVal.b * m), 0, 255);
+            const table = deltaTables[cmd.format] || deltaTables.fallback;
+            const t = cmd.isTurbo ? table.turbo : table.normal;
+            acc.r = clamp(acc.r + (t.r[cmd.rIndex || 0] || 0), 0, 255);
+            acc.g = clamp(acc.g + (t.g[cmd.gIndex || 0] || 0), 0, 255);
+            acc.b = clamp(acc.b + (t.b[cmd.bIndex || 0] || 0), 0, 255);
         }
         let outIdx = i * 4;
         out[outIdx] = acc.r; out[outIdx + 1] = acc.g; out[outIdx + 2] = acc.b; out[outIdx + 3] = 255;
     }
     return out;
+}
+
+function signedDelta(v) {
+    return v > 0 ? `+${v}` : `${v}`;
+}
+
+// Beschreibt ein einzelnes Kommando für die Pixel-Anzeige im UI, z. B.
+// "ham03 ankerslot 2 (abs 18)" oder "ham05 r +6 g +12 b -6". Liefert null,
+// wenn kein (oder kein beschreibbares) Kommando vorliegt.
+export function describeCommand(cmd, step, offset = 0) {
+    if (!cmd || !cmd.format) return null;
+    const fmt = cmd.format.toLowerCase();
+
+    if (cmd.isAnchor) {
+        if (cmd.format === "HAM12" || cmd.format === "HAM16") {
+            return `${fmt} anker`;
+        }
+        return `${fmt} ankerslot ${cmd.anchorIdx} (abs ${(offset + cmd.anchorIdx) % 256})`;
+    }
+
+    if (cmd.format === "HAM12" || cmd.format === "HAM16") {
+        const m = cmd.isTurbo ? 4 : 1;
+        const dr = cmd.dr * step.r * m;
+        const dg = cmd.dg * step.g * m;
+        const db = cmd.db * step.b * m;
+        return `${fmt} r${signedDelta(dr)} g${signedDelta(dg)} b${signedDelta(db)}`;
+    }
+
+    const chans = CHANNEL_DEFS[cmd.format] || { r: [-1, 1], g: [-1, 1], b: [-1, 1] };
+    const m = cmd.isTurbo ? 4 : 1;
+    const dr = (chans.r[cmd.rIndex || 0] || 0) * step.r * m;
+    const dg = (chans.g[cmd.gIndex || 0] || 0) * step.g * m;
+    const db = (chans.b[cmd.bIndex || 0] || 0) * step.b * m;
+    return `${fmt} r${signedDelta(dr)} g${signedDelta(dg)} b${signedDelta(db)}`;
 }

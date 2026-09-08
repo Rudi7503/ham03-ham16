@@ -127,6 +127,10 @@ export function setupCanvasEvents(getDimensionsFn, getImageDataFn) {
                             let b2 = data.decoded.data[idx + 2];
                             text += ` | Dec: RGB(${r2},${g2},${b2})`;
                         }
+                        if (data.getCommandText) {
+                            const cmdText = data.getCommandText(px);
+                            if (cmdText) text += ` | ${cmdText}`;
+                        }
                     }
                 }
                 mousePosText.innerText = text;

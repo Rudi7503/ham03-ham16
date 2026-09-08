@@ -13,22 +13,40 @@ export const errorBins = [0, 5, 10, 20, 50, 100];
  */
 export function computeAvgYuvScore(origData, decData, imgW, imgH, metric = 'yuv_weight', optRegion = null) {
     const distFunc = getMetricDistFunc(metric);
-    const totalPixels = imgW * imgH;
     let sum = 0;
     let count = 0;
-    for (let i = 0; i < totalPixels; i++) {
-        if (optRegion) {
-            const x = i % imgW;
-            const y = Math.floor(i / imgW);
-            if (x < optRegion.x || x >= optRegion.x + optRegion.width ||
-                y < optRegion.y || y >= optRegion.y + optRegion.height) continue;
+
+    // Vollbild-Fast-Path: spart die x/y-Berechnung pro Pixel (Regions-Check entfällt).
+    const isFull = !optRegion ||
+        (optRegion.x <= 0 && optRegion.y <= 0 &&
+         optRegion.x + optRegion.width >= imgW && optRegion.y + optRegion.height >= imgH);
+
+    if (isFull) {
+        const total = imgW * imgH;
+        for (let i = 0; i < total; i++) {
+            const idx = i * 4;
+            sum += distFunc(
+                origData[idx], origData[idx + 1], origData[idx + 2],
+                decData[idx], decData[idx + 1], decData[idx + 2]
+            );
         }
-        const idx = i * 4;
-        sum += distFunc(
-            origData[idx], origData[idx + 1], origData[idx + 2],
-            decData[idx], decData[idx + 1], decData[idx + 2]
-        );
-        count++;
+        return total > 0 ? sum / total : Infinity;
+    }
+
+    const x0 = Math.max(0, optRegion.x);
+    const y0 = Math.max(0, optRegion.y);
+    const x1 = Math.min(imgW, optRegion.x + optRegion.width);
+    const y1 = Math.min(imgH, optRegion.y + optRegion.height);
+    for (let y = y0; y < y1; y++) {
+        const rowBase = y * imgW;
+        for (let x = x0; x < x1; x++) {
+            const idx = (rowBase + x) * 4;
+            sum += distFunc(
+                origData[idx], origData[idx + 1], origData[idx + 2],
+                decData[idx], decData[idx + 1], decData[idx + 2]
+            );
+            count++;
+        }
     }
     return count > 0 ? sum / count : Infinity;
 }
@@ -97,77 +115,94 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
     let bitDepthMaps = {}; 
     let segmentErrorMap = new Map();
     let totalPixels = imgW * imgH;
-    
+
     let clusterRadius = Math.max(2, Math.floor((stepVal.r + stepVal.g + stepVal.b) / 3));
     const distFunc = getMetricDistFunc(metric);
 
-    for (let i = 0; i < totalPixels; i++) {
-        if (optRegion) {
-            let x = i % imgW;
-            let y = Math.floor(i / imgW);
-            if (x < optRegion.x || x >= optRegion.x + optRegion.width || y < optRegion.y || y >= optRegion.y + optRegion.height) {
-                continue;
-            }
+    // Fast-Path: deckt der Bereich das ganze Bild ab, entfällt der Regions-Check
+    // pro Pixel. Der Segment-Anteil ist nur bei echten Teilbereichen relevant.
+    const isFull = !optRegion ||
+        (optRegion.x <= 0 && optRegion.y <= 0 &&
+         optRegion.x + optRegion.width >= imgW && optRegion.y + optRegion.height >= imgH);
+    const useSegment = startPx > 0 || endPx < totalPixels;
+
+    // Numerischer Fehler-Key statt String: 6 quantisierte Kanäle werden in eine
+    // Zahl gepackt (≤ 129^6 < 2^53), um die teuren String-Allokationen pro Pixel
+    // und das spätere Re-Parsing zu vermeiden.
+    function packKey(qR1, qG1, qB1, qR2, qG2, qB2) {
+        return ((((((qR1 * 256 + qG1) * 256 + qB1) * 256 + qR2) * 256 + qG2) * 256 + qB2));
+    }
+
+    function binIndex(val) {
+        for (let b = 0; b < errorBins.length; b++) {
+            if (val <= errorBins[b]) return b;
         }
+        return errorBins.length;
+    }
 
-        let idx = i * 4;
-        let r1 = origData[idx], g1 = origData[idx+1], b1 = origData[idx+2];
-        let r2 = decData[idx], g2 = decData[idx+1], b2 = decData[idx+2];
-
-        let rMse = get_rgb_dist(r1, g1, b1, r2, g2, b2);
-        let metricMse = distFunc(r1, g1, b1, r2, g2, b2);
-
-        g_rgbSum += rMse;
-        g_metricSum += metricMse;
-
-        let bits = 8;
-        if (config) {
-            if (config.isMixed && config.sequence) {
-                let x = i % imgW;
-                let seqIdx = x % config.sequence.length;
-                let fmt = config.sequence[seqIdx];
-                bits = (fmt === "HAM01") ? 1 : (fmt === "HAM02") ? 2 : (fmt === "HAM03") ? 3 : (fmt === "HAM04") ? 4 : (fmt === "HAM05") ? 5 : (fmt === "HAM06") ? 6 : (fmt === "HAM08_PAL") ? 8 : 8;
-            } else if (config.bits) {
-                bits = config.bits;
+    for (let y = 0; y < imgH; y++) {
+        const rowBase = y * imgW;
+        for (let x = 0; x < imgW; x++) {
+            if (!isFull) {
+                if (x < optRegion.x || x >= optRegion.x + optRegion.width ||
+                    y < optRegion.y || y >= optRegion.y + optRegion.height) continue;
             }
-        }
 
-        if (metricMse > 1) { 
-            let qR1 = Math.round(r1/clusterRadius)*clusterRadius, qG1 = Math.round(g1/clusterRadius)*clusterRadius, qB1 = Math.round(b1/clusterRadius)*clusterRadius;
-            let qR2 = Math.round(r2/clusterRadius)*clusterRadius, qG2 = Math.round(g2/clusterRadius)*clusterRadius, qB2 = Math.round(b2/clusterRadius)*clusterRadius;
-            
-            let key = `I${qR1},${qG1},${qB1}|S${qR2},${qG2},${qB2}`;
-            
-            if (!globalErrorMap.has(key)) {
-                globalErrorMap.set(key, { r1, g1, b1, r2, g2, b2, mse: metricMse, count: 0, x: i % imgW, y: Math.floor(i / imgW), bits: bits });
+            const i = rowBase + x;
+            const idx = i * 4;
+            let r1 = origData[idx], g1 = origData[idx+1], b1 = origData[idx+2];
+            let r2 = decData[idx], g2 = decData[idx+1], b2 = decData[idx+2];
+
+            let rMse = get_rgb_dist(r1, g1, b1, r2, g2, b2);
+            let metricMse = distFunc(r1, g1, b1, r2, g2, b2);
+
+            g_rgbSum += rMse;
+            g_metricSum += metricMse;
+
+            let bits = 8;
+            if (config) {
+                if (config.isMixed && config.sequence) {
+                    let seqIdx = x % config.sequence.length;
+                    let fmt = config.sequence[seqIdx];
+                    bits = (fmt === "HAM01") ? 1 : (fmt === "HAM02") ? 2 : (fmt === "HAM03") ? 3 : (fmt === "HAM04") ? 4 : (fmt === "HAM05") ? 5 : (fmt === "HAM06") ? 6 : (fmt === "HAM08_PAL") ? 8 : 8;
+                } else if (config.bits) {
+                    bits = config.bits;
+                }
             }
-            globalErrorMap.get(key).count++;
 
-            if (!bitDepthMaps[bits]) bitDepthMaps[bits] = new Map();
-            if (!bitDepthMaps[bits].has(key)) {
-                bitDepthMaps[bits].set(key, { r1, g1, b1, r2, g2, b2, mse: metricMse, count: 0, x: i % imgW, y: Math.floor(i / imgW), bits: bits });
-            }
-            bitDepthMaps[bits].get(key).count++;
-        }
-
-        let rBinIdx = errorBins.findIndex(val => rMse <= val);
-        stats.histogram.rgbBins[rBinIdx === -1 ? errorBins.length : rBinIdx]++;
-
-        let metricBinIdx = errorBins.findIndex(val => metricMse <= val);
-        stats.histogram.yuvBins[metricBinIdx === -1 ? errorBins.length : metricBinIdx]++;
-
-        if (i >= startPx && i < endPx) {
-            s_rgbSum += rMse;
-            s_metricSum += metricMse;
-            s_count++;
-            
             if (metricMse > 1) {
-                let qR1 = Math.round(r1/clusterRadius)*clusterRadius, qG1 = Math.round(g1/clusterRadius)*clusterRadius, qB1 = Math.round(b1/clusterRadius)*clusterRadius;
-                let qR2 = Math.round(r2/clusterRadius)*clusterRadius, qG2 = Math.round(g2/clusterRadius)*clusterRadius, qB2 = Math.round(b2/clusterRadius)*clusterRadius;
-                let key = `I${qR1},${qG1},${qB1}|S${qR2},${qG2},${qB2}`;
-                
-                if (!segmentErrorMap.has(key)) segmentErrorMap.set(key, { r1, g1, b1, r2, g2, b2, mse: metricMse, count: 0, x: i % imgW, y: Math.floor(i / imgW), bits: bits });
-                segmentErrorMap.get(key).count++;
+                const qR1 = Math.round(r1/clusterRadius), qG1 = Math.round(g1/clusterRadius), qB1 = Math.round(b1/clusterRadius);
+                const qR2 = Math.round(r2/clusterRadius), qG2 = Math.round(g2/clusterRadius), qB2 = Math.round(b2/clusterRadius);
+                const key = packKey(qR1, qG1, qB1, qR2, qG2, qB2);
+
+                if (!globalErrorMap.has(key)) {
+                    globalErrorMap.set(key, { r1, g1, b1, r2, g2, b2, mse: metricMse, count: 0, x: x, y: y, bits: bits });
+                }
+                globalErrorMap.get(key).count++;
+
+                if (!bitDepthMaps[bits]) bitDepthMaps[bits] = new Map();
+                if (!bitDepthMaps[bits].has(key)) {
+                    bitDepthMaps[bits].set(key, { r1, g1, b1, r2, g2, b2, mse: metricMse, count: 0, x: x, y: y, bits: bits });
+                }
+                bitDepthMaps[bits].get(key).count++;
+            }
+
+            stats.histogram.rgbBins[binIndex(rMse)]++;
+            stats.histogram.yuvBins[binIndex(metricMse)]++;
+
+            if (useSegment && i >= startPx && i < endPx) {
+                s_rgbSum += rMse;
+                s_metricSum += metricMse;
+                s_count++;
+
+                if (metricMse > 1) {
+                    const qR1 = Math.round(r1/clusterRadius), qG1 = Math.round(g1/clusterRadius), qB1 = Math.round(b1/clusterRadius);
+                    const qR2 = Math.round(r2/clusterRadius), qG2 = Math.round(g2/clusterRadius), qB2 = Math.round(b2/clusterRadius);
+                    const key = packKey(qR1, qG1, qB1, qR2, qG2, qB2);
+
+                    if (!segmentErrorMap.has(key)) segmentErrorMap.set(key, { r1, g1, b1, r2, g2, b2, mse: metricMse, count: 0, x: x, y: y, bits: bits });
+                    segmentErrorMap.get(key).count++;
+                }
             }
         }
     }

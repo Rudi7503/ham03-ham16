@@ -107,13 +107,13 @@ function createBattleArgs(appState, step, metric, currentOffset, optRegion, onWo
     };
 }
 
-function measureCurrentMse(appState, step, metric, config, optRegion) {
-    const totalPixels = appState.currentImgW * appState.currentImgH;
-    return computeDetailedAnalysis(
+function measureCurrentMse(appState, metric, optRegion) {
+    // Hier genügt der schlanke Durchschnittswert — die teure Top10-/Histogramm-
+    // Analyse von computeDetailedAnalysis wäre reine Verschwendung.
+    return computeAvgYuvScore(
         appState.originalImageData.data, appState.decodedImageData.data,
-        appState.currentImgW, appState.currentImgH, 0, totalPixels,
-        step, metric, config, optRegion
-    ).global.avgYuv;
+        appState.currentImgW, appState.currentImgH, metric, optRegion
+    );
 }
 
 function getSlotUsageSummary(commands, maxSlots) {
@@ -457,6 +457,11 @@ async function runVectorRefinementPass(passNum, appState, maxSlots, currentOffse
         imgW, imgH, metric, optRegion
     );
 
+    // Fehler-Vektoren einmal pro Durchlauf berechnen (statt pro Slot) — die
+    // Richtung wird anschließend ohnehin durch einen vollständigen Encode
+    // validiert, daher ist die leicht "ältere" Richtung qualitätsneutral.
+    const slotVectors = computeSlotErrorVectors(appState, maxSlots, optRegion);
+
     let anyChange = false;
     for (const i of order) {
         const absSlot = (currentOffset + i) % 256;
@@ -464,7 +469,7 @@ async function runVectorRefinementPass(passNum, appState, maxSlots, currentOffse
 
         updateOptProgress(`Durchlauf ${passNum}: Vektor-Liniensuche für Slot ${i}... (MSE: ${currentMse.toFixed(2)})`);
 
-        const slotVector = computeSlotErrorVectors(appState, maxSlots, optRegion)[i];
+        const slotVector = slotVectors[i];
         if (slotVector.count === 0) continue;
 
         const startColor = {
@@ -491,17 +496,20 @@ export async function runManualRefinement(appState, optRegion, step, metric, cur
     const config = HAM_CONFIGS[appState.currentFormat];
     const { maxSlots } = resolveBankLayout(appState.currentFormat, config);
 
-    const startMse = measureCurrentMse(appState, step, metric, config, optRegion);
+    const startMse = measureCurrentMse(appState, metric, optRegion);
     const changeLog = [`<div style="color:#ffc107; font-weight:bold;">Manuelles Nachoptimieren (Start-MSE: ${startMse.toFixed(2)})</div>`];
     const battleArgs = createBattleArgs(appState, step, metric, currentOffset, optRegion, (msg) => changeLog.push(`<div style="color:#ffc107;">${msg}</div>`));
 
     updateOptProgress(`Starte manuelle Nachoptimierung (Vektor-Analyse)...`);
 
+    // Einmal pro Durchlauf berechnen — siehe Hinweis in runVectorRefinementPass.
+    const slotVectors = computeSlotErrorVectors(appState, maxSlots, optRegion);
+
     for (let i = maxSlots - 1; i >= 1; i--) {
         const absSlot = (currentOffset + i) % 256;
         if (lockedSlots.has(absSlot)) continue;
 
-        const slotVector = computeSlotErrorVectors(appState, maxSlots, optRegion)[i];
+        const slotVector = slotVectors[i];
         if (slotVector.count === 0) continue;
 
         const startColor = {
@@ -517,7 +525,7 @@ export async function runManualRefinement(appState, optRegion, step, metric, cur
         }
     }
 
-    const endMse = measureCurrentMse(appState, step, metric, config, optRegion);
+    const endMse = measureCurrentMse(appState, metric, optRegion);
     const endUsage = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
     const usageStr = endUsage.map((cnt, idx) => idx > 0 ? `S${idx}:${cnt}x` : "").filter(Boolean).join(", ");
 
@@ -713,12 +721,12 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     await triggerEncodeFn();
     await new Promise(r => requestAnimationFrame(r));
 
-    const startMse = measureCurrentMse(appState, step, metric, config, optRegion);
+    const startMse = measureCurrentMse(appState, metric, optRegion);
     const startUsage = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
 
     let mseStand = startMse;
     const pushMseStand = (phaseLabel) => {
-        const mse = measureCurrentMse(appState, step, metric, config, optRegion);
+        const mse = measureCurrentMse(appState, metric, optRegion);
         const diff = mseStand - mse;
         const diffTxt = Math.abs(diff) < 0.005 ? "" : (diff > 0 ? ` (−${diff.toFixed(2)})` : ` (+${(-diff).toFixed(2)})`);
         changeLog.push(`<div style="color:#17a2b8; font-size:11px; margin-top:2px;">📊 Nach ${phaseLabel}: MSE ${mse.toFixed(2)}${diffTxt}</div>`);
@@ -863,7 +871,7 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
         }
     }
 
-    const endMse = measureCurrentMse(appState, step, metric, config, optRegion);
+    const endMse = measureCurrentMse(appState, metric, optRegion);
     const endUsage = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
 
     const activeFormatName = config.isMixed ? `Gemischt (${formatsInUse.join(', ')})` : appState.currentFormat;

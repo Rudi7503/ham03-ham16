@@ -2,7 +2,7 @@
 
 import { HAM_CONFIGS } from '../codecs/configs.js';
 import { rgbToHex, hexToRgb } from '../codecs/utils.js';
-import { encodePaletted, decodePaletted, packPaletted } from '../core/module_paletted.js';
+import { encodePaletted, decodePaletted, packPaletted, describeCommand } from '../core/module_paletted.js';
 import { encodeHam12_16, decodeHam12_16, packHam12_16 } from '../core/module_ham12_16.js';
 import { debugRoundtripHam12_16, debugRoundtripPaletted } from '../core/debugger.js';
 import { computeDetailedAnalysis, errorBins } from '../core/analysis.js';
@@ -325,7 +325,21 @@ export function initHamBuilderMode(appState, containerEl) {
 
     setupCanvasEvents(
         () => ({ w: appState.currentImgW, h: appState.currentImgH }),
-        () => ({ original: getShownSourceImageData(), decoded: appState.decodedImageData })
+        () => ({
+            original: getShownSourceImageData(),
+            decoded: appState.decodedImageData,
+            getCommandText: (px) => {
+                const cmd = appState.latestCommandArray && appState.latestCommandArray[px];
+                if (!cmd) return null;
+                const step = {
+                    r: parseInt(document.getElementById('ham-step-r')?.value) || 8,
+                    g: parseInt(document.getElementById('ham-step-g')?.value) || 8,
+                    b: parseInt(document.getElementById('ham-step-b')?.value) || 8
+                };
+                const offset = parseInt(document.getElementById('pal-offset-input')?.value) || 0;
+                return describeCommand(cmd, step, offset);
+            }
+        })
     );
 
     ['fit', '1x', '2x', '4x', '8x', '16x', '32x'].forEach(mode => {

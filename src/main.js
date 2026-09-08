@@ -1,7 +1,5 @@
 // src/main.js
 
-// src/main.js
-
 import { initHamBuilderMode } from './modes/ham_builder.js';
 import { initSpriteStudioMode } from './modes/sprite_studio.js'; // NEU
 import { initViewerMode } from './modes/viewer.js';             // NEU
@@ -55,8 +53,6 @@ document.querySelectorAll('.btn-tab').forEach(btn => {
         loadCurrentMode();
     });
 });
-
-// ... hier bleibt der restliche Datei-Lade-Code (fileImg.addEventListener etc.) exakt gleich! ...
 
 // ==========================================
 // GLOBALE DATEI-LOADER

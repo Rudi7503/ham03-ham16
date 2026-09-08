@@ -55,14 +55,11 @@ fileInput.addEventListener('change', (e) => {
         metaBox.style.display = 'block';
 
         // 4. Decodieren
-        let commandArray, pixels;
-        
+        let pixels;
         if (format === "HAM12" || format === "HAM16") {
-            commandArray = unpackHam12_16(packedData, format, totalPixels);
-            pixels = decodeHam12_16(commandArray, imgW, imgH, step);
+            pixels = decodeHam12_16(unpackHam12_16(packedData, format, totalPixels), imgW, imgH, step);
         } else {
-            commandArray = unpackPaletted(packedData, format, totalPixels);
-            pixels = decodePaletted(commandArray, imgW, imgH, step, paletteRAM, offset);
+            pixels = decodePaletted(unpackPaletted(packedData, format, totalPixels), imgW, imgH, step, paletteRAM, offset);
         }
 
         // 5. Auf dem Canvas zeichnen

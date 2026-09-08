@@ -3,7 +3,8 @@ export function clamp(val, min, max) {
 }
 
 export function get_yuv_dist(r1, g1, b1, r2, g2, b2) {
-    return (0.299 * (r1 - r2) ** 2) + (0.587 * (g1 - g2) ** 2) + (0.114 * (b1 - b2) ** 2);
+    const dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
+    return (0.299 * dr * dr) + (0.587 * dg * dg) + (0.114 * db * db);
 }
 
 export function get_yuv_dist_weight(r1, g1, b1, r2, g2, b2) {
@@ -51,38 +52,46 @@ export function get_redmean_dist(r1, g1, b1, r2, g2, b2) {
     return (weightR * dr * dr + weightG * dg * dg + weightB * db * db) / 9.0;
 }
 
+// Lookup-Tabelle: sRGB-Kanal (0-255) → lineare Helligkeit.
+// Vermeidet 6x Math.pow() pro Distanz-Berechnung. Oklab ist die
+// rechenintensivste Metrik des Encoders und wird pro Pixel mehrfach aufgerufen.
+const SRGB_TO_LINEAR = (() => {
+    const lut = new Float64Array(256);
+    for (let c = 0; c < 256; c++) {
+        const v = c / 255.0;
+        lut[c] = v >= 0.04045 ? Math.pow((v + 0.055) / 1.055, 2.4) : v / 12.92;
+    }
+    return lut;
+})();
+
 export function get_oklab_dist(r1, g1, b1, r2, g2, b2) {
-    const toLin = (c) => {
-        let v = c / 255.0;
-        return v >= 0.04045 ? Math.pow((v + 0.055) / 1.055, 2.4) : v / 12.92;
-    };
+    // Vollständig inline berechnet: keine Closure- und Objekt-Allokationen pro Pixel.
+    const lr1 = SRGB_TO_LINEAR[r1], lg1 = SRGB_TO_LINEAR[g1], lb1 = SRGB_TO_LINEAR[b1];
+    const lr2 = SRGB_TO_LINEAR[r2], lg2 = SRGB_TO_LINEAR[g2], lb2 = SRGB_TO_LINEAR[b2];
 
-    const toOklab = (r, g, b) => {
-        let lr = toLin(r), lg = toLin(g), lb = toLin(b);
-        let l = 0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb;
-        let m = 0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb;
-        let s = 0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb;
+    const l1 = 0.4122214708*lr1 + 0.5363325363*lg1 + 0.0514459929*lb1;
+    const m1 = 0.2119034982*lr1 + 0.6806995451*lg1 + 0.1073969566*lb1;
+    const s1 = 0.0883024619*lr1 + 0.2817188376*lg1 + 0.6299787005*lb1;
+    const l1_ = Math.cbrt(l1), m1_ = Math.cbrt(m1), s1_ = Math.cbrt(s1);
+    const L1 = 0.2104542553*l1_ + 0.7936177850*m1_ - 0.0040720468*s1_;
+    const A1 = 1.9779984951*l1_ - 2.4285922050*m1_ + 0.4505937099*s1_;
+    const B1 = 0.0259040371*l1_ + 0.7827717662*m1_ - 0.8086757660*s1_;
 
-        let l_ = Math.cbrt(l), m_ = Math.cbrt(m), s_ = Math.cbrt(s);
-        return {
-            L: 0.2104542553*l_ + 0.7936177850*m_ - 0.0040720468*s_,
-            a: 1.9779984951*l_ - 2.4285922050*m_ + 0.4505937099*s_,
-            b: 0.0259040371*l_ + 0.7827717662*m_ - 0.8086757660*s_
-        };
-    };
+    const l2 = 0.4122214708*lr2 + 0.5363325363*lg2 + 0.0514459929*lb2;
+    const m2 = 0.2119034982*lr2 + 0.6806995451*lg2 + 0.1073969566*lb2;
+    const s2 = 0.0883024619*lr2 + 0.2817188376*lg2 + 0.6299787005*lb2;
+    const l2_ = Math.cbrt(l2), m2_ = Math.cbrt(m2), s2_ = Math.cbrt(s2);
+    const L2 = 0.2104542553*l2_ + 0.7936177850*m2_ - 0.0040720468*s2_;
+    const A2 = 1.9779984951*l2_ - 2.4285922050*m2_ + 0.4505937099*s2_;
+    const B2 = 0.0259040371*l2_ + 0.7827717662*m2_ - 0.8086757660*s2_;
 
-    let o1 = toOklab(r1, g1, b1);
-    let o2 = toOklab(r2, g2, b2);
-    
-    let dL = o1.L - o2.L;
-    let da = o1.a - o2.a;
-    let db = o1.b - o2.b;
-    
-    return (dL*dL + da*da + db*db) * 100000.0;
+    const dL = L1 - L2, dA = A1 - A2, dB = B1 - B2;
+    return (dL*dL + dA*dA + dB*dB) * 100000.0;
 }
 
 export function get_rgb_dist(r1, g1, b1, r2, g2, b2) {
-    return ((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2) / 3;
+    const dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
+    return (dr * dr + dg * dg + db * db) / 3;
 }
 
 export function get_rgb_abs_dist(r1, g1, b1, r2, g2, b2) {
