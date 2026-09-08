@@ -1,10 +1,11 @@
 // src/main.js
 
 import { initHamBuilderMode } from './modes/ham_builder.js';
-import { initSpriteStudioMode } from './modes/sprite_studio.js'; // NEU
-import { initViewerMode } from './modes/viewer.js';             // NEU
+import { initSpriteStudioMode } from './modes/sprite_studio.js';
+import { initViewerMode } from './modes/viewer.js';
 import { unpackHam12_16, decodeHam12_16 } from './core/module_ham12_16.js';
 import { unpackPaletted, decodePaletted } from './core/module_paletted.js';
+import { testImagePixels } from './testimages.js';
 
 // Zentraler Application State
 const appState = {
@@ -18,7 +19,7 @@ const appState = {
     globalPaletteRAM: new Uint8Array(256 * 3),
     latestCommandArray: null,
     currentImgFileName: "image",
-    activeMode: "builder" // NEU: Merkt sich, in welchem Tab wir sind
+    activeMode: "builder" // Merkt sich, in welchem Tab wir sind
 };
 
 const fileImg = document.getElementById('file-img');
@@ -40,19 +41,40 @@ function loadCurrentMode() {
     }
 }
 
+// Tab-Styling + Moduswechsel an einer Stelle
+function syncTabUI(mode) {
+    document.querySelectorAll('.btn-tab').forEach(b => {
+        const isActive = b.getAttribute('data-mode') === mode;
+        b.classList.toggle('active', isActive);
+        b.style.background = isActive ? '#17a2b8' : '#444';
+    });
+}
+
+function selectMode(mode) {
+    appState.activeMode = mode;
+    syncTabUI(mode);
+    loadCurrentMode();
+}
+
 // Tab-Klicks abfangen
 document.querySelectorAll('.btn-tab').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-        // UI-Styling der Tabs anpassen
-        document.querySelectorAll('.btn-tab').forEach(b => { b.style.background = '#444'; b.classList.remove('active'); });
-        e.target.style.background = '#17a2b8';
-        e.target.classList.add('active');
-        
-        // Modus im State speichern und Modul laden
-        appState.activeMode = e.target.getAttribute('data-mode');
-        loadCurrentMode();
-    });
+    btn.addEventListener('click', () => selectMode(btn.getAttribute('data-mode')));
 });
+
+// ==========================================
+// BILD IN DEN STATE ÜBERNEHMEN (Datei & Testbilder)
+// ==========================================
+function applyLoadedImage(imageData, fileName) {
+    appState.currentImgW = imageData.width;
+    appState.currentImgH = imageData.height;
+    appState.currentImgFileName = fileName;
+    appState.originalImageData = imageData;
+    appState.decodedImageData = null;
+    appState.modifiedImageData = null;
+    appState.showModified = false;
+    appState.latestCommandArray = null;
+    appState.globalPaletteRAM.fill(0); // RAM reset
+}
 
 // ==========================================
 // GLOBALE DATEI-LOADER
@@ -62,15 +84,12 @@ document.querySelectorAll('.btn-tab').forEach(btn => {
 fileImg.addEventListener('change', (e) => {
     let file = e.target.files[0]; 
     if (!file) return;
-    appState.currentImgFileName = file.name.replace(/\.[^/.]+$/, ""); 
+    let baseName = file.name.replace(/\.[^/.]+$/, ""); 
     
     let reader = new FileReader();
     reader.onload = function(ev) {
         let img = new Image();
         img.onload = function() {
-            appState.currentImgW = img.width; 
-            appState.currentImgH = img.height;
-            
             // Dummy Canvas zum extrahieren der Pixeldaten
             let tempCanvas = document.createElement('canvas');
             tempCanvas.width = img.width;
@@ -81,13 +100,7 @@ fileImg.addEventListener('change', (e) => {
             ctx.fillRect(0, 0, img.width, img.height);
             ctx.drawImage(img, 0, 0);
             
-            appState.originalImageData = ctx.getImageData(0, 0, img.width, img.height);
-            appState.decodedImageData = null; 
-            appState.modifiedImageData = null;
-            appState.showModified = false;
-            
-            appState.globalPaletteRAM.fill(0); // RAM reset
-            
+            applyLoadedImage(ctx.getImageData(0, 0, img.width, img.height), baseName);
             loadCurrentMode();
         }
         img.src = ev.target.result;
@@ -155,10 +168,62 @@ fileBin.addEventListener('change', (e) => {
                 document.getElementById('ham-step-b').value = step.b;
             }
             let offInp = document.getElementById('pal-offset-input');
-            if(offInp) offInp.value = offset;
+            if (offInp) {
+                offInp.value = offset;
+                // Change-Event auslösen, damit der Builder die Palette (Farbfelder +
+                // Statusleiste) mit dem korrekten Offset neu rendert.
+                offInp.dispatchEvent(new Event('change'));
+            }
         }, 150);
     };
     reader.readAsArrayBuffer(file);
+});
+
+// ==========================================
+// TESTBILDER (prozedural erzeugt)
+// ==========================================
+const testimgOverlay = document.getElementById('testimg-overlay');
+let testImgType = null;
+
+function openTestImageMenu() {
+    testImgType = null;
+    // Auswahl zurücksetzen
+    document.querySelectorAll('#testimg-type-row button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('#testimg-size-row button').forEach(b => b.classList.remove('active'));
+    document.getElementById('testimg-size-title').style.display = 'none';
+    document.getElementById('testimg-size-row').style.display = 'none';
+    testimgOverlay.style.display = 'flex';
+}
+
+function closeTestImageMenu() {
+    testimgOverlay.style.display = 'none';
+}
+
+document.getElementById('btn-test-images')?.addEventListener('click', openTestImageMenu);
+document.getElementById('testimg-cancel')?.addEventListener('click', closeTestImageMenu);
+testimgOverlay?.addEventListener('click', (e) => { if (e.target === testimgOverlay) closeTestImageMenu(); });
+
+// Stil wählen → Größen-Auswahl einblenden
+document.querySelectorAll('#testimg-type-row button').forEach(btn => {
+    btn.addEventListener('click', () => {
+        testImgType = btn.dataset.type;
+        document.querySelectorAll('#testimg-type-row button').forEach(b => b.classList.toggle('active', b === btn));
+        document.getElementById('testimg-size-title').style.display = 'block';
+        document.getElementById('testimg-size-row').style.display = 'flex';
+    });
+});
+
+// Größe wählen → Bild erzeugen und als neues Original im Builder laden
+document.querySelectorAll('#testimg-size-row button').forEach(btn => {
+    btn.addEventListener('click', () => {
+        if (!testImgType) return;
+        const size = parseInt(btn.dataset.size, 10);
+        const pixels = testImagePixels(testImgType, size);
+        const imageData = new ImageData(pixels, size, size);
+        closeTestImageMenu();
+        applyLoadedImage(imageData, `${testImgType}-${size}px`);
+        selectMode('builder'); // Testbilder sind für den Builder gedacht
+    });
 });
 
 // App-Start: Zeigt initial den "Bitte Bild laden"-Screen

@@ -25,6 +25,24 @@ function updateProgress(phase, current, total) {
     if (sText) sText.innerText = `${phase}: ${pct}%`;
 }
 
+// Statuszeile "Größe: … | Modus: … | Anker: … | Turbo: …"
+function refreshStatusText(appState) {
+    let el = document.getElementById('img-dim-text');
+    if (!el) return;
+    let txt = `Größe: ${appState.currentImgW}x${appState.currentImgH} px | Modus: ${appState.currentFormat}`;
+    const cmds = appState.latestCommandArray;
+    if (cmds && cmds.length > 0) {
+        let anchors = 0, turbo = 0;
+        for (let i = 0; i < cmds.length; i++) {
+            const c = cmds[i];
+            if (c.isAnchor) anchors++;
+            else if (c.isTurbo) turbo++;
+        }
+        txt += ` | Anker: ${anchors} | Turbo: ${turbo}`;
+    }
+    el.innerText = txt;
+}
+
 function generateTop10Html(top10Array) {
     return top10Array.length > 0 ? top10Array.map((e, idx) => {
         let sollR = e.r1, sollG = e.g1, sollB = e.b1;
@@ -235,7 +253,8 @@ export function initHamBuilderMode(appState, containerEl) {
         <div id="analysis-modal" class="modal-overlay">
            <div class="modal-content" style="width: 850px;">
               <h3>Fehler- & Histogramm-Analyse</h3>
-              <h4 style="margin:10px 0 5px 0; color:#ffc107;">Gesamtbild: Top 10 Max MSE Abweichungen</h4>
+              <div id="analysis-mse-summary" style="background:#16181a; border:1px solid #444; border-radius:4px; padding:8px 10px; font-size:12px; line-height:1.6; margin-bottom:10px;"></div>
+               <h4 style="margin:10px 0 5px 0; color:#ffc107;">Gesamtbild: Top 10 Max MSE Abweichungen</h4>
               <div id="analysis-top5" style="background:#111; padding:8px; border-radius:4px; font-size:12px; max-height:200px; overflow-y:auto;"></div>
               
               <h4 style="margin:15px 0 5px 0; color:#4dabf7;">Fehler-Histogramm (Gesamtbild)</h4>
@@ -321,7 +340,7 @@ export function initHamBuilderMode(appState, containerEl) {
         ctxDec.putImageData(appState.decodedImageData, 0, 0);
     }
     
-    document.getElementById('img-dim-text').innerText = `Größe: ${appState.currentImgW}x${appState.currentImgH} px | Modus: ${appState.currentFormat}`;
+    refreshStatusText(appState);
 
     setupCanvasEvents(
         () => ({ w: appState.currentImgW, h: appState.currentImgH }),
@@ -401,7 +420,7 @@ export function initHamBuilderMode(appState, containerEl) {
         let config = HAM_CONFIGS[appState.currentFormat];
         let isPalFormat = config && config.isPaletted;
         
-        document.getElementById('img-dim-text').innerText = `Größe: ${appState.currentImgW}x${appState.currentImgH} px | Modus: ${appState.currentFormat}`;
+        refreshStatusText(appState);
 
         let paletteBox = document.getElementById('palette-box');
         if (paletteBox) paletteBox.style.display = isPalFormat ? 'flex' : 'none';
@@ -490,6 +509,7 @@ export function initHamBuilderMode(appState, containerEl) {
         
         // UI aktualisieren, falls sich RAM geändert hat
         renderPaletteWithLocks(appState);
+        refreshStatusText(appState);
     }
 
     btnEncode.addEventListener('click', async () => {
@@ -639,6 +659,29 @@ export function initHamBuilderMode(appState, containerEl) {
             let totalPixels = appState.currentImgW * appState.currentImgH;
             
             let stats = computeDetailedAnalysis(appState.originalImageData.data, appState.decodedImageData.data, appState.currentImgW, appState.currentImgH, 0, totalPixels, step, metric, config, optRegion);
+            
+            // MSE-Zusammenfassung (wie im Palette-Builder)
+            let mseSummaryEl = document.getElementById('analysis-mse-summary');
+            if (mseSummaryEl) {
+                let avgMetricMse = stats.global.avgYuv.toFixed(2);
+                let avgRgbMse = stats.global.avgRgb.toFixed(2);
+                let pureMaxMse = 0, weightedMaxMse = 0, clusterCount = 0;
+                const considerList = (list) => {
+                    for (const e of list) {
+                        clusterCount++;
+                        if (e.mse > pureMaxMse) pureMaxMse = e.mse;
+                        const w = e.mse * e.count;
+                        if (w > weightedMaxMse) weightedMaxMse = w;
+                    }
+                };
+                considerList(stats.global.top10);
+                for (const b in stats.global.byBitDepth) considerList(stats.global.byBitDepth[b]);
+
+                mseSummaryEl.innerHTML = `
+                    <div style="color:#ffc107; font-weight:bold;">⌀ Metrik-MSE: ${avgMetricMse} <span style="color:#aaa; font-weight:normal;">(RGB: ${avgRgbMse})</span></div>
+                    <div style="color:#4dabf7;">Max MSE: ${Math.round(pureMaxMse).toLocaleString('de-DE')} | Max gewichtet (MSE × Menge): ${Math.round(weightedMaxMse).toLocaleString('de-DE')}</div>
+                    <div style="color:#aaa; font-size:11px;">Ausgewertet: ${totalPixels.toLocaleString('de-DE')} Pixel · ${clusterCount} Fehler-Cluster · Metrik: ${metric}</div>`;
+            }
             
             let top5Div = document.getElementById('analysis-top5');
             if (top5Div) {

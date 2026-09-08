@@ -14,9 +14,24 @@
         .btn-global { background: #007bff; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 12px; transition: background 0.2s; }
         .btn-global:hover { background: #0056b3; }
         .btn-success { background: #28a745; } .btn-success:hover { background: #218838; }
+        #btn-test-images { background: #6f42c1; } #btn-test-images:hover { background: #5a32a3; }
         
         /* Modul-Container */
         #app-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: #000; }
+
+        /* Testbild-Auswahl */
+        #testimg-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 2000; display: none; align-items: center; justify-content: center; }
+        #testimg-panel { background: #1e2124; border: 1px solid #555; border-radius: 8px; padding: 20px 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); min-width: 420px; max-width: 92vw; }
+        #testimg-panel h3 { margin: 0 0 4px 0; color: #c084fc; }
+        #testimg-panel .hint { margin: 0 0 14px 0; font-size: 11px; color: #999; }
+        #testimg-panel .step-title { font-size: 12px; font-weight: bold; color: #ccc; margin: 10px 0 6px 0; }
+        #testimg-panel .btn-row { display: flex; flex-wrap: wrap; gap: 6px; }
+        #testimg-panel .btn-row button { background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 7px 12px; font-size: 12px; font-weight: bold; cursor: pointer; transition: background 0.15s; }
+        #testimg-panel .btn-row button:hover { background: #17a2b8; }
+        #testimg-panel .btn-row button.active { background: #17a2b8; border-color: #4dabf7; }
+        #testimg-panel .btn-foot { margin-top: 16px; text-align: right; }
+        #testimg-panel .btn-foot button { background: #555; color: #fff; border: none; border-radius: 4px; padding: 6px 14px; font-size: 12px; cursor: pointer; }
+        #testimg-panel .btn-foot button:hover { background: #6c757d; }
     </style>
 </head>
 <body>
@@ -29,6 +44,8 @@
         <label for="file-bin" class="btn-global btn-success" title="Gepacktes HAM-File laden">.ham laden</label>
         <input type="file" id="file-bin" accept=".ham" style="display: none;">
         
+        <button id="btn-test-images" class="btn-global" title="Prozedural erzeugte Testbilder (4 Bit/pix HAM)">Testbilder</button>
+        
         <!-- NEU: Modus-Tabs -->
         <div style="margin-left: 30px; display: flex; gap: 5px;">
             <button class="btn-tab active" data-mode="builder" style="background:#17a2b8; color:#fff; border:none; padding:8px 15px; border-radius:4px; cursor:pointer;">Builder</button>
@@ -39,6 +56,34 @@
     
     <div id="app-container">
         <div style="padding: 20px; color: #aaa; font-size: 14px;">Warte auf Bilddaten... Bitte lade oben ein Bild.</div>
+    </div>
+
+    <!-- Testbild-Auswahl -->
+    <div id="testimg-overlay">
+        <div id="testimg-panel">
+            <h3>Testbilder (4 Bit/pix HAM)</h3>
+            <p class="hint">Wähle zuerst den Stil, dann die Pixelgröße. Das Bild wird direkt als neues Original geladen.</p>
+
+            <div class="step-title">1. Stil:</div>
+            <div class="btn-row" id="testimg-type-row">
+                <button data-type="stress" title="Rauschen, Schachbrett, 1-px-Muster">Stress</button>
+                <button data-type="sweet" title="Glatte Verläufe + Farbbalken">Sweet</button>
+                <button data-type="real" title="Prozedurale Foto-Landschaft (Himmel/Sonne/Wasser)">Real</button>
+                <button data-type="pixelstyle" title="Pixel-Art Alien (harte Kanten, wenige Farben)">Pixelstyle</button>
+            </div>
+
+            <div class="step-title" id="testimg-size-title" style="display:none;">2. Größe:</div>
+            <div class="btn-row" id="testimg-size-row" style="display:none;">
+                <button data-size="16">16×16</button>
+                <button data-size="32">32×32</button>
+                <button data-size="64">64×64</button>
+                <button data-size="128">128×128</button>
+                <button data-size="256">256×256</button>
+                <button data-size="512">512×512</button>
+            </div>
+
+            <div class="btn-foot"><button id="testimg-cancel">Abbrechen</button></div>
+        </div>
     </div>
 
     <script type="module" src="/src/main.js"></script>

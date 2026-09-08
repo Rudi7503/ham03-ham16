@@ -363,26 +363,32 @@ async function refineSlotColorVector(startColor, absSlot, slotIdx, vector, trigg
 // Slot-Reihenfolge
 // ---------------------------------------------------------------------------
 
+// Reihenfolge, in der Bank-Slots vorbefüllt/battlet werden.
+//
+// Wichtig: Slots aufsteigend wählen = nach bestmöglicher Erreichbarkeit. Bei
+// Mischformaten kann jede Pixel-Phase nur einen Teil der RAM-Bank ansteuern:
+//   HAM03 → Slots 0..3,  HAM04 → Slots 0..7,  HAM06/HAM08 → (fast) alle.
+// Die zuerst eingefügten (häufigsten) Farben landen so in den Slots 1..3, die
+// von JEDEM Sub-Format erreichbar sind; erst danach 4..7 usw. Die frühere
+// absteigende/verwürfelte Ordnung legte die Top-Farben auf Slots 8..31, die nur
+// HAM06-Spalten (2 von 8 Pixeln) nutzen konnten → viele Slots blieben ungenutzt
+// und die Qualität der HAM03/HAM04-Spalten litt massiv.
 function generateHierarchicalSlotOrder(maxSlots) {
-    if (maxSlots < 31) {
-        const order = [];
-        for (let i = maxSlots - 1; i >= 1; i--) order.push(i);
-        return order;
-    }
-
-    const ham04Slots = [1, 2, 3, 4, 5, 6, 7];
-    const ham06Blocks = [
-        [8, 9, 10, 11], [12, 13, 14, 15], [16, 17, 18, 19],
-        [20, 21, 22, 23], [24, 25, 26, 27], [28, 29, 30, 31]
-    ];
-
     const order = [];
-    ham06Blocks.forEach((block, i) => {
-        order.push(...block);
-        if (i < ham04Slots.length) order.push(ham04Slots[i]);
-    });
-    order.push(...ham04Slots.slice(ham06Blocks.length));
+    for (let i = 1; i < maxSlots; i++) order.push(i);
     return order;
+}
+
+// Wie viele Anker-Slots die Phase einer Spalte x ansteuern kann.
+// Bei Mischformaten ist das die Kapazität des Sub-Formats an dieser
+// Wortposition (HAM03 → 4, HAM04 → 8, HAM06 → 32 …), sonst die ganze Bank.
+// Slot i ist für diese Phase genau dann erreichbar, wenn i < Kapazität ist.
+function phaseSlotCapacity(config, x) {
+    if (config && config.isMixed && Array.isArray(config.sequence) && config.sequence.length > 0) {
+        const sub = HAM_CONFIGS[config.sequence[x % config.sequence.length]];
+        return (sub && sub.slotsPerBank) || 0;
+    }
+    return (config && config.slotsPerBank) || 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -413,13 +419,30 @@ async function forceFillUnusedSlots(appState, maxSlots, currentOffset, lockedSlo
             step, metric, config, optRegion
         );
 
-        const candidates = getClusteredCandidates(stats.global.top10, appState.globalPaletteRAM, unusedSlots.length * 2, CLUSTER_RADIUS_SQ);
+        // Fehler-Cluster (global + Bit-Ebenen) samt Pixel-Phase sammeln. Ein
+        // freier Slot i kann nur durch einen Fehler gefüllt werden, dessen Phase
+        // Slot i überhaupt ankern kann (i < Kapazität der Phase). Nur dann wird
+        // die Fehlerfarbe beim nächsten Encode auch wirklich benutzt und der
+        // Fehler verschwindet aus der Top-Liste.
+        const clusters = [];
+        const addList = (list) => { for (const e of list) clusters.push(e); };
+        addList(stats.global.top10);
+        for (const b in stats.global.byBitDepth) addList(stats.global.byBitDepth[b]);
+        clusters.sort((a, b) => b.mse - a.mse);
 
         let placed = 0;
         for (const i of unusedSlots) {
-            if (placed >= candidates.length) break;
             const absSlot = (currentOffset + i) % 256;
-            writeSlotColor(appState.globalPaletteRAM, absSlot, candidates[placed]);
+            let chosen = null;
+            for (const e of clusters) {
+                const cap = phaseSlotCapacity(config, e.x);
+                if (cap <= 0 || i >= cap) continue; // Phase dieses Fehlers erreicht Slot i nicht
+                if (colorInPalette(appState.globalPaletteRAM, e.r1, e.g1, e.b1, 12)) continue; // Farbe existiert bereits → kein Bedarf
+                chosen = { r: e.r1, g: e.g1, b: e.b1 };
+                break;
+            }
+            if (!chosen) continue;
+            writeSlotColor(appState.globalPaletteRAM, absSlot, chosen);
             placed++;
         }
 

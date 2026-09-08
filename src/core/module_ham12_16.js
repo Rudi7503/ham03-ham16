@@ -181,19 +181,21 @@ export function unpackHam12_16(packedData, format, totalPixels) {
 
 export function decodeHam12_16(commands, imgW, imgH, stepVal) {
     let out = new Uint8ClampedArray(imgW * imgH * 4);
-    let acc = { r: 127, g: 127, b: 127 };
+    // Akkumulator als Skalare statt Objekt: deutlich schneller pro Pixel.
+    let r = 127, g = 127, b = 127;
+    const sr = stepVal.r, sg = stepVal.g, sb = stepVal.b;
     for (let i = 0; i < commands.length; i++) {
         let cmd = commands[i];
         if (cmd.isAnchor) {
-            acc.r = cmd.r; acc.g = cmd.g; acc.b = cmd.b;
+            r = cmd.r; g = cmd.g; b = cmd.b;
         } else {
             let m = cmd.isTurbo ? 4 : 1;
-            acc.r = clamp(acc.r + cmd.dr * (stepVal.r * m), 0, 255);
-            acc.g = clamp(acc.g + cmd.dg * (stepVal.g * m), 0, 255);
-            acc.b = clamp(acc.b + cmd.db * (stepVal.b * m), 0, 255);
+            r = clamp(r + cmd.dr * sr * m, 0, 255);
+            g = clamp(g + cmd.dg * sg * m, 0, 255);
+            b = clamp(b + cmd.db * sb * m, 0, 255);
         }
         let outIdx = i * 4;
-        out[outIdx] = acc.r; out[outIdx + 1] = acc.g; out[outIdx + 2] = acc.b; out[outIdx + 3] = 255;
+        out[outIdx] = r; out[outIdx + 1] = g; out[outIdx + 2] = b; out[outIdx + 3] = 255;
     }
     return out;
 }

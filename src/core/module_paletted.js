@@ -1,7 +1,7 @@
 import { HAM_CONFIGS } from '../codecs/configs.js';
 import { clamp, getMetricDistFunc } from '../codecs/utils.js';
 
-const CHANNEL_DEFS = {
+export const CHANNEL_DEFS = {
     "HAM01": { r: [-2, 2], g: [-2, 2], b: [-2, 2] },
     "HAM02": { r: [-2, 2], g: [-2, 2], b: [-2, 2] },
     "HAM03": { r: [-2, 2], g: [-2, 2], b: [-2, 2] },
@@ -370,25 +370,51 @@ function buildDecodeDeltaTables(stepVal) {
     return tables;
 }
 
+// Anzahl der Anker-Slots je Format (0 = keine Anker) als flache Tabelle
+// vorberechnet, damit die heiße Dekodier-Schleife keine Lookups mit
+// Optional-Chaining mehr braucht.
+const SLOT_COUNT_BY_FMT = (() => {
+    const m = {};
+    for (const fmt of Object.keys(HAM_CONFIGS)) {
+        m[fmt] = (HAM_CONFIGS[fmt] && HAM_CONFIGS[fmt].slotsPerBank) || 0;
+    }
+    return m;
+})();
+
+// Cache für die Delta-Tabellen: Innerhalb einer Battle-Serie (viele Kandidaten
+// mit gleicher Schrittweite) werden die Tabellen so nur einmal aufgebaut.
+let deltaTablesCacheKey = null;
+let deltaTablesCache = null;
+function getDecodeDeltaTables(stepVal) {
+    const key = `${stepVal.r},${stepVal.g},${stepVal.b}`;
+    if (deltaTablesCacheKey !== key || !deltaTablesCache) {
+        deltaTablesCacheKey = key;
+        deltaTablesCache = buildDecodeDeltaTables(stepVal);
+    }
+    return deltaTablesCache;
+}
+
 export function decodePaletted(commands, imgW, imgH, stepVal, paletteRAM, offset) {
     let out = new Uint8ClampedArray(imgW * imgH * 4);
-    let acc = { r: 127, g: 127, b: 127 };
-    const deltaTables = buildDecodeDeltaTables(stepVal);
+    const deltaTables = getDecodeDeltaTables(stepVal);
+    // Akkumulator als Skalare statt Objekt: deutlich schneller pro Pixel.
+    let r = 127, g = 127, b = 127;
 
     for (let i = 0; i < commands.length; i++) {
-        let cmd = commands[i];
-        if (cmd.isAnchor && (HAM_CONFIGS[cmd.format]?.slotsPerBank > 0)) {
-            let absSlot = (offset + cmd.anchorIdx) % 256;
-            acc.r = paletteRAM[absSlot*3]; acc.g = paletteRAM[absSlot*3+1]; acc.b = paletteRAM[absSlot*3+2];
+        const cmd = commands[i];
+        if (cmd.isAnchor && SLOT_COUNT_BY_FMT[cmd.format] > 0) {
+            const absIdx = ((offset + cmd.anchorIdx) % 256) * 3;
+            r = paletteRAM[absIdx]; g = paletteRAM[absIdx + 1]; b = paletteRAM[absIdx + 2];
         } else {
             const table = deltaTables[cmd.format] || deltaTables.fallback;
             const t = cmd.isTurbo ? table.turbo : table.normal;
-            acc.r = clamp(acc.r + (t.r[cmd.rIndex || 0] || 0), 0, 255);
-            acc.g = clamp(acc.g + (t.g[cmd.gIndex || 0] || 0), 0, 255);
-            acc.b = clamp(acc.b + (t.b[cmd.bIndex || 0] || 0), 0, 255);
+            const ri = cmd.rIndex || 0, gi = cmd.gIndex || 0, bi = cmd.bIndex || 0;
+            r = clamp(r + (t.r[ri] || 0), 0, 255);
+            g = clamp(g + (t.g[gi] || 0), 0, 255);
+            b = clamp(b + (t.b[bi] || 0), 0, 255);
         }
-        let outIdx = i * 4;
-        out[outIdx] = acc.r; out[outIdx + 1] = acc.g; out[outIdx + 2] = acc.b; out[outIdx + 3] = 255;
+        const outIdx = i * 4;
+        out[outIdx] = r; out[outIdx + 1] = g; out[outIdx + 2] = b; out[outIdx + 3] = 255;
     }
     return out;
 }
