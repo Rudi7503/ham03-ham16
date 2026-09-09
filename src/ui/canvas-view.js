@@ -12,7 +12,9 @@ export function getScaleFactor(mode, imgW, imgH, viewportElement) {
     if (mode === '4x') return 4.0;
     if (mode === '8x') return 8.0;
     if (mode === '16x') return 16.0;
-    return 32.0;
+    if (mode === '32x') return 32.0;
+    if (mode === '64x') return 64.0;
+    return 64.0; // Fallback für unbekannte Modi
 }
 
 export function updateView(imgW, imgH) {

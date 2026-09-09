@@ -260,35 +260,79 @@ async function computeCandidateScoreInThread(candidate, args, absSlot) {
     return computeAvgYuvScore(origData, decodedPixels, imgW, imgH, metric, optRegion);
 }
 
-async function runWorkerBattleAll(candidates, args, absSlot) {
-    const { origData, imgW, imgH, format, step, metric, currentOffset, paletteRAM, optRegion, onWorkerFallback } = args;
+// ---------------------------------------------------------------------------
+// Wiederverwendbarer Worker-Pool: Die (teuren) Worker werden nur einmal
+// erzeugt und über alle Battles hinweg wiederverwendet (statt pro Kandidat
+// neu gestartet + terminiert). Ein Kandidat = ein Job auf einem freien Worker
+// (encode + decode + Score im Worker-Modul). Der Pool wächst lazy bis POOL_CAP.
+// ---------------------------------------------------------------------------
+const POOL_CAP = Math.max(2, Math.min((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4, 16));
 
-    const promises = candidates.map(cand => new Promise((resolve) => {
-        const worker = new Worker(new URL('./optimizer_worker.js', import.meta.url), { type: 'module' });
+const workerPool = []; // [{ worker, busy }]
+let workerUnavailable = false; // Worker-Erzeugung dauerhaft fehlgeschlagen
+
+function createPoolWorker() {
+    const entry = { worker: new Worker(new URL('./optimizer_worker.js', import.meta.url), { type: 'module' }), busy: true };
+    workerPool.push(entry);
+    return entry;
+}
+
+async function acquirePoolWorker() {
+    for (;;) {
+        const idle = workerPool.find(w => !w.busy);
+        if (idle) { idle.busy = true; return idle; }
+        if (!workerUnavailable && workerPool.length < POOL_CAP) {
+            try { return createPoolWorker(); }
+            catch (err) { workerUnavailable = true; return null; }
+        }
+        if (workerUnavailable) return null;
+        await new Promise(r => setTimeout(r, 1)); // auf freien Worker warten
+    }
+}
+
+// Bewertet einen einzelnen Kandidaten über den Pool; fällt bei Fehlern auf die
+// In-Thread-Bewertung zurück.
+async function scoreCandidateViaPool(candidate, args, absSlot, onWorkerFallback) {
+    const warnFallback = () => {
+        if (!workerFallbackWarned) {
+            workerFallbackWarned = true;
+            const msg = "⚠️ Worker-Battle nicht verfügbar — In-Thread-Bewertung aktiv.";
+            if (typeof onWorkerFallback === 'function') onWorkerFallback(msg);
+            else console.warn(msg);
+        }
+    };
+
+    const entry = await acquirePoolWorker();
+    if (!entry) { // kein Worker möglich → im Hauptthread bewerten
+        warnFallback();
+        try {
+            const score = await computeCandidateScoreInThread(candidate, args, absSlot);
+            return { candidate, score };
+        } catch (err) {
+            return { candidate, score: Infinity };
+        }
+    }
+
+    const { worker } = entry;
+    return new Promise((resolve) => {
         let settled = false;
         let fallbackRunning = false;
 
         const finish = (result) => {
             if (settled) return;
             settled = true;
-            worker.terminate();
+            entry.busy = false;
             resolve(result);
         };
-
         const fallback = async () => {
             if (settled || fallbackRunning) return;
             fallbackRunning = true;
-            if (!workerFallbackWarned) {
-                workerFallbackWarned = true;
-                const msg = "⚠️ Worker-Battle nicht verfügbar — In-Thread-Bewertung aktiv.";
-                if (typeof onWorkerFallback === 'function') onWorkerFallback(msg);
-                else console.warn(msg);
-            }
+            warnFallback();
             try {
-                const score = await computeCandidateScoreInThread(cand, args, absSlot);
-                finish({ candidate: cand, score });
+                const score = await computeCandidateScoreInThread(candidate, args, absSlot);
+                finish({ candidate, score });
             } catch (err) {
-                finish({ candidate: cand, score: Infinity });
+                finish({ candidate, score: Infinity });
             }
         };
 
@@ -300,16 +344,37 @@ async function runWorkerBattleAll(candidates, args, absSlot) {
         worker.onmessageerror = () => fallback();
 
         worker.postMessage({
-            candidate: cand,
-            origData, imgW, imgH, format, step, metric,
-            offset: currentOffset,
-            basePaletteRAM: paletteRAM,
+            candidate,
+            origData: args.origData,
+            imgW: args.imgW,
+            imgH: args.imgH,
+            format: args.format,
+            step: args.step,
+            metric: args.metric,
+            offset: args.currentOffset,
+            basePaletteRAM: args.paletteRAM,
             slotToFill: absSlot,
-            optRegion
+            optRegion: args.optRegion
         });
-    }));
+    });
+}
 
-    const results = await Promise.all(promises);
+async function runWorkerBattleAll(candidates, args, absSlot) {
+    const concurrency = Math.max(1, Math.min(POOL_CAP, candidates.length));
+    const results = new Array(candidates.length);
+    let next = 0;
+
+    // N "Executor"-Schleifen ziehen Kandidaten aus der Warteschlange, jeder
+    // Job belegt genau einen Pool-Worker.
+    const workerLoop = async () => {
+        for (;;) {
+            const i = next++;
+            if (i >= candidates.length) return;
+            results[i] = await scoreCandidateViaPool(candidates[i], args, absSlot, args.onWorkerFallback);
+        }
+    };
+
+    await Promise.all(Array.from({ length: concurrency }, workerLoop));
     results.sort((a, b) => a.score - b.score);
     return results;
 }

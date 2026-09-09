@@ -117,6 +117,7 @@ export function initHamBuilderMode(appState, containerEl) {
             .status-row { display: flex; justify-content: space-between; font-size: 11px; color: #aaa; }
             #image-area { display: flex; flex: 1; overflow: hidden; background-color: #000; }
             .view-pane { flex: 1; position: relative; overflow: hidden; cursor: grab; }
+            .view-pane canvas { image-rendering: pixelated; } /* Zoom = harte 1:1-Pixelblöcke, keine Interpolation */
             #pane-left { border-right: 2px solid #444; }
             .pane-label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 4px; font-weight: bold; font-size: 12px; z-index: 100; pointer-events: none; }
             .divider { width: 2px; height: 25px; background-color: #555; margin: 0 2px; }
@@ -226,6 +227,7 @@ export function initHamBuilderMode(appState, containerEl) {
                     <button id="btn-zoom-8x" class="btn-zoom">8x</button>
                     <button id="btn-zoom-16x" class="btn-zoom">16x</button>
                     <button id="btn-zoom-32x" class="btn-zoom">32x</button>
+                    <button id="btn-zoom-64x" class="btn-zoom">64x</button>
                 </div>
                 
                 <div class="control-group">
@@ -361,7 +363,7 @@ export function initHamBuilderMode(appState, containerEl) {
         })
     );
 
-    ['fit', '1x', '2x', '4x', '8x', '16x', '32x'].forEach(mode => {
+    ['fit', '1x', '2x', '4x', '8x', '16x', '32x', '64x'].forEach(mode => {
         let btn = document.getElementById(`btn-zoom-${mode}`);
         if (btn) btn.addEventListener('click', () => setZoomMode(mode, appState.currentImgW, appState.currentImgH));
     });
