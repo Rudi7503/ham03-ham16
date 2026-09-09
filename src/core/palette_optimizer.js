@@ -2,17 +2,15 @@
 //
 // Optimiert die Farbpalette (globalPaletteRAM) für HAM-Formate. Ablauf:
 //   0.  Pre-Fill: Befüllt freie Slots vorab mit Histogramm-Farben.
+//       -> EARLY EXIT: Wenn das Bild weniger/gleich viele Farben hat wie Slots, sofort beenden!
 //   0.5 Zero-Usage Eradication: Überschreibt ungenutzte Slots sofort 
 //       mit den Top-Fehlern des letzten Encodes, bis alle Slots genutzt werden.
-//   1.  Kandidaten-"Battle": Farbkandidaten werden parallel in Web Workern
-//       getestet, der beste Kandidat gewinnt (runWorkerBattle).
+//   1.  Kandidaten-"Battle": Farbkandidaten werden parallel in Web Workern getestet.
+//       Gute Pre-Fill-Farben sind durch Baseline-Checks geschützt.
+//       -> SLOT-SORTING: Schiebt häufig genutzte Farben in niedrige Slots (HAM03/04).
 //   2.  Vektor-Analyse + Liniensuche pro Slot (refineSlotColorVector):
 //       Der mittlere Fehler-Vektor (ΔR,ΔG,ΔB) aller vom Slot abhängigen Pixel
 //       spannt einen Fächer auf, der in Workern getestet wird.
-//
-// Öffentliche Einstiegspunkte:
-//   - runManualRefinement  : manuelles Nachjustieren aller Slots einer Bank
-//   - runHybridOptimization: Auto-Füllen mit einstellbarer Intensität ('fast', 'normal', 'max')
 
 import { HAM_CONFIGS } from '../codecs/configs.js';
 import { clamp } from '../codecs/utils.js';
@@ -108,8 +106,6 @@ function createBattleArgs(appState, step, metric, currentOffset, optRegion, onWo
 }
 
 function measureCurrentMse(appState, metric, optRegion) {
-    // Hier genügt der schlanke Durchschnittswert — die teure Top10-/Histogramm-
-    // Analyse von computeDetailedAnalysis wäre reine Verschwendung.
     return computeAvgYuvScore(
         appState.originalImageData.data, appState.decodedImageData.data,
         appState.currentImgW, appState.currentImgH, metric, optRegion
@@ -360,29 +356,15 @@ async function refineSlotColorVector(startColor, absSlot, slotIdx, vector, trigg
 }
 
 // ---------------------------------------------------------------------------
-// Slot-Reihenfolge
+// Slot-Reihenfolge & Kapazität
 // ---------------------------------------------------------------------------
 
-// Reihenfolge, in der Bank-Slots vorbefüllt/battlet werden.
-//
-// Wichtig: Slots aufsteigend wählen = nach bestmöglicher Erreichbarkeit. Bei
-// Mischformaten kann jede Pixel-Phase nur einen Teil der RAM-Bank ansteuern:
-//   HAM03 → Slots 0..3,  HAM04 → Slots 0..7,  HAM06/HAM08 → (fast) alle.
-// Die zuerst eingefügten (häufigsten) Farben landen so in den Slots 1..3, die
-// von JEDEM Sub-Format erreichbar sind; erst danach 4..7 usw. Die frühere
-// absteigende/verwürfelte Ordnung legte die Top-Farben auf Slots 8..31, die nur
-// HAM06-Spalten (2 von 8 Pixeln) nutzen konnten → viele Slots blieben ungenutzt
-// und die Qualität der HAM03/HAM04-Spalten litt massiv.
 function generateHierarchicalSlotOrder(maxSlots) {
     const order = [];
     for (let i = 1; i < maxSlots; i++) order.push(i);
     return order;
 }
 
-// Wie viele Anker-Slots die Phase einer Spalte x ansteuern kann.
-// Bei Mischformaten ist das die Kapazität des Sub-Formats an dieser
-// Wortposition (HAM03 → 4, HAM04 → 8, HAM06 → 32 …), sonst die ganze Bank.
-// Slot i ist für diese Phase genau dann erreichbar, wenn i < Kapazität ist.
 function phaseSlotCapacity(config, x) {
     if (config && config.isMixed && Array.isArray(config.sequence) && config.sequence.length > 0) {
         const sub = HAM_CONFIGS[config.sequence[x % config.sequence.length]];
@@ -419,11 +401,6 @@ async function forceFillUnusedSlots(appState, maxSlots, currentOffset, lockedSlo
             step, metric, config, optRegion
         );
 
-        // Fehler-Cluster (global + Bit-Ebenen) samt Pixel-Phase sammeln. Ein
-        // freier Slot i kann nur durch einen Fehler gefüllt werden, dessen Phase
-        // Slot i überhaupt ankern kann (i < Kapazität der Phase). Nur dann wird
-        // die Fehlerfarbe beim nächsten Encode auch wirklich benutzt und der
-        // Fehler verschwindet aus der Top-Liste.
         const clusters = [];
         const addList = (list) => { for (const e of list) clusters.push(e); };
         addList(stats.global.top10);
@@ -436,8 +413,8 @@ async function forceFillUnusedSlots(appState, maxSlots, currentOffset, lockedSlo
             let chosen = null;
             for (const e of clusters) {
                 const cap = phaseSlotCapacity(config, e.x);
-                if (cap <= 0 || i >= cap) continue; // Phase dieses Fehlers erreicht Slot i nicht
-                if (colorInPalette(appState.globalPaletteRAM, e.r1, e.g1, e.b1, 12)) continue; // Farbe existiert bereits → kein Bedarf
+                if (cap <= 0 || i >= cap) continue; 
+                if (colorInPalette(appState.globalPaletteRAM, e.r1, e.g1, e.b1, 12)) continue; 
                 chosen = { r: e.r1, g: e.g1, b: e.b1 };
                 break;
             }
@@ -463,6 +440,63 @@ async function forceFillUnusedSlots(appState, maxSlots, currentOffset, lockedSlo
 }
 
 // ---------------------------------------------------------------------------
+// Automatische Slot-Sortierung (Sicherheits-Check inklusive)
+// ---------------------------------------------------------------------------
+
+async function safeSortPalette(appState, maxSlots, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette) {
+    const startMse = measureCurrentMse(appState, metric, optRegion);
+    const usage = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
+
+    const movableSlots = [];
+    for (let i = 1; i < maxSlots; i++) {
+        if (!lockedSlots.has((currentOffset + i) % 256)) {
+            movableSlots.push(i);
+        }
+    }
+
+    if (movableSlots.length <= 1) return startMse; 
+
+    const colorData = movableSlots.map(i => {
+        const absSlot = (currentOffset + i) % 256;
+        return {
+            r: appState.globalPaletteRAM[absSlot * 3],
+            g: appState.globalPaletteRAM[absSlot * 3 + 1],
+            b: appState.globalPaletteRAM[absSlot * 3 + 2],
+            useCount: usage[i]
+        };
+    });
+
+    colorData.sort((a, b) => b.useCount - a.useCount);
+    const backupRAM = new Uint8Array(appState.globalPaletteRAM);
+
+    for (let idx = 0; idx < movableSlots.length; idx++) {
+        const targetI = movableSlots[idx]; 
+        const absSlot = (currentOffset + targetI) % 256;
+        const srcColor = colorData[idx];
+
+        appState.globalPaletteRAM[absSlot * 3] = srcColor.r;
+        appState.globalPaletteRAM[absSlot * 3 + 1] = srcColor.g;
+        appState.globalPaletteRAM[absSlot * 3 + 2] = srcColor.b;
+    }
+
+    await triggerEncodeFn();
+    const newMse = measureCurrentMse(appState, metric, optRegion);
+
+    if (newMse <= startMse + 0.01) {
+        const diff = startMse - newMse;
+        const diffTxt = diff > 0.005 ? ` (−${diff.toFixed(2)})` : "";
+        changeLog.push(`🔄 <span style="color:#28a745;">Automatische Slot-Sortierung erfolgreich.</span> Wichtige Farben auf niedrige Slots (HAM03/04) verschoben. [MSE: ${newMse.toFixed(2)}${diffTxt}]`);
+        renderUIPalette();
+        return newMse;
+    } else {
+        appState.globalPaletteRAM.set(backupRAM);
+        await triggerEncodeFn();
+        changeLog.push(`🔄 <span style="color:#6c757d;">Sortierung verworfen</span> (MSE wäre schlechter geworden: ${newMse.toFixed(2)} vs ${startMse.toFixed(2)}).`);
+        return startMse;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Öffentliche Einstiegspunkte
 // ---------------------------------------------------------------------------
 
@@ -475,14 +509,8 @@ async function runVectorRefinementPass(passNum, appState, maxSlots, currentOffse
     const imgW = appState.currentImgW;
     const imgH = appState.currentImgH;
     const { metric } = battleArgs;
-    let currentMse = computeAvgYuvScore(
-        appState.originalImageData.data, appState.decodedImageData.data,
-        imgW, imgH, metric, optRegion
-    );
+    let currentMse = measureCurrentMse(appState, metric, optRegion);
 
-    // Fehler-Vektoren einmal pro Durchlauf berechnen (statt pro Slot) — die
-    // Richtung wird anschließend ohnehin durch einen vollständigen Encode
-    // validiert, daher ist die leicht "ältere" Richtung qualitätsneutral.
     const slotVectors = computeSlotErrorVectors(appState, maxSlots, optRegion);
 
     let anyChange = false;
@@ -504,10 +532,7 @@ async function runVectorRefinementPass(passNum, appState, maxSlots, currentOffse
         const result = await refineSlotColorVector(startColor, absSlot, i, slotVector, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette);
         if (result.didImprove) {
             anyChange = true;
-            currentMse = computeAvgYuvScore(
-                appState.originalImageData.data, appState.decodedImageData.data,
-                imgW, imgH, metric, optRegion
-            );
+            currentMse = measureCurrentMse(appState, metric, optRegion);
             const winScale = result.candidate.scale != null ? ` ×${(result.candidate.scale * 100).toFixed(0)}%` : "";
             changeLog.push(`✨ Slot ${i} (Durchlauf ${passNum}): RGB(${result.candidate.r}, ${result.candidate.g}, ${result.candidate.b})${winScale} [Neuer MSE: ${result.score.toFixed(2)}]`);
         }
@@ -524,8 +549,6 @@ export async function runManualRefinement(appState, optRegion, step, metric, cur
     const battleArgs = createBattleArgs(appState, step, metric, currentOffset, optRegion, (msg) => changeLog.push(`<div style="color:#ffc107;">${msg}</div>`));
 
     updateOptProgress(`Starte manuelle Nachoptimierung (Vektor-Analyse)...`);
-
-    // Einmal pro Durchlauf berechnen — siehe Hinweis in runVectorRefinementPass.
     const slotVectors = computeSlotErrorVectors(appState, maxSlots, optRegion);
 
     for (let i = maxSlots - 1; i >= 1; i--) {
@@ -698,7 +721,7 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     const slotOrder = generateHierarchicalSlotOrder(maxSlots);
 
     // -----------------------------------------------------------------------
-    // STUFE 0: Pre-Fill (Histogramm-Clustering)[cite: 4]
+    // STUFE 0: Pre-Fill (Histogramm-Clustering)
     // -----------------------------------------------------------------------
     changeLog.push(`<div style="color:#6f42c1; font-weight:bold; margin-top:5px;">--- PRE-FILL (Histogramm-Clustering) ---</div>`);
     updateOptProgress(`Analysiere Bild-Histogramm für initialen Pre-Fill...`);
@@ -736,7 +759,7 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
         }
     }
 
-    changeLog.push(`Pre-Fill: ${prefillCount} Slots mit geclusterten Histogramm-Farben (Min-Distanz 24) belegt.`);
+    changeLog.push(`Pre-Fill: ${prefillCount} Slots mit geclusterten Histogramm-Farben belegt.`);
     renderUIPalette();
     await new Promise(r => requestAnimationFrame(r));
     
@@ -755,19 +778,38 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
         changeLog.push(`<div style="color:#17a2b8; font-size:11px; margin-top:2px;">📊 Nach ${phaseLabel}: MSE ${mse.toFixed(2)}${diffTxt}</div>`);
         mseStand = mse;
     };
+    
+    pushMseStand("Pre-Fill");
+
+    // =======================================================================
+    // EARLY-EXIT FÜR PERFEKTE ODER FARBARME BILDER
+    // =======================================================================
+    if (startMse <= 0.1 || hist.length <= maxSlots - 1) {
+        let reason = startMse <= 0.1 ? `Fehler nahe Null (MSE: ${startMse.toFixed(2)})` : `Alle ${hist.length} Bildfarben erfasst`;
+        changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">🎯 Perfekte Abdeckung erreicht (${reason}). Weitere Optimierung wird übersprungen (Spart extrem viel Zeit)! 🚀</div>`);
+        
+        const activeFormatName = config.isMixed ? `Gemischt (${formatsInUse.join(', ')})` : appState.currentFormat;
+        const startUsageStr = startUsage.map((cnt, idx) => idx > 0 ? `Slot ${idx}: ${cnt}x` : "").filter(Boolean).join(" | ");
+
+        changeLog.push(`<div style="color:#17a2b8; font-weight:bold; margin-top:8px;">Format: ${activeFormatName}</div>`);
+        changeLog.push(`<div style="color:#ccc; font-size:10px; background:#111; padding:4px; border-radius:3px;">Nutzung: ${startUsageStr || "Keine Anker verwendet"}</div>`);
+        changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:5px;">Ergebnis: Erfolgreich abgeschlossen mit MSE ${startMse.toFixed(2)}</div>`);
+        
+        return changeLog;
+    }
+
 
     // -----------------------------------------------------------------------
-    // STUFE 0.5: Force-Fill / Zero-Usage Eradication[cite: 4]
+    // STUFE 0.5: Force-Fill / Zero-Usage Eradication
     // -----------------------------------------------------------------------
     await forceFillUnusedSlots(appState, maxSlots, currentOffset, lockedSlots, optRegion, step, metric, config, triggerEncodeFn, updateOptProgress, renderUIPalette, changeLog, "Pre-Fill Korrektur");
     pushMseStand("Pre-Fill Korrektur");
 
-    // Wenn 'sehr_schnell' gewählt ist, stoppen wir hier direkt nach Stufe 0.5.
     if (intensity === 'sehr_schnell') {
         changeLog.push(`<div style="color:#28a745; margin-top:5px; font-weight:bold;">Sehr schnelles Füllen (Stufe 0.5) abgeschlossen.</div>`);
     } else {
         // -----------------------------------------------------------------------
-        // STUFE 1: Kandidaten-Battle (Durchlauf 1)[cite: 4]
+        // STUFE 1: Kandidaten-Battle (Durchlauf 1) - MIT BASELINE SCHUTZ
         // -----------------------------------------------------------------------
         changeLog.push(`<div style="color:#4dabf7; font-weight:bold; margin-top:5px;">--- DURCHLAUF 1 (Kandidaten-Battle) ---</div>`);
         const filled = new Set(); 
@@ -791,12 +833,27 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
             }
             poolForBitDepth.sort((a, b) => b.mse - a.mse);
 
+            const currentColor = {
+                r: appState.globalPaletteRAM[absSlot * 3],
+                g: appState.globalPaletteRAM[absSlot * 3 + 1],
+                b: appState.globalPaletteRAM[absSlot * 3 + 2]
+            };
+            const baseline = await runWorkerBattle([currentColor], battleArgs, absSlot);
+
             const candidates = getClusteredCandidates(poolForBitDepth.length > 0 ? poolForBitDepth : stats.global.top10, appState.globalPaletteRAM, maxCores);
             const results = await runWorkerBattleAll(candidates, battleArgs, absSlot);
 
             const winner = results[0];
-            let needsEncode = false;
             
+            // Schutz gegen Verschlechterung
+            if (winner.score >= baseline.score) {
+                filled.add(i);
+                const labelName = i <= 7 ? "HAM04 / Basis" : "HAM06 / Erweiterung";
+                changeLog.push(`🛡️ Slot ${i} (${labelName}, ${usageCount}x genutzt): Pre-Fill Farbe verteidigt Slot [MSE: ${baseline.score.toFixed(2)}]`);
+                continue;
+            }
+
+            let needsEncode = false;
             writeSlotColor(appState.globalPaletteRAM, absSlot, winner.candidate);
             filled.add(i);
             needsEncode = true;
@@ -828,10 +885,10 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
                     g: appState.globalPaletteRAM[targetAbs * 3 + 1],
                     b: appState.globalPaletteRAM[targetAbs * 3 + 2]
                 };
-                const baseline = await runWorkerBattle([targetCurrent], battleArgs, targetAbs);
+                const runnerBaseline = await runWorkerBattle([targetCurrent], battleArgs, targetAbs);
                 const placed = await runWorkerBattle([runner.candidate], battleArgs, targetAbs);
                 
-                if (placed.score >= baseline.score) continue; 
+                if (placed.score >= runnerBaseline.score) continue; 
 
                 writeSlotColor(appState.globalPaletteRAM, targetAbs, placed.candidate);
                 filled.add(targetJ);
@@ -852,12 +909,14 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
         }
         pushMseStand("Durchlauf 1 (Battle)");
 
-        // Wenn 'normal' gewählt ist, stoppen wir hier nach Stufe 1 (Kandidaten-Battle).
+        // Slot-Sorting nach dem Kandidaten-Battle ausführen
+        mseStand = await safeSortPalette(appState, maxSlots, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette);
+
         if (intensity === 'normal') {
             changeLog.push(`<div style="color:#28a745; margin-top:5px; font-weight:bold;">Normaler Modus (bis Stufe 1 - Kandidaten-Battle) abgeschlossen.</div>`);
         } else if (intensity === 'langsam') {
             // -----------------------------------------------------------------------
-            // KOMPLETTES OPTIMUM SUCHEN (Volle Pipeline)[cite: 4]
+            // KOMPLETTES OPTIMUM SUCHEN (Volle Pipeline)
             // -----------------------------------------------------------------------
             changeLog.push(`<div style="color:#17a2b8; font-weight:bold; margin-top:10px;">--- DURCHLAUF 1+ (Slot-Nachbesiedlung) ---</div>`);
             await runSlotRepopulationPass(appState, maxSlots, currentOffset, lockedSlots, optRegion, battleArgs, formatsInUse, triggerEncodeFn, updateOptProgress, renderUIPalette, changeLog);
@@ -865,6 +924,9 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
 
             await forceFillUnusedSlots(appState, maxSlots, currentOffset, lockedSlots, optRegion, step, metric, config, triggerEncodeFn, updateOptProgress, renderUIPalette, changeLog, "Vor Runde 2 (Zero-Usage Garantie)");
             pushMseStand("Zero-Usage Eradication");
+
+            // Slot-Sorting vor Beginn der detaillierten Vektor-Phase
+            mseStand = await safeSortPalette(appState, maxSlots, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette);
 
             changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">--- DURCHLAUF 2 (Vektor-Feinoptimierung) ---</div>`);
             await runVectorRefinementPass(2, appState, maxSlots, currentOffset, lockedSlots, optRegion, battleArgs, triggerEncodeFn, updateOptProgress, renderUIPalette, changeLog);
