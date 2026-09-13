@@ -1,6 +1,8 @@
-export const viewState = { mode: 'fit', panX: 0, panY: 0, startX: 0, startY: 0, panning: false };
+export const viewState = { mode: 'fit', customScale: null, panX: 0, panY: 0, startX: 0, startY: 0, panning: false };
 
 export function getScaleFactor(mode, imgW, imgH, viewportElement) {
+    // Freie Zoomstufe (z. B. vom Fehlerbild-Fenster synchronisiert)
+    if (mode === 'custom' && viewState.customScale) return viewState.customScale;
     if (!viewportElement) return 1.0;
     if (mode === 'fit') {
         const vRect = viewportElement.getBoundingClientRect();
@@ -79,6 +81,34 @@ export function centerOnCoordinate(x, y, imgW, imgH) {
 
     viewState.panX = (vRect.width / 2) - (x * 8.0) - ((vRect.width - (imgW * 8.0)) / 2);
     viewState.panY = (vRect.height / 2) - (y * 8.0) - ((vRect.height - (imgH * 8.0)) / 2);
+    updateView(imgW, imgH);
+}
+
+/**
+ * Setzt eine freie Zoomstufe (nicht an die Zoom-Buttons gebunden) und zentriert
+ * die Ansicht auf eine Bildkoordinate. Beide Panes (Original/Smart Target/
+ * Fehlerbild links, Dekodiert rechts) benutzen dieselbe Transformation, wandern
+ * also gemeinsam.
+ *
+ * Wird vom Fehlerbild-Fenster benutzt, damit Hauptansicht und Fenster dieselbe
+ * Zoomstufe und denselben Bildausschnitt zeigen.
+ */
+export function setZoomScale(scale, imgW, imgH, centerX, centerY) {
+    const viewOriginal = document.getElementById('pane-left');
+    if (!viewOriginal || !imgW || !imgH || !scale || !Number.isFinite(scale)) return;
+
+    viewState.mode = 'custom';
+    viewState.customScale = scale;
+
+    // Freie Stufe → keine der festen Zoom-Buttons ist aktiv
+    document.querySelectorAll('.btn-zoom').forEach(b => b.classList.remove('active'));
+
+    const vRect = viewOriginal.getBoundingClientRect();
+    const cx = (centerX != null) ? centerX : imgW / 2;
+    const cy = (centerY != null) ? centerY : imgH / 2;
+
+    viewState.panX = (vRect.width / 2) - (cx * scale) - ((vRect.width - (imgW * scale)) / 2);
+    viewState.panY = (vRect.height / 2) - (cy * scale) - ((vRect.height - (imgH * scale)) / 2);
     updateView(imgW, imgH);
 }
 

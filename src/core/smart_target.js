@@ -7,8 +7,6 @@ import { HAM_CONFIGS } from '../codecs/configs.js';
 // ---------------------------------------------------------------------------
 // Tuning-Parameter
 // ---------------------------------------------------------------------------
-const PEAK_MIN_MAG = 20;
-const PEAK_SIGMA = 1.5;
 const PEAK_MIN_SPACING = 4;
 const MAX_PEAKS = 8000;
 const ACCEPT_IMPROVE_RATIO = 0.85;
@@ -92,7 +90,10 @@ function localWindowErrorFromMap(hlMap, width, x, y) {
 // Phase 1: Peak-Detektion im HL-Band (Zero-Allocation)
 // ---------------------------------------------------------------------------
 
-function detectPeaks(hlMap, width, height) {
+// Peaks über der (manuellen) Schwelle. Schwelle 0 = KEINE Modifikation.
+// Die HL-Statistik wird zusätzlich zurückgegeben, damit das UI eine sinnvolle
+// Schwelle vorschlagen kann.
+function detectPeaks(hlMap, width, height, peakThreshold = 0) {
     let sum = 0, sumSq = 0, count = 0;
     
     // Pass 1: Statistische Basis ermitteln (liest nur aus dem HL-Band)
@@ -105,12 +106,15 @@ function detectPeaks(hlMap, width, height) {
             count++;
         }
     }
-    if (count === 0) return { peaks: [], threshold: PEAK_MIN_MAG };
+    const mean = count > 0 ? sum / count : 0;
+    const std = count > 0 ? Math.sqrt(Math.max(0, sumSq / count - mean * mean)) : 0;
 
-    const mean = sum / count;
-    const variance = Math.max(0, sumSq / count - mean * mean);
-    const std = Math.sqrt(variance);
-    const threshold = Math.max(PEAK_MIN_MAG, mean + PEAK_SIGMA * std);
+    // Schwelle 0 (oder keine Pixel) → keine Modifikation
+    if (peakThreshold <= 0 || count === 0) {
+        return { peaks: [], threshold: 0, mean, std };
+    }
+
+    const threshold = peakThreshold;
 
     // Pass 2: Kandidaten isolieren
     const candidates = [];
@@ -142,7 +146,7 @@ function detectPeaks(hlMap, width, height) {
         if (!tooClose) peaks.push(c);
         if (peaks.length >= MAX_PEAKS) break;
     }
-    return { peaks, threshold };
+    return { peaks, threshold, mean, std };
 }
 
 // ---------------------------------------------------------------------------
@@ -234,8 +238,129 @@ async function encodeDecode(data, width, height, format, step, paletteRAM, offse
     return decodePaletted(encodeRes.commands, width, height, step, paletteRAM, offset);
 }
 
+// ---------------------------------------------------------------------------
+// Kontrast-Snap: Pixel nahe Schwarz/Weiß auf die exakten Extremwerte ziehen.
+// Kriterium ist der einstellbare RGB-Abstand als Summe der Kanaldifferenzen:
+//   Schwarz: r + g + b                          < blackThreshold
+//   Weiß:    (255-r) + (255-g) + (255-b)        < whiteThreshold
+// Beispiel: blackThreshold = 20 → alle Pixel mit r+g+b < 20 werden zu (0,0,0).
+// 0 = Funktion deaktiviert. Alpha bleibt unverändert.
+// ---------------------------------------------------------------------------
+function snapExtremes(target, blackThreshold, whiteThreshold) {
+    let blacks = 0, whites = 0;
+    if (blackThreshold <= 0 && whiteThreshold <= 0) return { blacks, whites };
+
+    for (let i = 0; i < target.length; i += 4) {
+        const r = target[i], g = target[i + 1], b = target[i + 2];
+        if (blackThreshold > 0 && (r + g + b) < blackThreshold) {
+            target[i] = 0; target[i + 1] = 0; target[i + 2] = 0;
+            blacks++;
+        } else if (whiteThreshold > 0 && ((255 - r) + (255 - g) + (255 - b)) < whiteThreshold) {
+            target[i] = 255; target[i + 1] = 255; target[i + 2] = 255;
+            whites++;
+        }
+    }
+    return { blacks, whites };
+}
+
+// ---------------------------------------------------------------------------
+// Fehlerbild = |Original - Decodiert| JE KANAL (klassisches Differenzbild):
+//   R = |dR|, G = |dG|, B = |dB|  →  Farbsäume dort, wo der Codec daneben liegt.
+// Zusätzlich werden Statistiken und (bei Schwelle > 0) die Anzahl der Pixel
+// zurückgegeben, die Smart Target bearbeiten würde (HL-Magnitude ≥ Schwelle).
+// Wird beim Codieren erzeugt.
+// ---------------------------------------------------------------------------
+export function buildErrorMap(sourceData, decData, width, height, threshold = 0) {
+    const out = new Uint8ClampedArray(width * height * 4);
+    let max = 0, sum = 0, sumSq = 0, count = 0;
+
+    for (let i = 0; i < sourceData.length; i += 4) {
+        const dr = Math.abs(sourceData[i] - decData[i]);
+        const dg = Math.abs(sourceData[i + 1] - decData[i + 1]);
+        const db = Math.abs(sourceData[i + 2] - decData[i + 2]);
+        out[i] = dr; out[i + 1] = dg; out[i + 2] = db; out[i + 3] = 255;
+
+        const m = dr + dg + db;
+        if (m > max) max = m;
+        sum += m; sumSq += m * m; count++;
+    }
+    const mean = count > 0 ? sum / count : 0;
+    const std = count > 0 ? Math.sqrt(Math.max(0, sumSq / count - mean * mean)) : 0;
+
+    // Info für die Modifikations-Schwelle (Smart Target arbeitet auf der HL-Magnitude)
+    const hlMap = computeHlMap(sourceData, decData, width, height);
+    let hSum = 0, hSumSq = 0, overCount = 0;
+    for (let i = 0; i < hlMap.length; i++) {
+        const m = hlMap[i];
+        hSum += m; hSumSq += m * m;
+        if (threshold > 0 && m >= threshold) overCount++;
+    }
+    const hlMean = hlMap.length > 0 ? hSum / hlMap.length : 0;
+    const hlStd = hlMap.length > 0 ? Math.sqrt(Math.max(0, hSumSq / hlMap.length - hlMean * hlMean)) : 0;
+
+    return {
+        errorMap: out,
+        max, mean, std,
+        overCount,
+        thresholdSuggestion: Math.max(1, Math.round(hlMean + 2 * hlStd))
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Snap vom Original auf das modifizierte Bild übertragen: Das Kriterium wird
+// am ORIGINAL-Pixel ausgewertet, geschrieben wird exakt 0 bzw. 255 in das
+// modifizierte Bild. So bleiben nahe Schwarz/Weiß liegende Bereiche des
+// Originals auch nach der Smart-Target-Reparatur exakt (Slot-0-Anker / Weiß).
+// ---------------------------------------------------------------------------
+export function applySnapFromOriginal(originalData, modifiedData, blackThreshold, whiteThreshold) {
+    let blacks = 0, whites = 0;
+    if (blackThreshold <= 0 && whiteThreshold <= 0) return { blacks, whites };
+    const n = Math.min(originalData.length, modifiedData.length);
+    for (let i = 0; i < n; i += 4) {
+        const r = originalData[i], g = originalData[i + 1], b = originalData[i + 2];
+        if (blackThreshold > 0 && (r + g + b) < blackThreshold) {
+            modifiedData[i] = 0; modifiedData[i + 1] = 0; modifiedData[i + 2] = 0;
+            blacks++;
+        } else if (whiteThreshold > 0 && ((255 - r) + (255 - g) + (255 - b)) < whiteThreshold) {
+            modifiedData[i] = 255; modifiedData[i + 1] = 255; modifiedData[i + 2] = 255;
+            whites++;
+        }
+    }
+    return { blacks, whites };
+}
+
+// ---------------------------------------------------------------------------
+// Lokaler Wavelet-Filter: dämpft die HL-Details in einer 3×3-Region um (cx,cy)
+// im ZIEL-Bild (z. B. dem modifizierten Bild). Gearbeitet wird auf einem
+// Snapshot als Referenz, damit exaktes Integer-Lifting ohne Kaskade entsteht.
+// Liefert die Anzahl geänderter Pixel und den geänderten Pixelbereich zurück.
+// ---------------------------------------------------------------------------
+export function applyLocalWaveletDamping(data, width, height, cx, cy, rest = LEVEL1_REST) {
+    const reference = new Uint8ClampedArray(data);
+    const y0 = Math.max(0, cy - 1), y1 = Math.min(height - 1, cy + 1);
+    const x0 = Math.max(1, cx - 1), x1 = Math.min(width - 2, cx + 1);
+
+    let changed = 0;
+    let firstPx = -1, lastPx = -1;
+    for (let y = y0; y <= y1; y++) {
+        for (let x = x0; x <= x1; x++) {
+            const o = (y * width + x) * 4;
+            const b0 = data[o], b1 = data[o + 1], b2 = data[o + 2];
+            dampHlAt(data, reference, width, x, y, rest);
+            if (data[o] !== b0 || data[o + 1] !== b1 || data[o + 2] !== b2) {
+                const px = y * width + x;
+                changed++;
+                if (firstPx === -1 || px < firstPx) firstPx = px;
+                if (px > lastPx) lastPx = px;
+            }
+        }
+    }
+    return { changed, firstPx, lastPx, x0, x1, y0, y1 };
+}
+
 export async function generateSmartTarget({
-    sourceData, width, height, step, metric, format, paletteRAM, offset, strategy, onProgress
+    sourceData, width, height, step, metric, format, paletteRAM, offset, strategy, onProgress,
+    snapBlack = 0, snapWhite = 0, peakThreshold = 0
 }) {
     const log = [];
     const report = (p, c, t) => { if (onProgress) onProgress(p, c, t); };
@@ -245,13 +370,29 @@ export async function generateSmartTarget({
 
     // HL-Band einmal berechnen und für Peaks, Edge-Snapping und Raster-Links teilen.
     const hlMap = computeHlMap(sourceData, dec, width, height);
-    const { peaks, threshold } = detectPeaks(hlMap, width, height);
-    log.push(`Scanner: ${peaks.length} HL-Peaks gefunden`);
+    const { peaks, threshold, mean, std } = detectPeaks(hlMap, width, height, peakThreshold);
+    log.push(`HL-Statistik: Mittelwert ${mean.toFixed(1)}, σ ${std.toFixed(1)} (Vorschlag Schwelle: ${Math.max(1, Math.round(mean + 2 * std))})`);
+
+    // Schwelle 0 = keine Modifikation: nur Original (+ optionaler Snap) übernehmen.
+    if (peakThreshold <= 0) {
+        const target = new Uint8ClampedArray(sourceData);
+        const snap = snapExtremes(target, snapBlack, snapWhite);
+        if (snap.blacks || snap.whites) log.push(`Kontrast-Snap: ${snap.blacks} px → Schwarz(0,0,0), ${snap.whites} px → Weiß(255,255,255)`);
+        log.push('Schwelle 0 → keine Modifikation');
+        report('Schwelle 0 — keine Modifikation', 4, 4);
+        return { target, log };
+    }
+
+    log.push(`Scanner: ${peaks.length} HL-Peaks über Schwelle ${threshold}`);
     report(`Phase 1/4: ${peaks.length} HL-Peaks gefunden`, 1, 4);
 
     if (peaks.length === 0) {
-        report('Keine Artefakte — Smart Target = Original', 4, 4);
-        return { target: new Uint8ClampedArray(sourceData), log };
+        const target = new Uint8ClampedArray(sourceData);
+        const snap = snapExtremes(target, snapBlack, snapWhite);
+        if (snap.blacks || snap.whites) log.push(`Kontrast-Snap: ${snap.blacks} px → Schwarz(0,0,0), ${snap.whites} px → Weiß(255,255,255)`);
+        log.push('Keine Artefakte über der Schwelle');
+        report('Keine Artefakte über der Schwelle', 4, 4);
+        return { target, log };
     }
 
     report('Phase 2/4: Edge-Snapping (A/B-Batch-Test)', 1, 4);
@@ -353,6 +494,12 @@ export async function generateSmartTarget({
         damp(key % width, (key / width) | 0, LEVEL2_REST);
     }
     log.push(`Wavelet-Dämpfung: ${spikeCount} Spikes auf ${Math.round(LEVEL1_REST * 100)}%, ${structPixel} Raster-Struktur-Pixel auf ${Math.round(LEVEL2_REST * 100)}% (gesamt ${damped.size} px modifiziert)`);
+
+    // Kontrast-Snap zuletzt: nahe Schwarz/Weiß liegende Pixel exakt auf 0 bzw. 255
+    const snap = snapExtremes(target, snapBlack, snapWhite);
+    if (snap.blacks || snap.whites) {
+        log.push(`Kontrast-Snap: ${snap.blacks} px → Schwarz(0,0,0), ${snap.whites} px → Weiß(255,255,255) [Schwellen S/W: ${snapBlack}/${snapWhite}]`);
+    }
     report('Smart Target fertig', 4, 4);
 
     return { target, log };

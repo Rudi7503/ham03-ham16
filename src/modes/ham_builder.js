@@ -6,10 +6,11 @@ import { encodePaletted, decodePaletted, packPaletted, describeCommand } from '.
 import { encodeHam12_16, decodeHam12_16, packHam12_16 } from '../core/module_ham12_16.js';
 import { debugRoundtripHam12_16, debugRoundtripPaletted } from '../core/debugger.js';
 import { computeDetailedAnalysis, errorBins } from '../core/analysis.js';
-import { generateSmartTarget } from '../core/smart_target.js';
-import { setZoomMode, centerOnCoordinate, setupCanvasEvents } from '../ui/canvas-view.js';
+import { generateSmartTarget, applySnapFromOriginal, buildErrorMap } from '../core/smart_target.js';
+import { setZoomMode, centerOnCoordinate, setupCanvasEvents, setZoomScale } from '../ui/canvas-view.js';
 import { encodeDXT1, decodeDXT1 } from '../core/module_dxt1.js';
 import { initPaletteBuilderUI } from '../ui/palette_builder.js';
+import { initErrorWindow } from '../ui/error_window.js';
 
 let lockedSlots = new Set();
 let optRegion = { x: 0, y: 0, width: 0, height: 0 };
@@ -184,8 +185,17 @@ export function initHamBuilderMode(appState, containerEl) {
                     <div id="target-switch" style="display:inline-flex; border:1px solid #444; border-radius:4px; overflow:hidden;">
                         <button id="sw-original" class="target-sw active" title="Linke Anzeige: Originalbild">Original</button>
                         <button id="sw-modified" class="target-sw" disabled title="Linke Anzeige: modifiziertes Bild">Modifiziert</button>
+                        <button id="sw-error" class="target-sw" disabled title="Linke Anzeige: Fehlerbild = |Original − Decodiert| je Kanal (Farbsäume zeigen, wo der Codec abweicht)">Fehlerbild</button>
                     </div>
+                    <button id="btn-error-window" title="Eigenes, verschiebbares Fenster für das Fehlerbild (Schwelle, Fehler-Navigation, lokale Korrektur)">Fehler-Fenster</button>
                     <button id="btn-replace-original" disabled title="Modifiziertes Bild als neues Original übernehmen (ermöglicht mehrfaches Modifizieren)">Mod. übernehmen</button>
+                    <label style="color:#adb5bd;" title="Pixel mit r+g+b < Schwelle werden exakt Schwarz (0,0,0). 0 = aus.">Schwarz-Snap:</label>
+                    <input type="number" id="snap-black" min="0" max="765" value="0" style="width:48px;" title="Schwarz-Snap: alle Pixel mit r+g+b < Schwelle → RGB(0,0,0). Beispiel: 20">
+                    <label style="color:#adb5bd;" title="Pixel mit (255-r)+(255-g)+(255-b) < Schwelle werden exakt Weiß (255,255,255). 0 = aus.">Weiß-Snap:</label>
+                    <input type="number" id="snap-white" min="0" max="765" value="0" style="width:48px;" title="Weiß-Snap: alle Pixel mit (255-r)+(255-g)+(255-b) < Schwelle → RGB(255,255,255). Beispiel: 20">
+                    <button id="btn-snap-transfer" title="Schwarz/Weiß-Snap am ORIGINAL auswerten und exakt 0/255 in das modifizierte Bild schreiben (erzeugt das modifizierte Bild bei Bedarf aus dem Original)">Snap → modifiziert</button>
+                    <label style="color:#adb5bd;" title="Schwelle für die Modifikation: nur Artefakte ≥ Schwelle werden bearbeitet. 0 = KEINE Modifikation.">Schwelle:</label>
+                    <input type="number" id="st-threshold" min="0" max="4095" value="0" style="width:56px;" title="Modifikations-Schwelle (HL-Magnitude). 0 = KEINE Modifikation; höher = nur starke Artefakte werden repariert. Im Fehlerbild werden Pixel ≥ Schwelle WEISS markiert.">
                 </div>
                 
                 <div class="control-group">
@@ -306,15 +316,29 @@ export function initHamBuilderMode(appState, containerEl) {
     const canvasDec = document.getElementById('canvas-decoded');
     const ctxOrig = canvasOrig.getContext('2d');
     const ctxDec = canvasDec.getContext('2d');
+    let errorWindow = null; // wird unten initialisiert (Fehlerbild-Fenster)
 
-    // Aktuell angezeigte Quelle (Original oder Smart Target) bestimmen.
+    // Aktuell angezeigte Quelle bestimmen: Original, Smart Target oder Fehlerbild.
+    // appState.viewMode: 'original' | 'modified' | 'error'
+    function getViewMode() {
+        return appState.viewMode || (appState.showModified ? 'modified' : 'original');
+    }
     function getShownSourceImageData() {
-        return (appState.showModified && appState.modifiedImageData)
-            ? appState.modifiedImageData
-            : appState.originalImageData;
+        const mode = getViewMode();
+        if (mode === 'error' && appState.errorViewData) return appState.errorViewData;
+        if (mode === 'modified' && appState.modifiedImageData) return appState.modifiedImageData;
+        return appState.originalImageData;
     }
     function getShownSourceData() {
-        return getShownSourceImageData().data;
+        const img = getShownSourceImageData();
+        return img ? img.data : null;
+    }
+    // Encodiert wird NIE das Fehlerbild: dort das modifizierte (sonst Original-)Bild.
+    function getEncodeSourceImageData() {
+        if (getViewMode() === 'error') {
+            return appState.modifiedImageData || appState.originalImageData;
+        }
+        return getShownSourceImageData();
     }
     function renderSourcePane() {
         const data = getShownSourceImageData();
@@ -323,15 +347,23 @@ export function initHamBuilderMode(appState, containerEl) {
     }
     function updateToggleUI() {
         const hasMod = !!appState.modifiedImageData;
-        const showMod = appState.showModified && hasMod;
+        const hasErr = !!appState.errorViewData;
+        const mode = getViewMode();
+        const isMod = mode === 'modified' && hasMod;
+        const isErr = mode === 'error' && hasErr;
+        const isOrig = !isMod && !isErr;
         const swOrig = document.getElementById('sw-original');
         const swMod = document.getElementById('sw-modified');
+        const swErr = document.getElementById('sw-error');
         const btnRep = document.getElementById('btn-replace-original');
+        const btnSnap = document.getElementById('btn-snap-transfer');
         const lbl = document.getElementById('source-label');
-        if (swOrig) swOrig.classList.toggle('active', !showMod);
-        if (swMod) { swMod.classList.toggle('active', showMod); swMod.disabled = !hasMod; }
+        if (swOrig) swOrig.classList.toggle('active', isOrig);
+        if (swMod) { swMod.classList.toggle('active', isMod); swMod.disabled = !hasMod; }
+        if (swErr) { swErr.classList.toggle('active', isErr); swErr.disabled = !hasErr; }
         if (btnRep) btnRep.disabled = !hasMod;
-        if (lbl) lbl.innerText = showMod ? 'SMART TARGET' : 'ORIGINAL';
+        if (btnSnap) btnSnap.disabled = !appState.originalImageData;
+        if (lbl) lbl.innerText = isErr ? 'FEHLERBILD' : (isMod ? 'SMART TARGET' : 'ORIGINAL');
     }
 
     canvasOrig.width = appState.currentImgW; canvasOrig.height = appState.currentImgH;
@@ -482,7 +514,10 @@ export function initHamBuilderMode(appState, containerEl) {
         appState.globalPaletteRAM[0] = 0; appState.globalPaletteRAM[1] = 0; appState.globalPaletteRAM[2] = 0;
 
         // Codiert wird die aktuell angezeigte Quelle (Original oder Smart Target).
-        let sourceData = getShownSourceData();
+        let sourceData = getEncodeSourceImageData().data;
+        // Quelle merken: Der lokale Re-Encode im Fehlerbild-Fenster ist nur gültig,
+        // wenn die Befehle zu diesem Bild gehören.
+        appState.commandSource = getEncodeSourceImageData();
         let decodedPixels = null;
 
         updateProgress("Starte Codierung...", 0, 100);
@@ -505,13 +540,28 @@ export function initHamBuilderMode(appState, containerEl) {
         appState.decodedImageData = new ImageData(decodedPixels, appState.currentImgW, appState.currentImgH);
         ctxDec.putImageData(appState.decodedImageData, 0, 0);
 
-        updateProgress("Fertig", 100, 100);
+        // Fehlerbild beim Codieren erzeugen: |Original - Decodiert| je Kanal.
+        let errInfoMsg = "";
+        try {
+            const errThreshold = parseInt(document.getElementById('st-threshold')?.value) || 0;
+            const errInfo = buildErrorMap(sourceData, decodedPixels, appState.currentImgW, appState.currentImgH, errThreshold);
+            appState.errorViewData = new ImageData(errInfo.errorMap, appState.currentImgW, appState.currentImgH);
+            if (getViewMode() === 'error') renderSourcePane(); else updateToggleUI();
+            errInfoMsg = ` — Fehlerbild |Δ|max ${errInfo.max} (Mittel ${errInfo.mean.toFixed(1)})`
+                + (errThreshold > 0 ? `; Schwelle ${errThreshold} → ${errInfo.overCount} px betroffen` : '')
+                + ` (Schwellen-Vorschlag: ${errInfo.thresholdSuggestion})`;
+        } catch (e) {
+            console.warn('Fehlerbild konnte nicht erzeugt werden:', e);
+        }
+
+        updateProgress(`Fertig${errInfoMsg}`, 100, 100);
         btnSave.disabled = false;
         if(document.getElementById('btn-debug-roundtrip')) document.getElementById('btn-debug-roundtrip').disabled = false;
         
         // UI aktualisieren, falls sich RAM geändert hat
         renderPaletteWithLocks(appState);
         refreshStatusText(appState);
+        if (errorWindow && errorWindow.isOpen()) errorWindow.refresh();
     }
 
     btnEncode.addEventListener('click', async () => {
@@ -524,7 +574,9 @@ export function initHamBuilderMode(appState, containerEl) {
     const btnModify = document.getElementById('btn-modify-image');
     const swOrig = document.getElementById('sw-original');
     const swMod = document.getElementById('sw-modified');
+    const swErr = document.getElementById('sw-error');
     const btnReplace = document.getElementById('btn-replace-original');
+    const btnSnapTransfer = document.getElementById('btn-snap-transfer');
 
     function originalIsDummy() {
         if (!appState.originalImageData) return true;
@@ -549,25 +601,32 @@ export function initHamBuilderMode(appState, containerEl) {
         let metric = document.getElementById('encode-metric').value;
         let strategy = document.getElementById('encode-strategy').value;
         let offset = parseInt(document.getElementById('pal-offset-input')?.value || 0);
+        let snapBlack = parseInt(document.getElementById('snap-black')?.value) || 0;
+        let snapWhite = parseInt(document.getElementById('snap-white')?.value) || 0;
 
         btnModify.disabled = true; btnEncode.disabled = true; btnSave.disabled = true;
         try {
+            const peakThreshold = parseInt(document.getElementById('st-threshold')?.value) || 0;
+            // Smart Target rechnet immer vom ORIGINAL (nicht vom Fehlerbild/Modifizierten)
+            const srcForTarget = appState.originalImageData ? appState.originalImageData.data : getEncodeSourceImageData().data;
             const { target, log } = await generateSmartTarget({
-                sourceData: getShownSourceData(),
+                sourceData: srcForTarget,
                 width: appState.currentImgW,
                 height: appState.currentImgH,
                 step, metric, format,
                 paletteRAM: appState.globalPaletteRAM,
                 offset, strategy,
+                snapBlack, snapWhite, peakThreshold,
                 onProgress: updateProgress
             });
             appState.modifiedImageData = new ImageData(new Uint8ClampedArray(target), appState.currentImgW, appState.currentImgH);
+            appState.errorViewData = null; // Fehlerbild entsteht erst beim nächsten Codieren
+            appState.viewMode = 'modified';
             appState.showModified = true;
             renderSourcePane();
             const summary = log.length > 0 ? log[log.length - 1] : 'fertig';
-            updateProgress(`Smart Target: ${summary}`, 100, 100);
-            // Modifiziertes Bild direkt codieren, damit der Effekt sichtbar wird.
-            await triggerEncode();
+            // Kein automatisches Codieren: der Nutzer drückt selbst "2. Codieren".
+            updateProgress(`Smart Target fertig — ${summary}. Zum Übernehmen "2. Codieren" drücken.`, 100, 100);
         } finally {
             btnModify.disabled = false;
             btnEncode.disabled = false;
@@ -575,14 +634,54 @@ export function initHamBuilderMode(appState, containerEl) {
     });
 
     swOrig.addEventListener('click', () => {
+        appState.viewMode = 'original';
         appState.showModified = false;
         renderSourcePane();
     });
 
     swMod.addEventListener('click', () => {
         if (!appState.modifiedImageData) return;
+        appState.viewMode = 'modified';
         appState.showModified = true;
         renderSourcePane();
+    });
+
+    swErr.addEventListener('click', () => {
+        if (!appState.errorViewData) return;
+        appState.viewMode = 'error';
+        renderSourcePane();
+    });
+
+    // Snap vom Original ins modifizierte Bild: Quelle ist IMMER das Original.
+    // Das modifizierte Bild wird jedes Mal frisch als "Original + Snap" erzeugt
+    // (kein Aufsummieren auf ein evtl. schon modifiziertes Bild).
+    // Kein automatisches Codieren — der Nutzer drückt selbst "2. Codieren".
+    btnSnapTransfer.addEventListener('click', () => {
+        if (!appState.originalImageData) return;
+        const blackThreshold = parseInt(document.getElementById('snap-black')?.value) || 0;
+        const whiteThreshold = parseInt(document.getElementById('snap-white')?.value) || 0;
+        if (blackThreshold <= 0 && whiteThreshold <= 0) {
+            return alert("Bitte zuerst Schwarz-Snap und/oder Weiß-Snap auf einen Wert > 0 setzen.");
+        }
+
+        const w = appState.originalImageData.width || appState.currentImgW;
+        const h = appState.originalImageData.height || appState.currentImgH;
+
+        // Immer vom Original starten (Original + Snap)
+        appState.modifiedImageData = new ImageData(
+            new Uint8ClampedArray(appState.originalImageData.data), w, h
+        );
+        const { blacks, whites } = applySnapFromOriginal(
+            appState.originalImageData.data,
+            appState.modifiedImageData.data,
+            blackThreshold, whiteThreshold
+        );
+
+        appState.errorViewData = null; // Fehlerbild entsteht erst beim nächsten Codieren
+        appState.viewMode = 'modified';
+        appState.showModified = true;
+        renderSourcePane();
+        updateProgress(`Snap aus Original übernommen: ${blacks} px → Schwarz, ${whites} px → Weiß. Zum Übernehmen "2. Codieren" drücken.`, 100, 100);
     });
 
     btnReplace.addEventListener('click', () => {
@@ -590,6 +689,8 @@ export function initHamBuilderMode(appState, containerEl) {
         if (!confirm("Modifiziertes Bild als neues Original übernehmen? (Das bisherige Original wird ersetzt)")) return;
         appState.originalImageData = appState.modifiedImageData;
         appState.modifiedImageData = null;
+        appState.errorViewData = null;
+        appState.viewMode = 'original';
         appState.showModified = false;
         renderSourcePane();
         updateProgress("Modifiziertes Bild als neues Original übernommen", 100, 100);
@@ -783,4 +884,35 @@ export function initHamBuilderMode(appState, containerEl) {
         generateTop10Html: generateTop10Html,
         generateHistogramHtml: generateHistogramHtml
     });
+
+    // 8. FEHLERBILD-FENSTER (eigenes, verschiebbares Fenster)
+    const getBuilderStep = () => ({
+        r: parseInt(document.getElementById('ham-step-r').value) || 8,
+        g: parseInt(document.getElementById('ham-step-g').value) || 8,
+        b: parseInt(document.getElementById('ham-step-b').value) || 8
+    });
+    errorWindow = initErrorWindow(appState, {
+        getStep: getBuilderStep,
+        getMetric: () => document.getElementById('encode-metric').value,
+        getOffset: () => parseInt(document.getElementById('pal-offset-input')?.value || 0),
+        getFormat: () => appState.currentFormat,
+        setStatus: (msg) => updateProgress(msg, 100, 100),
+        // Zoomstufe + Bildmitte des Fensters auf die Hauptansichten übertragen
+        // (links Original/Smart Target/Fehlerbild, rechts Dekodiert)
+        onViewSync: (scale, x, y) => setZoomScale(scale, appState.currentImgW, appState.currentImgH, x, y),
+        onLocalUpdate: () => {
+            // Decode-Canvas, Fehlerbild-Pane, gepackte Daten, Palette & Status
+            if (appState.decodedImageData) ctxDec.putImageData(appState.decodedImageData, 0, 0);
+            if (getViewMode() === 'error') renderSourcePane(); else updateToggleUI();
+            try {
+                if (appState.latestCommandArray && HAM_CONFIGS[appState.currentFormat]?.isPaletted && appState.currentFormat !== "DXT1") {
+                    appState.latestPackedData = packPaletted(appState.latestCommandArray, appState.currentFormat);
+                }
+            } catch (e) { console.warn('Neu-Packen nach lokaler Änderung fehlgeschlagen:', e); }
+            renderPaletteWithLocks(appState);
+            refreshStatusText(appState);
+        },
+        requestFullEncode: async () => { await triggerEncode(); }
+    });
+    document.getElementById('btn-error-window')?.addEventListener('click', () => errorWindow.open());
 }

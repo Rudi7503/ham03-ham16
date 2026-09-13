@@ -11,6 +11,65 @@ export const CHANNEL_DEFS = {
     "HAM08": { r: [-2, -1, 1, 2], g: [-2, -1, 1, 2], b: [-2, -1, 1, 2] }
 };
 
+// ---------------------------------------------------------------------------
+// Gemeinsame Tabellen-Bauer: EINE Quelle für Encode, lokalen Re-Encode und die
+// Werte-Liste im Fehlerbild-Fenster.
+// ---------------------------------------------------------------------------
+
+// Alle Delta-Kommandos eines Sub-Formats inkl. der bereits eingerechneten
+// Farbverschiebungen (Kanalwert × Schritt × Turbo-Multiplikator).
+function buildFormatDeltaCache(fmt, stepVal) {
+    const effConfig = HAM_CONFIGS[fmt] || { slotsPerBank: 0, hasTurbo: false };
+    const multipliers = effConfig.hasTurbo ? [1, 4] : [1];
+    const rChan = CHANNEL_DEFS[fmt]?.r || [-1, 1];
+    const gChan = CHANNEL_DEFS[fmt]?.g || [-1, 1];
+    const bChan = CHANNEL_DEFS[fmt]?.b || [-1, 1];
+    const cache = [];
+
+    for (const m of multipliers) {
+        const sr = stepVal.r * m, sg = stepVal.g * m, sb = stepVal.b * m;
+        for (let ri = 0; ri < rChan.length; ri++) {
+            for (let gi = 0; gi < gChan.length; gi++) {
+                for (let bi = 0; bi < bChan.length; bi++) {
+                    if (fmt === "HAM01" && (gi !== ri || bi !== ri)) continue;
+                    if (fmt === "HAM02" && (bi !== ri)) continue;
+                    if (fmt === "HAM03" && (bi !== ri)) continue; // R+B gekoppelt
+
+                    cache.push({
+                        cmd: { isAnchor: false, format: fmt, isTurbo: (m === 4), rIndex: ri, gIndex: gi, bIndex: bi },
+                        dr: rChan[ri] * sr,
+                        dg: gChan[gi] * sg,
+                        db: bChan[bi] * sb
+                    });
+                }
+            }
+        }
+    }
+    return cache;
+}
+
+// Anker-Kommandos + Absolut-Slot je Sub-Format. Die Cmd-Objekte sind
+// unveränderlich und werden über alle Pixel geteilt; die Farbe wird pro Pixel
+// direkt aus paletteRAM gelesen (die Palette kann sich ändern).
+function buildFormatAnchorInfo(fmt, offset) {
+    const effConfig = HAM_CONFIGS[fmt] || { slotsPerBank: 0 };
+    const slots = effConfig.slotsPerBank || 0;
+    const arr = [];
+    for (let s = 0; s < slots; s++) {
+        arr.push({ cmd: { isAnchor: true, format: fmt, anchorIdx: s }, absSlot: (offset + s) % 256 });
+    }
+    return arr;
+}
+
+// Sub-Format der Phase an Pixelindex i (Mischraster) bzw. das Format selbst.
+export function phaseFormatAt(format, imgW, pxIndex) {
+    const config = HAM_CONFIGS[format];
+    if (config && config.isMixed && Array.isArray(config.sequence) && config.sequence.length > 0) {
+        return config.sequence[pxIndex % config.sequence.length];
+    }
+    return format;
+}
+
 export async function encodePaletted(origData, imgW, imgH, format, stepVal, paletteRAM, offset, strategy="greedy", metric="yuv_weight", progressCallback=null, startOverride=0, endOverride=0, errorThreshold = 15.0, beamWidth = 6) {
     let totalPixels = imgW * imgH;
     let commands = new Array(totalPixels);
@@ -25,52 +84,18 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
 
     const distFunc = getMetricDistFunc(metric);
 
+    // Vorberechnete Delta- und Anker-Tabellen pro Sub-Format (siehe Helfer unten).
+    // Werden auch vom lokalen Re-Encode und der Werte-Liste im Fehlerbild-Fenster
+    // benutzt, damit es nur EINE Quelle für diese Logik gibt.
     let deltaCache = {};
-    let formatsToCache = config.isMixed ? config.sequence : [format];
-    
+    const formatsToCache = config.isMixed ? config.sequence : [format];
     for (let fmt of formatsToCache) {
-        let effConfig = HAM_CONFIGS[fmt] || { slotsPerBank: 0, hasTurbo: false };
-        let multipliers = effConfig.hasTurbo ? [1, 4] : [1];
-        let rChan = CHANNEL_DEFS[fmt]?.r || [-1, 1];
-        let gChan = CHANNEL_DEFS[fmt]?.g || [-1, 1];
-        let bChan = CHANNEL_DEFS[fmt]?.b || [-1, 1];
-        let cache = [];
-
-        for (let m of multipliers) {
-            let sr = stepVal.r * m, sg = stepVal.g * m, sb = stepVal.b * m;
-            for (let ri = 0; ri < rChan.length; ri++) {
-                for (let gi = 0; gi < gChan.length; gi++) {
-                    for (let bi = 0; bi < bChan.length; bi++) {
-                        
-                        if (fmt === "HAM01" && (gi !== ri || bi !== ri)) continue;
-                        if (fmt === "HAM02" && (bi !== ri)) continue;
-                        if (fmt === "HAM03" && (bi !== ri)) continue; // R+B gekoppelt
-
-                        cache.push({
-                            cmd: { isAnchor: false, format: fmt, isTurbo: (m===4), rIndex: ri, gIndex: gi, bIndex: bi },
-                            dr: rChan[ri] * sr,
-                            dg: gChan[gi] * sg,
-                            db: bChan[bi] * sb
-                        });
-                    }
-                }
-            }
-        }
-        deltaCache[fmt] = cache;
+        deltaCache[fmt] = buildFormatDeltaCache(fmt, stepVal);
     }
 
-    // Vorberechnete Anker-Kommandos + Absolut-Slots pro Format. Die Anker-Cmd-
-    // Objekte sind unveränderlich und werden über alle Pixel geteilt; die Farbe
-    // wird pro Pixel direkt aus paletteRAM gelesen (die Palette kann sich ändern).
     let anchorInfo = {};
     for (let fmt of formatsToCache) {
-        let effConfig = HAM_CONFIGS[fmt] || { slotsPerBank: 0 };
-        let slots = effConfig.slotsPerBank || 0;
-        let arr = [];
-        for (let s = 0; s < slots; s++) {
-            arr.push({ cmd: { isAnchor: true, format: fmt, anchorIdx: s }, absSlot: (offset + s) % 256 });
-        }
-        anchorInfo[fmt] = arr;
+        anchorInfo[fmt] = buildFormatAnchorInfo(fmt, offset);
     }
 
     // Liefert die Kandidaten als flache Arrays (cmds/rs/gs/bs) statt als
@@ -451,4 +476,129 @@ export function describeCommand(cmd, step, offset = 0) {
     const dg = (chans.g[cmd.gIndex || 0] || 0) * step.g * m;
     const db = (chans.b[cmd.bIndex || 0] || 0) * step.b * m;
     return `${fmt} r${signedDelta(dr)} g${signedDelta(dg)} b${signedDelta(db)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Lokales Modifizieren: Hilfsfunktionen für das Fehlerbild-Fenster
+// ---------------------------------------------------------------------------
+
+// Akkumulator-Farbe direkt VOR Pixel pxIndex (entspricht dem Decoder-Zustand).
+export function computeAccAtPixel(commands, pxIndex, stepVal, paletteRAM, offset) {
+    let r = 127, g = 127, b = 127;
+    const tables = getDecodeDeltaTables(stepVal);
+    const limit = Math.min(pxIndex, commands.length);
+    for (let i = 0; i < limit; i++) {
+        const cmd = commands[i];
+        if (cmd.isAnchor && SLOT_COUNT_BY_FMT[cmd.format] > 0) {
+            const absIdx = ((offset + cmd.anchorIdx) % 256) * 3;
+            r = paletteRAM[absIdx]; g = paletteRAM[absIdx + 1]; b = paletteRAM[absIdx + 2];
+        } else {
+            const table = tables[cmd.format] || tables.fallback;
+            const t = cmd.isTurbo ? table.turbo : table.normal;
+            r = clamp(r + (t.r[cmd.rIndex || 0] || 0), 0, 255);
+            g = clamp(g + (t.g[cmd.gIndex || 0] || 0), 0, 255);
+            b = clamp(b + (t.b[cmd.bIndex || 0] || 0), 0, 255);
+        }
+    }
+    return { r, g, b };
+}
+
+// Alle Werte, die an dieser Pixelposition technisch erreichbar sind:
+// Anker-Slots der Phase + alle Delta-Varianten (aus dem aktuellen acc).
+// Sortiert nach Nähe zur Zielfarbe (bester erreichbarer Wert zuerst).
+export function listReachableValues({ format, imgW, pxIndex, stepVal, paletteRAM, offset, acc, target, metric = 'yuv_weight' }) {
+    const effFormat = phaseFormatAt(format, imgW, pxIndex);
+    const distFunc = getMetricDistFunc(metric);
+    const values = [];
+
+    for (const a of buildFormatAnchorInfo(effFormat, offset)) {
+        const r = paletteRAM[a.absSlot * 3], g = paletteRAM[a.absSlot * 3 + 1], b = paletteRAM[a.absSlot * 3 + 2];
+        values.push({ r, g, b, cmd: a.cmd, kind: 'anchor', dist: distFunc(target.r, target.g, target.b, r, g, b) });
+    }
+    for (const d of buildFormatDeltaCache(effFormat, stepVal)) {
+        const r = clamp(acc.r + d.dr, 0, 255), g = clamp(acc.g + d.dg, 0, 255), b = clamp(acc.b + d.db, 0, 255);
+        values.push({ r, g, b, cmd: d.cmd, kind: 'delta', dist: distFunc(target.r, target.g, target.b, r, g, b) });
+    }
+
+    values.sort((a, b) => a.dist - b.dist);
+    return { effFormat, acc, values };
+}
+
+// Lokaler Greedy-Encode ab startPx. Läuft bis zu einem Resync-Punkt: dort ist
+// der neue Befehl ein Anker, der exakt dem Original-Befehl an derselben Stelle
+// entspricht (gleicher Slot) → der Akkumulator ist danach identisch, der Rest
+// des ursprünglichen Befehlsstroms bleibt gültig.
+export function encodeLocalSpan({ origData, imgW, format, stepVal, paletteRAM, offset,
+                                 metric = 'yuv_weight', startPx, existingCommands,
+                                 minEndPx = startPx + 1, maxPixels = 4096 }) {
+    const distFunc = getMetricDistFunc(metric);
+    const cache = new Map();
+    const tablesFor = (fmt) => {
+        if (!cache.has(fmt)) {
+            cache.set(fmt, { deltas: buildFormatDeltaCache(fmt, stepVal), anchors: buildFormatAnchorInfo(fmt, offset) });
+        }
+        return cache.get(fmt);
+    };
+
+    let acc = computeAccAtPixel(existingCommands, startPx, stepVal, paletteRAM, offset);
+    const newCmds = [];
+    const hardEnd = Math.min(existingCommands.length, startPx + maxPixels);
+    const minResync = Math.max(startPx + 1, minEndPx);
+    let i = startPx;
+
+    for (; i < hardEnd; i++) {
+        const fmt = phaseFormatAt(format, imgW, i);
+        const t = tablesFor(fmt);
+        const o = i * 4;
+        const tr = origData[o], tg = origData[o + 1], tb = origData[o + 2];
+
+        let bestCmd = null, bestScore = Infinity, br = acc.r, bg = acc.g, bb = acc.b;
+
+        // Anker zuerst (bei Gleichstand gewinnt der Anker — wie im Hauptencoder)
+        for (const a of t.anchors) {
+            const r = paletteRAM[a.absSlot * 3], g = paletteRAM[a.absSlot * 3 + 1], b = paletteRAM[a.absSlot * 3 + 2];
+            const sc = distFunc(tr, tg, tb, r, g, b);
+            if (sc < bestScore) { bestScore = sc; bestCmd = a.cmd; br = r; bg = g; bb = b; }
+        }
+        for (const d of t.deltas) {
+            const r = clamp(acc.r + d.dr, 0, 255), g = clamp(acc.g + d.dg, 0, 255), b = clamp(acc.b + d.db, 0, 255);
+            const sc = distFunc(tr, tg, tb, r, g, b);
+            if (sc < bestScore) { bestScore = sc; bestCmd = d.cmd; br = r; bg = g; bb = b; }
+        }
+
+        if (!bestCmd) break;
+        newCmds.push(bestCmd);
+        acc = { r: br, g: bg, b: bb };
+
+        if (bestCmd.isAnchor && i + 1 >= minResync) {
+            const orig = existingCommands[i];
+            if (orig && orig.isAnchor && orig.format === bestCmd.format && orig.anchorIdx === bestCmd.anchorIdx) {
+                return { commands: newCmds, startPx, endPx: i + 1, resynced: true };
+            }
+        }
+    }
+
+    return { commands: newCmds, startPx, endPx: i, resynced: false };
+}
+
+// Decodiert [startPx, endPx) neu in einen vorhandenen RGBA-Puffer.
+export function decodeRangeInto(outData, commands, startPx, endPx, accStart, stepVal, paletteRAM, offset) {
+    const tables = getDecodeDeltaTables(stepVal);
+    let r = accStart.r, g = accStart.g, b = accStart.b;
+    for (let i = startPx; i < endPx; i++) {
+        const cmd = commands[i];
+        if (cmd.isAnchor && SLOT_COUNT_BY_FMT[cmd.format] > 0) {
+            const absIdx = ((offset + cmd.anchorIdx) % 256) * 3;
+            r = paletteRAM[absIdx]; g = paletteRAM[absIdx + 1]; b = paletteRAM[absIdx + 2];
+        } else {
+            const table = tables[cmd.format] || tables.fallback;
+            const t = cmd.isTurbo ? table.turbo : table.normal;
+            r = clamp(r + (t.r[cmd.rIndex || 0] || 0), 0, 255);
+            g = clamp(g + (t.g[cmd.gIndex || 0] || 0), 0, 255);
+            b = clamp(b + (t.b[cmd.bIndex || 0] || 0), 0, 255);
+        }
+        const o = i * 4;
+        outData[o] = r; outData[o + 1] = g; outData[o + 2] = b; outData[o + 3] = 255;
+    }
+    return { r, g, b };
 }

@@ -12,6 +12,9 @@ const appState = {
     originalImageData: null,
     decodedImageData: null,
     modifiedImageData: null,
+    errorViewData: null,
+    viewMode: "original", // 'original' | 'modified' | 'error'
+    commandSource: null,  // Bild, zu dem latestCommandArray gehört (für lokalen Re-Encode)
     showModified: false,
     currentImgW: 0,
     currentImgH: 0,
@@ -71,6 +74,9 @@ function applyLoadedImage(imageData, fileName) {
     appState.originalImageData = imageData;
     appState.decodedImageData = null;
     appState.modifiedImageData = null;
+    appState.errorViewData = null;
+    appState.viewMode = "original";
+    appState.commandSource = null;
     appState.showModified = false;
     appState.latestCommandArray = null;
     appState.globalPaletteRAM.fill(0); // RAM reset
@@ -152,6 +158,9 @@ fileBin.addEventListener('change', (e) => {
         }
         
         appState.modifiedImageData = null;
+        appState.errorViewData = null;
+        appState.viewMode = "original";
+        appState.commandSource = null;
         appState.showModified = false;
         
         loadCurrentMode();
