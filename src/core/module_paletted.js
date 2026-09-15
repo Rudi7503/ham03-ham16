@@ -524,14 +524,45 @@ export function listReachableValues({ format, imgW, pxIndex, stepVal, paletteRAM
     return { effFormat, acc, values };
 }
 
-// Lokaler Greedy-Encode ab startPx. Läuft bis zu einem Resync-Punkt: dort ist
-// der neue Befehl ein Anker, der exakt dem Original-Befehl an derselben Stelle
-// entspricht (gleicher Slot) → der Akkumulator ist danach identisch, der Rest
-// des ursprünglichen Befehlsstroms bleibt gültig.
+// Farbresultat EINES Kommandos bei gegebenem Akkumulator (Decoder-Semantik).
+function commandResultColor(cmd, acc, tables, paletteRAM, offset) {
+    if (cmd.isAnchor && SLOT_COUNT_BY_FMT[cmd.format] > 0) {
+        const a = ((offset + cmd.anchorIdx) % 256) * 3;
+        return { r: paletteRAM[a], g: paletteRAM[a + 1], b: paletteRAM[a + 2] };
+    }
+    const table = tables[cmd.format] || tables.fallback;
+    const t = cmd.isTurbo ? table.turbo : table.normal;
+    return {
+        r: clamp(acc.r + (t.r[cmd.rIndex || 0] || 0), 0, 255),
+        g: clamp(acc.g + (t.g[cmd.gIndex || 0] || 0), 0, 255),
+        b: clamp(acc.b + (t.b[cmd.bIndex || 0] || 0), 0, 255)
+    };
+}
+
+// Lokaler Encode ab startPx.
+//
+//  * Das erste Kommando kann GEPINNT werden (`forcedFirstCmd`) — so wird das
+//    vom Nutzer gewählte Pixel exakt getroffen und kann nicht wegoptimiert werden.
+//  * Die ersten `lookaheadPx` Pixel laufen mit einem Receding-Horizon-BEAM
+//    (Tiefe beamDepth, Breite beamWidth), danach Greedy.
+//  * RESYNC (Kern): Ein Anker ist NICHT nötig. Sobald der neue Akkumulator nach
+//    einem Pixel wieder genau dem Wert entspricht, den dieses Pixel VOR der
+//    Änderung hatte (`resyncRef` = altes Decodiert-Bild), ist der Zustand
+//    identisch zum Original-Lauf → der ursprüngliche Befehlsrest bleibt gültig.
+//    Das trifft meist nach wenigen Pixeln zu (Anker nur als Sicherheitsnetz:
+//    `stopAtPx` = nächster Original-Anker, falls kein Wert-Resync kommt).
+//  * `targetData` ist das Ziel der Nachcodierung: das Quellbild (Standard) oder
+//    das alte Decodiert-Bild (dann bleibt außer dem geänderten Pixel alles
+//    unverändert).
 export function encodeLocalSpan({ origData, imgW, format, stepVal, paletteRAM, offset,
                                  metric = 'yuv_weight', startPx, existingCommands,
-                                 minEndPx = startPx + 1, maxPixels = 4096 }) {
+                                 minEndPx = startPx + 1, maxPixels = 8192,
+                                 stopAtPx = -1, forcedFirstCmd = null,
+                                 lookaheadPx = 32, beamWidth = 8, beamDepth = 3,
+                                 resyncRef = null, targetData = null }) {
     const distFunc = getMetricDistFunc(metric);
+    const tables = getDecodeDeltaTables(stepVal);
+    const searchTarget = targetData || origData;
     const cache = new Map();
     const tablesFor = (fmt) => {
         if (!cache.has(fmt)) {
@@ -542,43 +573,108 @@ export function encodeLocalSpan({ origData, imgW, format, stepVal, paletteRAM, o
 
     let acc = computeAccAtPixel(existingCommands, startPx, stepVal, paletteRAM, offset);
     const newCmds = [];
-    const hardEnd = Math.min(existingCommands.length, startPx + maxPixels);
+
+    const stop = (stopAtPx > startPx) ? Math.min(stopAtPx, startPx + maxPixels) : -1;
+    const hardEnd = Math.min(existingCommands.length, startPx + maxPixels, stop > 0 ? stop : Infinity);
     const minResync = Math.max(startPx + 1, minEndPx);
-    let i = startPx;
+    const lookaheadEnd = startPx + Math.max(0, lookaheadPx);
+    let usedLookahead = 0;
 
-    for (; i < hardEnd; i++) {
-        const fmt = phaseFormatAt(format, imgW, i);
-        const t = tablesFor(fmt);
-        const o = i * 4;
-        const tr = origData[o], tg = origData[o + 1], tb = origData[o + 2];
-
-        let bestCmd = null, bestScore = Infinity, br = acc.r, bg = acc.g, bb = acc.b;
-
-        // Anker zuerst (bei Gleichstand gewinnt der Anker — wie im Hauptencoder)
+    // Alle Kandidaten eines Pixels (Anker zuerst → Anker gewinnt Gleichstand,
+    // genau wie im Hauptencoder).
+    const branchesFor = (px, accNow) => {
+        const t = tablesFor(phaseFormatAt(format, imgW, px));
+        const out = [];
         for (const a of t.anchors) {
             const r = paletteRAM[a.absSlot * 3], g = paletteRAM[a.absSlot * 3 + 1], b = paletteRAM[a.absSlot * 3 + 2];
-            const sc = distFunc(tr, tg, tb, r, g, b);
-            if (sc < bestScore) { bestScore = sc; bestCmd = a.cmd; br = r; bg = g; bb = b; }
+            out.push({ cmd: a.cmd, r, g, b });
         }
         for (const d of t.deltas) {
-            const r = clamp(acc.r + d.dr, 0, 255), g = clamp(acc.g + d.dg, 0, 255), b = clamp(acc.b + d.db, 0, 255);
-            const sc = distFunc(tr, tg, tb, r, g, b);
-            if (sc < bestScore) { bestScore = sc; bestCmd = d.cmd; br = r; bg = g; bb = b; }
+            out.push({
+                cmd: d.cmd,
+                r: clamp(accNow.r + d.dr, 0, 255),
+                g: clamp(accNow.g + d.dg, 0, 255),
+                b: clamp(accNow.b + d.db, 0, 255)
+            });
         }
+        return out;
+    };
 
-        if (!bestCmd) break;
-        newCmds.push(bestCmd);
-        acc = { r: br, g: bg, b: bb };
+    const chooseGreedy = (px, accNow) => {
+        const o = px * 4;
+        const tr = searchTarget[o], tg = searchTarget[o + 1], tb = searchTarget[o + 2];
+        let best = null, bestScore = Infinity;
+        for (const br of branchesFor(px, accNow)) {
+            const sc = distFunc(tr, tg, tb, br.r, br.g, br.b);
+            if (sc < bestScore) { bestScore = sc; best = br; }
+        }
+        return best;
+    };
 
-        if (bestCmd.isAnchor && i + 1 >= minResync) {
-            const orig = existingCommands[i];
-            if (orig && orig.isAnchor && orig.format === bestCmd.format && orig.anchorIdx === bestCmd.anchorIdx) {
-                return { commands: newCmds, startPx, endPx: i + 1, resynced: true };
+    // Receding Horizon: Kommando für EIN Pixel so wählen, dass der Fehler über
+    // die nächsten beamDepth Pixel minimal wird (Beam-Pruning auf beamWidth).
+    const chooseWithLookahead = (px, accNow, horizonEnd) => {
+        let level = [{ cost: 0, acc: accNow, first: null }];
+        for (let d = 0; d < beamDepth; d++) {
+            const cur = px + d;
+            if (cur >= horizonEnd) break;
+            const o = cur * 4;
+            const tr = searchTarget[o], tg = searchTarget[o + 1], tb = searchTarget[o + 2];
+            const next = [];
+            for (const node of level) {
+                for (const br of branchesFor(cur, node.acc)) {
+                    next.push({
+                        cost: node.cost + distFunc(tr, tg, tb, br.r, br.g, br.b),
+                        acc: { r: br.r, g: br.g, b: br.b },
+                        first: d === 0 ? br : node.first
+                    });
+                }
+            }
+            if (!next.length) break;
+            next.sort((a, b) => a.cost - b.cost);
+            level = next.slice(0, beamWidth);
+        }
+        return level[0] ? level[0].first : null;
+    };
+
+    let i = startPx;
+    for (; i < hardEnd; i++) {
+        let pick = null;
+
+        if (i === startPx && forcedFirstCmd) {
+            // Gepinntes Kommando: exakt das gewählte Ergebnis
+            const col = commandResultColor(forcedFirstCmd, acc, tables, paletteRAM, offset);
+            pick = { cmd: forcedFirstCmd, r: col.r, g: col.g, b: col.b };
+        } else if (i < lookaheadEnd) {
+            pick = chooseWithLookahead(i, acc, Math.min(lookaheadEnd, hardEnd));
+            if (pick) usedLookahead++;
+        }
+        if (!pick) pick = chooseGreedy(i, acc);
+        if (!pick) break;
+
+        newCmds.push(pick.cmd);
+        acc = { r: pick.r, g: pick.g, b: pick.b };
+
+        // WERT-RESYNC: Akkumulator entspricht wieder dem alten Decodiert-Wert
+        // dieses Pixels → der restliche Original-Befehlsstrom ist gültig.
+        if (resyncRef && i + 1 >= minResync) {
+            const o = i * 4;
+            if (acc.r === resyncRef[o] && acc.g === resyncRef[o + 1] && acc.b === resyncRef[o + 2]) {
+                return { commands: newCmds, startPx, endPx: i + 1, resynced: true, valueResync: true, usedLookahead };
             }
         }
     }
 
-    return { commands: newCmds, startPx, endPx: i, resynced: false };
+    // Sicherheitsnetz: Original-Anker an stopAtPx unverändert übernehmen
+    if (stop > 0 && i === stop) {
+        const orig = existingCommands[stop];
+        if (orig && orig.isAnchor) {
+            newCmds.push(orig);
+            return { commands: newCmds, startPx, endPx: stop + 1, resynced: true, forced: true, usedLookahead };
+        }
+    }
+
+    return { commands: newCmds, startPx, endPx: i, resynced: false, usedLookahead };
 }
 
 // Decodiert [startPx, endPx) neu in einen vorhandenen RGBA-Puffer.

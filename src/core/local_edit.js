@@ -28,7 +28,8 @@ export function canLocalEdit(format) {
 export function performLocalEdit({
     sourceData, width, height, format, stepVal, paletteRAM, offset,
     metric = 'yuv_weight', commands, decodedData,
-    startPx, minEndPx = startPx + 1, maxPixels = 4096
+    startPx, forcedFirstCmd = null, minEndPx = startPx + 1, maxPixels = 8192,
+    lookaheadPx = 32, beamWidth = 8, beamDepth = 3, tailFromOldDecode = false
 }) {
     if (!canLocalEdit(format)) {
         return { ok: false, reason: 'Lokale Änderungen gibt es nur für die HAM-Palettenformate (nicht für HAM12/16 oder DXT1).' };
@@ -40,20 +41,42 @@ export function performLocalEdit({
         return { ok: false, reason: 'Quell- oder Decode-Daten fehlen.' };
     }
 
+    // Nächsten ORIGINAL-Anker als Sicherheitsnetz suchen (falls der Wert-Resync
+    // nicht vorher greift). Dort wird der Original-Anker unverändert übernommen.
+    const searchEnd = Math.min(commands.length, startPx + maxPixels);
+    let stopAtPx = -1;
+    for (let j = startPx + 1; j < searchEnd; j++) {
+        const c = commands[j];
+        if (c && c.isAnchor) { stopAtPx = j; break; }
+    }
+
+    // `decodedData` enthält noch die ALTEN Decodierwerte (wird erst nach dem
+    // Encode überschrieben) → dient als Resync-Referenz und optional als Ziel.
     const accStart = computeAccAtPixel(commands, startPx, stepVal, paletteRAM, offset);
     const res = encodeLocalSpan({
         origData: sourceData, imgW: width, format, stepVal, paletteRAM, offset, metric,
-        startPx, existingCommands: commands, minEndPx, maxPixels
+        startPx, existingCommands: commands, minEndPx, maxPixels,
+        stopAtPx, forcedFirstCmd, lookaheadPx, beamWidth, beamDepth,
+        resyncRef: decodedData,
+        targetData: tailFromOldDecode ? decodedData : null
     });
 
-    if (res.commands.length === 0) return { ok: false, reason: 'Es konnte kein Befehl erzeugt werden.' };
+    // Ohne Resync NICHT splicen: sonst wäre der Rest des Befehlsstroms um den
+    // geänderten Akkumulator verschoben (Farbstich ab hier).
+    if (!res.resynced) {
+        return { ok: false, reason: 'Kein Resync erreicht — Änderung wurde verworfen (bitte „Vollständig neu codieren“).' };
+    }
 
     for (let i = 0; i < res.commands.length; i++) commands[res.startPx + i] = res.commands[i];
     decodeRangeInto(decodedData, commands, res.startPx, res.endPx, accStart, stepVal, paletteRAM, offset);
 
     return {
         ok: true,
-        resynced: res.resynced,
+        resynced: true,
+        forced: !!res.forced,
+        valueResync: !!res.valueResync,
+        usedLookahead: res.usedLookahead || 0,
+        stopAtPx,
         startPx: res.startPx,
         endPx: res.endPx,
         span: res.endPx - res.startPx

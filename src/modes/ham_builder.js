@@ -7,7 +7,7 @@ import { encodeHam12_16, decodeHam12_16, packHam12_16 } from '../core/module_ham
 import { debugRoundtripHam12_16, debugRoundtripPaletted } from '../core/debugger.js';
 import { computeDetailedAnalysis, errorBins } from '../core/analysis.js';
 import { generateSmartTarget, applySnapFromOriginal, buildErrorMap } from '../core/smart_target.js';
-import { setZoomMode, centerOnCoordinate, setupCanvasEvents, setZoomScale } from '../ui/canvas-view.js';
+import { setZoomMode, centerOnCoordinate, setupCanvasEvents, setZoomScale, setPickEnabled } from '../ui/canvas-view.js';
 import { encodeDXT1, decodeDXT1 } from '../core/module_dxt1.js';
 import { initPaletteBuilderUI } from '../ui/palette_builder.js';
 import { initErrorWindow } from '../ui/error_window.js';
@@ -117,7 +117,8 @@ export function initHamBuilderMode(appState, containerEl) {
             progress { width: 100%; height: 6px; } 
             .status-row { display: flex; justify-content: space-between; font-size: 11px; color: #aaa; }
             #image-area { display: flex; flex: 1; overflow: hidden; background-color: #000; }
-            .view-pane { flex: 1; position: relative; overflow: hidden; cursor: grab; }
+            .view-pane { flex: 1; position: relative; overflow: hidden; cursor: crosshair; }
+            .view-pane.panning { cursor: grabbing; }
             .view-pane canvas { image-rendering: pixelated; } /* Zoom = harte 1:1-Pixelblöcke, keine Interpolation */
             #pane-left { border-right: 2px solid #444; }
             .pane-label { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 5px 10px; border-radius: 4px; font-weight: bold; font-size: 12px; z-index: 100; pointer-events: none; }
@@ -188,6 +189,7 @@ export function initHamBuilderMode(appState, containerEl) {
                         <button id="sw-error" class="target-sw" disabled title="Linke Anzeige: Fehlerbild = |Original − Decodiert| je Kanal (Farbsäume zeigen, wo der Codec abweicht)">Fehlerbild</button>
                     </div>
                     <button id="btn-error-window" title="Eigenes, verschiebbares Fenster für das Fehlerbild (Schwelle, Fehler-Navigation, lokale Korrektur)">Fehler-Fenster</button>
+                    <button id="btn-next-error" title="Zum nächstgrößten Fehler springen (öffnet das Fehler-Fenster)">Nächst größter Fehler</button>
                     <button id="btn-replace-original" disabled title="Modifiziertes Bild als neues Original übernehmen (ermöglicht mehrfaches Modifizieren)">Mod. übernehmen</button>
                     <label style="color:#adb5bd;" title="Pixel mit r+g+b < Schwelle werden exakt Schwarz (0,0,0). 0 = aus.">Schwarz-Snap:</label>
                     <input type="number" id="snap-black" min="0" max="765" value="0" style="width:48px;" title="Schwarz-Snap: alle Pixel mit r+g+b < Schwelle → RGB(0,0,0). Beispiel: 20">
@@ -392,8 +394,34 @@ export function initHamBuilderMode(appState, containerEl) {
                 const offset = parseInt(document.getElementById('pal-offset-input')?.value) || 0;
                 return describeCommand(cmd, step, offset);
             }
-        })
+        }),
+        // Linksklick im Original-/Fehlerbild oder im Dekodierten: Pixel im
+        // Fehlerbild-Fenster auswählen (Fenster öffnet sich bei Bedarf).
+        (x, y) => {
+            if (!errorWindow) return;
+            try {
+                errorWindow.selectByCoord(x, y);
+            } catch (err) {
+                console.error('Pixel-Auswahl fehlgeschlagen:', err);
+                updateProgress(`FEHLER bei der Auswahl: ${(err && err.message) || err}`, 100, 100);
+                return;
+            }
+            updateProgress(`Pixel ausgewählt: X ${x}, Y ${y} — Werte-Liste im Fehler-Fenster`, 100, 100);
+            // Kurze, unübersehbare Bestätigung an beiden Panes
+            ['pane-left', 'pane-right'].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.style.outline = '3px solid #ffd400';
+                setTimeout(() => { el.style.outline = ''; }, 250);
+            });
+        }
     );
+
+    // Maus-Hinweis an beiden Panes
+    ['pane-left', 'pane-right'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.title = 'Linksklick: Pixel im Fehler-Fenster auswählen · rechte Maustaste ziehen: verschieben';
+    });
 
     ['fit', '1x', '2x', '4x', '8x', '16x', '32x', '64x'].forEach(mode => {
         let btn = document.getElementById(`btn-zoom-${mode}`);
@@ -407,9 +435,9 @@ export function initHamBuilderMode(appState, containerEl) {
     const btnDrawRegion = document.getElementById('btn-draw-region');
     const btnResetRegion = document.getElementById('btn-reset-region');
     
-    btnDrawRegion.addEventListener('click', () => { isRegionModeActive = true; canvasOrig.style.cursor = 'crosshair'; });
+    btnDrawRegion.addEventListener('click', () => { isRegionModeActive = true; setPickEnabled(false); canvasOrig.style.cursor = 'crosshair'; });
     btnResetRegion.addEventListener('click', () => {
-        isRegionModeActive = false; canvasOrig.style.cursor = 'grab';
+        isRegionModeActive = false; setPickEnabled(true); canvasOrig.style.cursor = 'grab';
         optRegion = { x: 0, y: 0, width: appState.currentImgW, height: appState.currentImgH };
         document.getElementById('region-info').innerText = 'Bereich: Ganzes Bild';
         ctxOrig.putImageData(getShownSourceImageData(), 0, 0);
@@ -433,7 +461,7 @@ export function initHamBuilderMode(appState, containerEl) {
     });
     canvasOrig.addEventListener('mouseup', (e) => {
         if (!isDrawingRegion) return; e.stopPropagation();
-        isDrawingRegion = false; isRegionModeActive = false; canvasOrig.style.cursor = 'grab';
+        isDrawingRegion = false; isRegionModeActive = false; setPickEnabled(true); canvasOrig.style.cursor = 'grab';
         let rect = canvasOrig.getBoundingClientRect();
         let endX = Math.floor((e.clientX - rect.left) * (canvasOrig.width / rect.width));
         let endY = Math.floor((e.clientY - rect.top) * (canvasOrig.height / rect.height));
@@ -915,4 +943,5 @@ export function initHamBuilderMode(appState, containerEl) {
         requestFullEncode: async () => { await triggerEncode(); }
     });
     document.getElementById('btn-error-window')?.addEventListener('click', () => errorWindow.open());
+    document.getElementById('btn-next-error')?.addEventListener('click', () => errorWindow.nextHighest());
 }

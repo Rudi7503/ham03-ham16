@@ -22,7 +22,16 @@ import { performLocalEdit, updateErrorRange, canLocalEdit } from '../core/local_
 const BTN = 'background:#333; color:#fff; border:1px solid #555; border-radius:4px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;';
 const BTN_ACT = 'background:#17a2b8; color:#fff; border:1px solid #4dabf7; border-radius:4px; padding:4px 8px; font-size:11px; font-weight:bold; cursor:pointer;';
 
+// Einmalige Instanz: Der Builder wird bei jedem Bild-/Formatwechsel neu
+// aufgebaut — es darf dabei KEIN zweites Fenster (und keine doppelten Listener)
+// entstehen. Bei erneutem initErrorWindow() werden nur die Deps getauscht.
+let singleton = null;
+
 export function initErrorWindow(appState, deps = {}) {
+    if (singleton) {
+        singleton.updateDeps(deps);
+        return singleton;
+    }
     const D = {
         getStep: () => ({ r: 4, g: 4, b: 4 }),
         getMetric: () => 'yuv_weight',
@@ -53,6 +62,8 @@ export function initErrorWindow(appState, deps = {}) {
     let lastNavMode = 'raster';      // 'raster' | 'rank' (für Auto-Weiterspringen)
     let rankCursor = 0;
     let autoAdvance = true;          // nach einer Änderung automatisch zum nächsten Fehler
+    let lastValues = null;           // zuletzt angezeigte Werte-Liste (für Klick-Handler)
+    let lastW = -1, lastH = -1, lastFormat = null; // Zustandsreset bei neuem Bild/Format
 
     // ---------------------------------------------------------------- DOM ----
     function ensureDom() {
@@ -60,7 +71,7 @@ export function initErrorWindow(appState, deps = {}) {
 
         panel = document.createElement('div');
         panel.id = 'errwin';
-        panel.style.cssText = 'position:fixed; left:70px; top:60px; width:620px; max-width:96vw; max-height:92vh; overflow:auto;' +
+        panel.style.cssText = 'position:fixed; right:16px; top:64px; width:600px; max-width:48vw; max-height:92vh; overflow:auto;' +
             'z-index:3000; background:#1e2124; border:1px solid #555; border-radius:8px; box-shadow:0 12px 34px rgba(0,0,0,.6);' +
             'display:none; font-family:Arial,sans-serif; color:#ddd;';
 
@@ -73,10 +84,11 @@ export function initErrorWindow(appState, deps = {}) {
                 <b style="color:#c084fc;">Fehlerbild&nbsp;|&nbsp;Original − Decodiert</b>
                 <span style="display:flex; gap:8px; align-items:center;">
                     <span id="errwin-count" style="font-size:11px; color:#888;"></span>
+                    <button id="errwin-collapse" title="Fenster einklappen (Bildfläche freigeben)" style="background:#555; color:#fff; border:none; border-radius:4px; padding:2px 8px; cursor:pointer;">—</button>
                     <button id="errwin-close" title="Schließen" style="background:#555; color:#fff; border:none; border-radius:4px; padding:2px 9px; cursor:pointer;">×</button>
                 </span>
             </div>
-            <div style="padding:10px;">
+            <div id="errwin-body" style="padding:10px;">
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12px;">
                     <label title="Alle Fehler unterhalb dieser Abweichung werden im Fehlerbild auf 0,0,0 gesetzt">Max. Abweichung:</label>
                     <input id="errwin-threshold" type="number" min="0" max="255" value="0" style="width:58px;">
@@ -132,7 +144,8 @@ export function initErrorWindow(appState, deps = {}) {
         const bar = panel.querySelector('#errwin-bar');
         let drag = null;
         bar.addEventListener('mousedown', (e) => {
-            if (e.target.id === 'errwin-close') return;
+            if (e.target.id === 'errwin-close' || e.target.id === 'errwin-collapse') return;
+            panel.style.right = 'auto'; // sonst kollidiert right mit dem gesetzten left
             drag = { dx: e.clientX - panel.offsetLeft, dy: e.clientY - panel.offsetTop };
             e.preventDefault();
         });
@@ -145,6 +158,14 @@ export function initErrorWindow(appState, deps = {}) {
 
         // ------------------------------------------------------------ Events --
         panel.querySelector('#errwin-close').addEventListener('click', close);
+        panel.querySelector('#errwin-collapse').addEventListener('click', () => {
+            const body = panel.querySelector('#errwin-body');
+            const collapsed = body.style.display === 'none';
+            body.style.display = collapsed ? 'block' : 'none';
+            panel.style.height = 'auto';
+            panel.style.maxHeight = collapsed ? '92vh' : 'none';
+            if (!collapsed) hint('Fenster eingeklappt — Bildfläche ist frei zum Anklicken.');
+        });
         panel.querySelector('#errwin-ignore-reset').addEventListener('click', () => {
             ignored.clear();
             markDirty('Ignorierte zurückgesetzt');
@@ -154,6 +175,7 @@ export function initErrorWindow(appState, deps = {}) {
                 zoom = b.dataset.zoom;
                 panel.querySelectorAll('.errwin-zoom').forEach(x => x.style.cssText = x === b ? BTN_ACT : BTN);
                 applyZoom();
+                syncMainView(); // nur hier: Zoom-Buttons ziehen die Hauptansichten mit
             });
         });
 
@@ -230,8 +252,10 @@ export function initErrorWindow(appState, deps = {}) {
 
         valuesEl.addEventListener('click', (e) => {
             const row = e.target.closest('.errwin-val');
-            if (!row) return;
-            applyValue(parseInt(row.dataset.r), parseInt(row.dataset.g), parseInt(row.dataset.b), row.dataset.label || '');
+            if (!row || !lastValues) return;
+            const v = lastValues[parseInt(row.dataset.idx, 10)];
+            if (!v) return;
+            applyValue(v);
         });
     }
 
@@ -399,7 +423,8 @@ export function initErrorWindow(appState, deps = {}) {
     }
 
     // Hauptansichten (Original/Smart Target/Fehlerbild + Dekodiert) auf dieselbe
-    // Zoomstufe und dieselbe Bildmitte ziehen.
+    // Zoomstufe ziehen. Wird NUR von den Zoom-Buttons aufgerufen — Klicks und
+    // Fehler-Navigation dürfen die Hauptansicht nicht verschieben.
     function syncMainView() {
         if (typeof D.onViewSync !== 'function') return;
         const { w, h } = imageSize();
@@ -416,11 +441,12 @@ export function initErrorWindow(appState, deps = {}) {
         const z = zoomFactor();
         canvas.style.width = Math.max(1, Math.round(w * z)) + 'px';
         canvas.style.height = Math.max(1, Math.round(h * z)) + 'px';
-        // Bei geänderter Zoomstufe auf den angesprungenen Fehler zentrieren
+        // Bei geänderter Zoomstufe das EIGENE Canvas auf den Fehler zentrieren.
+        // Die Hauptansichten werden hier NICHT angefasst (das passiert nur über
+        // die Zoom-Buttons, siehe pushZoomToMainViews()).
         if (zoom !== lastZoomApplied) {
             lastZoomApplied = zoom;
             centerOnCurrentPixel();
-            syncMainView();
         }
         updateMarker(); // Marker sitzt skalierungsabhängig
         updateRegionOverlay(); // Ausschnitt-Rechteck ebenfalls
@@ -481,6 +507,10 @@ export function initErrorWindow(appState, deps = {}) {
         const target = orig && o4 + 2 < orig.data.length
             ? { r: orig.data[o4], g: orig.data[o4 + 1], b: orig.data[o4 + 2] }
             : { r: acc.r, g: acc.g, b: acc.b };
+        const dec = appState.decodedImageData;
+        const decodedNow = dec && o4 + 2 < dec.data.length
+            ? { r: dec.data[o4], g: dec.data[o4 + 1], b: dec.data[o4 + 2] }
+            : null;
 
         const { effFormat, values } = listReachableValues({
             format, imgW: appState.currentImgW, pxIndex: currentPx,
@@ -488,24 +518,39 @@ export function initErrorWindow(appState, deps = {}) {
         });
 
         const head = document.createElement('div');
-        head.style.cssText = 'color:#888; padding:2px 4px 4px 4px;';
-        head.textContent = `Phase: ${effFormat} | akkumuliert: RGB(${acc.r},${acc.g},${acc.b}) | Ziel (Original): RGB(${target.r},${target.g},${target.b}) | ${values.length} mögliche Werte`;
+        head.style.cssText = 'color:#888; padding:2px 4px 4px 4px; line-height:1.5;';
+        head.innerHTML = `Phase: <b style="color:#ccc;">${effFormat}</b> | akkumuliert (Pixel davor): <b style="color:#ccc;">RGB(${acc.r},${acc.g},${acc.b})</b>`
+            + ` | ${values.length} mögliche Werte<br>`
+            + `<span style="display:inline-flex; align-items:center; gap:5px;">Original (Soll):`
+            + `<span style="display:inline-block; width:14px; height:14px; background:rgb(${target.r},${target.g},${target.b}); border:1px solid #888;"></span>`
+            + `<b style="color:#ffd400;">RGB(${target.r},${target.g},${target.b})</b></span>`
+            + (decodedNow ? ` <span style="display:inline-flex; align-items:center; gap:5px; margin-left:10px;">aktuell decodiert:`
+                + `<span style="display:inline-block; width:14px; height:14px; background:rgb(${decodedNow.r},${decodedNow.g},${decodedNow.b}); border:1px solid #888;"></span>`
+                + `<b style="color:#4dabf7;">RGB(${decodedNow.r},${decodedNow.g},${decodedNow.b})</b></span>` : '');
         valuesEl.appendChild(head);
 
-        for (const v of values) {
+        // Werte für den Klick-Handler merken (inkl. Kommando zum Pinnen)
+        lastValues = values;
+
+        for (let vi = 0; vi < values.length; vi++) {
+            const v = values[vi];
             const label = describeCommand(v.cmd, stepVal, offset) || '–';
             const row = document.createElement('div');
             row.className = 'errwin-val';
-            row.dataset.r = v.r; row.dataset.g = v.g; row.dataset.b = v.b;
-            row.dataset.label = label;
+            row.dataset.idx = vi;
             row.style.cssText = 'display:flex; align-items:center; gap:6px; padding:3px 4px; cursor:pointer; border-radius:3px;';
             row.onmouseenter = () => { row.style.background = '#242a2f'; };
             row.onmouseleave = () => { row.style.background = 'transparent'; };
-            row.innerHTML = `<span style="display:inline-block; width:12px; height:12px; background:rgb(${v.r},${v.g},${v.b}); border:1px solid #666;"></span>`
-                + `<span style="width:96px; color:#eaeaea;">RGB(${v.r},${v.g},${v.b})</span>`
-                + `<span style="width:64px; color:${v.kind === 'anchor' ? '#4dabf7' : '#ffc107'};">${v.kind === 'anchor' ? 'Anker' : 'Delta'}</span>`
+            // Original (Soll) und auszuwählende Farbe NEBENEINANDER
+            row.innerHTML =
+                `<span style="display:inline-block; width:12px; height:12px; background:rgb(${target.r},${target.g},${target.b}); border:1px solid #888;" title="Original/Soll"></span>`
+                + `<span style="width:88px; color:#ffd400;">${target.r},${target.g},${target.b}</span>`
+                + `<span style="color:#888;">→</span>`
+                + `<span style="display:inline-block; width:12px; height:12px; background:rgb(${v.r},${v.g},${v.b}); border:1px solid #666;" title="auszuwählende Farbe"></span>`
+                + `<span style="width:88px; color:#eaeaea;">${v.r},${v.g},${v.b}</span>`
+                + `<span style="width:52px; color:${v.kind === 'anchor' ? '#4dabf7' : '#ffc107'};">${v.kind === 'anchor' ? 'Anker' : 'Delta'}</span>`
                 + `<span style="flex:1; color:#aaa;">${label}</span>`
-                + `<span style="width:70px; text-align:right; color:${v.dist === 0 ? '#28a745' : '#888'};">Δ ${v.dist.toFixed(1)}</span>`;
+                + `<span style="width:62px; text-align:right; color:${v.dist === 0 ? '#28a745' : '#888'};">Δ ${v.dist.toFixed(1)}</span>`;
             valuesEl.appendChild(row);
         }
     }
@@ -561,9 +606,10 @@ export function initErrorWindow(appState, deps = {}) {
         rebuildLists();
         render();
         renderValues();
-        hint(`${label} | lokal neu codiert: ${res.span} px ab Pixel ${res.startPx}`
-            + (res.resynced ? ' (Resync gefunden ✅)' : ' — KEIN Resync gefunden, bitte vollständig neu codieren'));
-        D.setStatus(`${label}: lokaler Re-Encode über ${res.span} px${res.resynced ? '' : ' (ohne Resync!)'}`);
+        const resyncTxt = res.valueResync ? 'Resync über gleichen Pixelwert ✅' : (res.forced ? 'Resync am nächsten Anker ✅' : 'Resync ✅');
+        hint(`${label} | Fenster ${res.span} px ab Pixel ${res.startPx} | ${resyncTxt}`
+            + ` | Lookahead ${res.usedLookahead || 0} px`);
+        D.setStatus(`${label}: lokal nachcodiert über ${res.span} px (${resyncTxt})`);
     }
 
     // Nach einer Änderung automatisch zum nächsten Fehler springen — im zuletzt
@@ -585,8 +631,8 @@ export function initErrorWindow(appState, deps = {}) {
         updateMarker();
         updateInfo();
         renderValues();
-        centerOnCurrentPixel(); // angesprungenen Fehler immer mittig zeigen
-        syncMainView();         // Hauptansichten mitziehen (gleicher Zoom + Ausschnitt)
+        centerOnCurrentPixel(); // nur das eigene Fenster-Canvas zentrieren
+        // Hauptansichten bleiben bewusst unverändert (kein Zoom-/Pan-Sprung).
     }
 
     function navRaster(dir) {
@@ -622,12 +668,13 @@ export function initErrorWindow(appState, deps = {}) {
         advanceAfterEdit();
     }
 
-    async function applyValue(r, g, b, label) {
+    async function applyValue(v) {
         const t = ensureEditTarget();
         if (!t.ok) { hint(t.msg); return; }
         const editedPx = currentPx;
         const o = editedPx * 4;
-        t.data[o] = r; t.data[o + 1] = g; t.data[o + 2] = b;
+        t.data[o] = v.r; t.data[o + 1] = v.g; t.data[o + 2] = v.b;
+        const label = describeCommand(v.cmd, D.getStep(), D.getOffset()) || (v.kind === 'anchor' ? 'Anker' : 'Delta');
 
         const res = performLocalEdit({
             sourceData: t.data, width: appState.currentImgW, height: appState.currentImgH,
@@ -635,10 +682,13 @@ export function initErrorWindow(appState, deps = {}) {
             metric: D.getMetric(),
             commands: appState.latestCommandArray,
             decodedData: appState.decodedImageData.data,
-            startPx: editedPx, minEndPx: editedPx + 1, maxPixels: 4096
+            startPx: editedPx, minEndPx: editedPx + 1,
+            forcedFirstCmd: v.cmd,   // gewähltes Kommando pinnen → Pixel wird exakt getroffen
+            lookaheadPx: 32,         // 32 px Receding-Horizon-Beam, danach Greedy
+            tailFromOldDecode: true  // Rest möglichst unverändert lassen (Resync = alter Wert)
         });
         if (!res.ok) { hint(res.reason); return; }
-        finishLocalEdit(res, `Wert RGB(${r},${g},${b}) gesetzt [${label}]`);
+        finishLocalEdit(res, `Wert RGB(${v.r},${v.g},${v.b}) gesetzt [${label}]`);
         advanceAfterEdit();
     }
 
@@ -658,7 +708,7 @@ export function initErrorWindow(appState, deps = {}) {
             metric: D.getMetric(),
             commands: appState.latestCommandArray,
             decodedData: appState.decodedImageData.data,
-            startPx: wav.firstPx, minEndPx: wav.lastPx + 1, maxPixels: 4096
+            startPx: wav.firstPx, minEndPx: wav.lastPx + 1, lookaheadPx: 32
         });
         if (!res.ok) { hint(res.reason); return; }
         finishLocalEdit(res, `Wavelet 3×3 (${wav.changed} px geändert)`);
@@ -697,7 +747,7 @@ export function initErrorWindow(appState, deps = {}) {
                 metric: D.getMetric(),
                 commands: appState.latestCommandArray,
                 decodedData: appState.decodedImageData.data,
-                startPx: wav.firstPx, minEndPx: wav.lastPx + 1, maxPixels: 4096
+                startPx: wav.firstPx, minEndPx: wav.lastPx + 1, lookaheadPx: 32
             });
             if (!res.ok) { failed++; continue; }
             updateErrorRange(
@@ -720,16 +770,86 @@ export function initErrorWindow(appState, deps = {}) {
     }
 
     // -------------------------------------------------------------- API ----
+    // ACHTUNG: als benannte Funktion im Closure — wird auch intern benutzt
+    // (selectByCoord/nextHighest/updateDeps). Nur im api-Objekt zu stehen reicht nicht!
+    function isOpen() { return !!(panel && panel.style.display !== 'none'); }
+
     function open() { ensureDom(); panel.style.display = 'block'; refresh(); }
     function close() { if (panel) panel.style.display = 'none'; }
+
+    // Übernimmt die Deps des neu aufgebauten Builders (Canvases/Statuszeile).
+    // Bei neuem Bild oder Format wird der Auswahlzustand zurückgesetzt.
+    function updateDeps(newDeps = {}) {
+        Object.assign(D, newDeps);
+        const { w, h } = imageSize();
+        const fmt = D.getFormat();
+        if (w !== lastW || h !== lastH || fmt !== lastFormat) {
+            lastW = w; lastH = h; lastFormat = fmt;
+            currentPx = -1;
+            ignored.clear();
+            region = null;
+            selecting = false;
+            displayImageData = null;
+            lastZoomApplied = null;
+            lastValues = null;
+            if (regionEl) regionEl.style.display = 'none';
+            if (valuesEl) valuesEl.innerHTML = '';
+        }
+        if (isOpen()) refresh();
+    }
+
+    // Auswahl per Klick in der Hauptansicht (Bildkoordinaten)
+    function selectByCoord(x, y) {
+        const { w, h } = imageSize();
+        if (!w || !h) return;
+        const cx = Math.max(0, Math.min(w - 1, Math.round(x)));
+        const cy = Math.max(0, Math.min(h - 1, Math.round(y)));
+        const px = cy * w + cx;
+        if (!isOpen()) open();
+        if (!appState.errorViewData) {
+            hint(`Pixel ${px} (X ${cx}, Y ${cy}) gewählt — noch kein Fehlerbild, bitte „2. Codieren“ drücken.`);
+            return;
+        }
+        if (region && !inRegion(px)) {
+            region = null;
+            updateRegionOverlay();
+            updateRegionInfo();
+            rebuildLists();
+            hint('Klick außerhalb des Ausschnitts — Ausschnitt aufgehoben.');
+        }
+        selectPixel(px);
+    }
+
+    // Nächstgrößten Fehler anspringen (öffnet das Fenster bei Bedarf)
+    function nextHighest() {
+        if (!isOpen()) open();
+        if (!appState.errorViewData) { hint('Noch kein Fehlerbild — bitte „2. Codieren“ drücken.'); return; }
+        navRank(+1);
+    }
 
     function refresh() {
         ensureDom();
         if (thrInput) thrInput.value = String(displayThreshold);
+        updateRegionInfo();
         rebuildLists();
         render();
         if (currentPx >= 0) renderValues();
     }
 
-    return { open, close, refresh, isOpen: () => !!(panel && panel.style.display !== 'none') };
+    const api = {
+        open,
+        close,
+        refresh,
+        selectByCoord,
+        nextHighest,
+        updateDeps,
+        isOpen
+    };
+    singleton = api;
+    return api;
+}
+
+// Fenster schließen (z. B. beim Verlassen des Builder-Modus)
+export function closeErrorWindow() {
+    if (singleton) singleton.close();
 }

@@ -6,6 +6,7 @@ import { initViewerMode } from './modes/viewer.js';
 import { unpackHam12_16, decodeHam12_16 } from './core/module_ham12_16.js';
 import { unpackPaletted, decodePaletted } from './core/module_paletted.js';
 import { testImagePixels } from './testimages.js';
+import { closeErrorWindow } from './ui/error_window.js';
 
 // Zentraler Application State
 const appState = {
@@ -34,7 +35,9 @@ const appContainer = document.getElementById('app-container');
 // ==========================================
 function loadCurrentMode() {
     appContainer.innerHTML = ""; // Container leeren
-    
+
+    if (appState.activeMode !== "builder") closeErrorWindow(); // Fenster gehört zum Builder
+
     if (appState.activeMode === "builder") {
         initHamBuilderMode(appState, appContainer);
     } else if (appState.activeMode === "sprite") {
