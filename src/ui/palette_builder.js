@@ -3,7 +3,7 @@
 import { HAM_CONFIGS } from '../codecs/configs.js';
 import { rgbToHex } from '../codecs/utils.js';
 import { computeDetailedAnalysis, getImageHistogram } from '../core/analysis.js';
-import { runHybridOptimization, runManualRefinement } from '../core/palette_optimizer.js';
+import { runHybridOptimization, runOptimizationWithProxy, runManualRefinement, requestOptimizationAbort } from '../core/palette_optimizer.js';
 
 let selectedTargetSlot = null;
 
@@ -47,16 +47,30 @@ export function initPaletteBuilderUI(appState, deps) {
                     </button>
                 </div>
                 <div>
+                    <label style="display:flex; align-items:center; justify-content:center; gap:8px; color:#ccc; font-size:12px; font-family:sans-serif; margin-bottom:16px; cursor:pointer;">
+                        <input type="checkbox" id="af-proxy" ${(appState.currentImgW > 320 || appState.currentImgH > 320) ? 'checked' : ''}>
+                        Auf Vorschaubild optimieren (viel schneller; Palette wird danach aufs Bild angewendet)
+                    </label>
+                    ${(Math.max(appState.currentImgW, appState.currentImgH) > 512)
+                        ? `<div style="color:#ffc107; font-size:11px; font-family:sans-serif; margin:-8px 0 14px 0;">⚠️ Bild ist größer als 512 px — Proxy wird automatisch erzwungen (Vollbild würde mehrere Minuten dauern).</div>`
+                        : ''}
+                </div>
+                <div>
                     <button id="btn-af-cancel" style="background:#555; color:#fff; border:none; padding:8px 20px; border-radius:4px; cursor:pointer;">Abbrechen</button>
                 </div>
             `;
             overlay.appendChild(box);
             document.body.appendChild(overlay);
 
-            document.getElementById('btn-af-fast').onclick = () => { document.body.removeChild(overlay); resolve('sehr_schnell'); };
-            document.getElementById('btn-af-norm').onclick = () => { document.body.removeChild(overlay); resolve('normal'); };
-            document.getElementById('btn-af-slow').onclick = () => { document.body.removeChild(overlay); resolve('langsam'); };
-            document.getElementById('btn-af-cancel').onclick = () => { document.body.removeChild(overlay); resolve(null); };
+            const done = (intensity) => {
+                const useProxy = document.getElementById('af-proxy').checked;
+                document.body.removeChild(overlay);
+                resolve(intensity ? { intensity, useProxy } : null);
+            };
+            document.getElementById('btn-af-fast').onclick = () => done('sehr_schnell');
+            document.getElementById('btn-af-norm').onclick = () => done('normal');
+            document.getElementById('btn-af-slow').onclick = () => done('langsam');
+            document.getElementById('btn-af-cancel').onclick = () => done(null);
         });
     }
 
@@ -341,9 +355,11 @@ export function initPaletteBuilderUI(appState, deps) {
     btnAuto?.addEventListener('click', async () => {
         if (!appState.originalImageData || !appState.decodedImageData) return alert("Bitte zuerst das Bild codieren.");
         
-        // NEU: Abfrage des gewählten Modus ('sehr_schnell', 'normal', 'langsam')
-        let intensityMode = await askAutoFillMode();
-        if (!intensityMode) return; // Abgebrochen
+        // Abfrage: Intensität ('sehr_schnell'|'normal'|'langsam') + Proxy-Option
+        let choice = await askAutoFillMode();
+        if (!choice) return; // Abgebrochen
+        let intensityMode = choice.intensity;
+        let useProxy = choice.useProxy;
         
         let statusDiv = document.getElementById('builder-status');
         let currentOffset = getCurrentOffset();
@@ -352,16 +368,45 @@ export function initPaletteBuilderUI(appState, deps) {
 
         appState.globalPaletteRAM[0] = 0; appState.globalPaletteRAM[1] = 0; appState.globalPaletteRAM[2] = 0;
 
-        // NEU: Übergabe der gewählten Intensität an runHybridOptimization
-        let changeLog = await runHybridOptimization(
-            appState, getOptRegion(), step, metric, currentOffset, getLockedSlots(), 
-            (msg) => { if (statusDiv) statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ ${msg}</span>`; },
-            triggerEncode,
-            liveUpdateUI,
-            intensityMode
-        );
+        // Auto-Budget (#4): Abbrechen-Button, solange die Optimierung läuft.
+        // Bewusst außerhalb von #builder-status, weil updateOptProgress dessen
+        // innerHTML bei jedem Fortschritt überschreibt.
+        let abortBtn = document.getElementById('palette-abort-btn');
+        if (abortBtn) abortBtn.remove();
+        abortBtn = document.createElement('button');
+        abortBtn.id = 'palette-abort-btn';
+        abortBtn.textContent = '⏹️ Optimierung abbrechen';
+        abortBtn.style.cssText = 'position:fixed; right:16px; bottom:16px; z-index:10001; background:#dc3545; color:#fff; border:none; padding:10px 16px; border-radius:6px; cursor:pointer; font-weight:bold; box-shadow:0 4px 14px rgba(0,0,0,0.55); font-family:sans-serif; font-size:13px;';
+        abortBtn.onclick = () => {
+            requestOptimizationAbort();
+            abortBtn.disabled = true;
+            abortBtn.style.background = '#6c757d';
+            abortBtn.style.cursor = 'default';
+            abortBtn.textContent = '⏹️ Abbruch angefordert... (Stufengrenze)';
+        };
+        document.body.appendChild(abortBtn);
 
-        if (statusDiv) statusDiv.innerHTML = `<span style='color:#28a745; font-weight:bold;'>✅ Optimierung beendet!</span>`;
+        // Proxy-Optimierung: bei großen Bildern auf einem Vorschaubild rechnen
+        // und die fertige Palette auf das Original anwenden.
+        let changeLog;
+        try {
+            changeLog = await runOptimizationWithProxy(
+                appState, getOptRegion(), step, metric, currentOffset, getLockedSlots(), 
+                (msg) => { if (statusDiv) statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ ${msg}</span>`; },
+                triggerEncode,
+                liveUpdateUI,
+                intensityMode,
+                useProxy
+            );
+        } finally {
+            abortBtn.remove();
+        }
+
+        const wasAborted = Array.isArray(changeLog) &&
+            changeLog.some(l => String(l).includes('Optimierung abgebrochen'));
+        if (statusDiv) statusDiv.innerHTML = wasAborted
+            ? `<span style='color:#dc3545; font-weight:bold;'>⏹️ Optimierung abgebrochen — Palette auf dem zuletzt erreichten Stand.</span>`
+            : `<span style='color:#28a745; font-weight:bold;'>✅ Optimierung beendet!</span>`;
         selectedTargetSlot = { index: 1, absSlot: (currentOffset + 1) % 256 };
         
         btnBuilder.click(); 

@@ -97,6 +97,53 @@ function computeErrorHistogramSummary(appState, metric, optRegion) {
         .join(" | ");
 }
 
+// ---------------------------------------------------------------------------
+// Fehlergetriebene Kandidaten: Farben, deren Ersetzen am meisten Fehler
+// entfernt. Gewicht = MSE × Pixelanzahl des Fehler-Clusters — dadurch landen
+// die Problemzonen (z. B. helle Glanzlichter) VOR den großen ruhigen Flächen
+// im Paletten-Pool, anders als beim reinen Histogramm (Pixelanzahl).
+// ---------------------------------------------------------------------------
+function getErrorDrivenCandidates(stats, paletteRAM, maxCandidates) {
+    const all = [];
+    const add = (list) => { if (list) for (const e of list) all.push(e); };
+    add(stats.global.top10);
+    for (const b in stats.global.byBitDepth) add(stats.global.byBitDepth[b]);
+
+    all.sort((a, b) => (b.mse * b.count) - (a.mse * a.count));
+
+    const out = [];
+    for (const e of all) {
+        const cand = { r: e.r1, g: e.g1, b: e.b1 };
+        if (colorInPalette(paletteRAM, cand.r, cand.g, cand.b, 12)) continue;
+        if (!isDistinctFromAll(cand, out, MIN_DISTINCT_DIST_SQ)) continue;
+        out.push(cand);
+        if (out.length >= maxCandidates) break;
+    }
+    return out;
+}
+
+// Box-Filter-Downscale für die Proxy-Optimierung (RGBA).
+function downscaleRgba(src, srcW, srcH, dstW, dstH) {
+    const dst = new Uint8ClampedArray(dstW * dstH * 4);
+    const xRatio = srcW / dstW, yRatio = srcH / dstH;
+    for (let y = 0; y < dstH; y++) {
+        const sy0 = Math.floor(y * yRatio);
+        const sy1 = Math.min(srcH, Math.max(sy0 + 1, Math.floor((y + 1) * yRatio)));
+        for (let x = 0; x < dstW; x++) {
+            const sx0 = Math.floor(x * xRatio);
+            const sx1 = Math.min(srcW, Math.max(sx0 + 1, Math.floor((x + 1) * xRatio)));
+            let r = 0, g = 0, b = 0, n = 0;
+            for (let sy = sy0; sy < sy1; sy++) {
+                let o = (sy * srcW + sx0) * 4;
+                for (let sx = sx0; sx < sx1; sx++, o += 4) { r += src[o]; g += src[o + 1]; b += src[o + 2]; n++; }
+            }
+            const d = (y * dstW + x) * 4;
+            dst[d] = r / n; dst[d + 1] = g / n; dst[d + 2] = b / n; dst[d + 3] = 255;
+        }
+    }
+    return dst;
+}
+
 function resolveBankLayout(format, config) {
     const formatsInUse = config?.isMixed ? [...new Set(config.sequence)] : [format];
     const capacities = [...new Set(formatsInUse.map(f => HAM_CONFIGS[f]?.slotsPerBank || 8))].sort((a, b) => a - b);
@@ -115,6 +162,10 @@ function getSlotBitDepths(i, formatsInUse) {
 
 function createBattleArgs(appState, step, metric, currentOffset, optRegion, onWorkerFallback) {
     return {
+        // appState wird mitgeführt, damit Helfer das AKTUELLE Decodiert-Bild
+        // lesen können (appState.decodedImageData wird bei jedem Encode ersetzt;
+        // ein Snapshot hier wäre sofort veraltet).
+        appState,
         origData: appState.originalImageData.data,
         imgW: appState.currentImgW,
         imgH: appState.currentImgH,
@@ -452,31 +503,16 @@ async function refineSlotColorVector(startColor, absSlot, slotIdx, vector, trigg
     const { paletteRAM } = battleArgs;
 
     if (!vector || vector.count === 0) {
-        const totalPixels = battleArgs.imgW * battleArgs.imgH;
-        const stats = computeDetailedAnalysis(
-            battleArgs.origData, battleArgs.origData, 
-            battleArgs.imgW, battleArgs.imgH, 0, totalPixels,
-            battleArgs.step, battleArgs.metric, null, battleArgs.optRegion
-        );
-
-        const topErrors = stats.global.top10 || [];
-        const reactCandidates = topErrors.slice(0, 4).map(e => ({ r: e.r1, g: e.g1, b: e.b1 }));
-
-        if (reactCandidates.length > 0) {
-            updateOptProgress(`Slot ${slotIdx} hat 0 Nutzungen — Versuche Reaktivierung mit Fehlerfarben...`);
-            const baseline = await runWorkerBattle([startColor], battleArgs, absSlot);
-            const best = await runWorkerBattleAll(reactCandidates, battleArgs, absSlot);
-
-            if (best[0] && best[0].score < baseline.score) {
-                writeSlotColor(paletteRAM, absSlot, best[0].candidate);
-                updateOptProgress(`🔥 Slot ${slotIdx} reaktiviert mit Fehlerfarbe! [MSE: ${best[0].score.toFixed(2)}]`);
-                renderUIPalette();
-                await new Promise(r => requestAnimationFrame(r));
-                await triggerEncodeFn();
-                await new Promise(r => requestAnimationFrame(r));
-                return { candidate: best[0].candidate, score: best[0].score, didImprove: true };
-            }
-        }
+        // Toter Slot (kein Pixel nutzt ihn) → nichts tun.
+        // Hier stand früher eine "Reaktivierung": sie holte ihre Kandidaten aus
+        // computeDetailedAnalysis(origData, origData). Weil Original gegen
+        // Original überall Fehler 0 ergibt, ist dessen top10 LEER — der Zweig
+        // wurde also nie ausgeführt (nachgeprüft: top10.length === 0). Der
+        // damalige Messwert 35.82 (sehr_schnell, 128², echtes Bild) war somit
+        // schlicht "tote Slots bleiben unverändert".
+        // Echte Reaktivierung ist messbar SCHLECHTER: mit häufigen
+        // Originalfarben 36.81, mit echten Fehlerfarben 38.39. Tote Slots werden
+        // bereits von replaceWeakestSlots und der Schritt-5-Injektion behandelt.
         return { candidate: startColor, score: Infinity, didImprove: false };
     }
 
@@ -577,8 +613,10 @@ async function runVectorLoopDescending(maxSlot, minSlot, maxPasses, appState, ma
     let anyImproved = true;
 
     while (anyImproved && loopPass <= maxPasses) {
+        if (consumeAbort()) { changeLog.push(`⏹️ Abgebrochen (${label}).`); return; }
         anyImproved = false;
         const slotVectors = computeSlotErrorVectors(appState, maxSlots, battleArgs.optRegion);
+        const usageNow = getSlotUsageSummary(appState.latestCommandArray, maxSlots); // 1x pro Pass statt pro Slot
 
         for (let slotIdx = maxSlot; slotIdx >= minSlot; slotIdx--) {
             const absSlot = (currentOffset + slotIdx) % 256;
@@ -586,7 +624,7 @@ async function runVectorLoopDescending(maxSlot, minSlot, maxPasses, appState, ma
 
             updateOptProgress(`${label} (Pass ${loopPass}): Slot ${slotIdx}...`);
             const slotVector = slotVectors[slotIdx];
-            const usageCount = getSlotUsageSummary(appState.latestCommandArray, maxSlots)[slotIdx] || 0;
+            const usageCount = usageNow[slotIdx] || 0;
 
             const startColor = {
                 r: appState.globalPaletteRAM[absSlot * 3],
@@ -738,10 +776,216 @@ async function safeSortPalette(appState, maxSlots, currentOffset, lockedSlots, m
 // Haupt-Pipeline (runHybridOptimization)
 // ---------------------------------------------------------------------------
 
+// Fehlerbeitrag je Slot: Summe der (luma-gewichteten) Fehler aller Pixel, die
+// aktuell von diesem Slot als Anker abhängen. Zeigt, welcher Slot am wenigsten
+// zur Bildqualität beiträgt — der lohnt sich am ehesten zu ersetzen.
+function computeSlotErrorContribution(appState, maxSlots, optRegion) {
+    const commands = appState.latestCommandArray;
+    const orig = appState.originalImageData.data;
+    const dec = appState.decodedImageData.data;
+    const imgW = appState.currentImgW;
+    const totalPixels = imgW * appState.currentImgH;
+    const out = Array.from({ length: maxSlots }, () => ({ err: 0, count: 0 }));
+    if (!commands || commands.length === 0) return out;
+
+    const useRegion = optRegion && optRegion.width > 0 && optRegion.height > 0;
+    let activeSlot = -1, x = 0, y = 0;
+
+    for (let i = 0; i < totalPixels; i++) {
+        const cmd = commands[i];
+        if (cmd && cmd.isAnchor && (HAM_CONFIGS[cmd.format]?.slotsPerBank > 0)) activeSlot = cmd.anchorIdx;
+        const cx = x, cy = y;
+        if (++x === imgW) { x = 0; y++; }
+        if (activeSlot < 0 || activeSlot >= maxSlots) continue;
+        if (useRegion && (cx < optRegion.x || cx >= optRegion.x + optRegion.width || cy < optRegion.y || cy >= optRegion.y + optRegion.height)) continue;
+
+        const o = i * 4;
+        const dR = orig[o] - dec[o], dG = orig[o + 1] - dec[o + 1], dB = orig[o + 2] - dec[o + 2];
+        out[activeSlot].err += (dR * dR * LUMA_W_R) + (dG * dG * LUMA_W_G) + (dB * dB * LUMA_W_B);
+        out[activeSlot].count++;
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// SCHWÄCHSTER-SLOT-ERSATZ
+//
+// Billiger Ersatz für den Kandidaten-Battle: Die Slots mit dem geringsten
+// Fehlerbeitrag werden durch die stärksten Fehlerfarben ersetzt (statt pro Slot
+// maxCores Kandidaten komplett zu encodieren). Nach jeder Runde wird geprüft,
+// ob es besser wurde — sonst Rücksetzen (wie safeSortPalette).
+// ---------------------------------------------------------------------------
+async function replaceWeakestSlots(appState, maxSlots, currentOffset, lockedSlots, step, metric, optRegion,
+                                   triggerEncodeFn, updateOptProgress, renderUIPalette, changeLog,
+                                   rounds = 3, perRound = 3) {
+    const totalPixels = appState.currentImgW * appState.currentImgH;
+    let improvedAny = false;
+
+    for (let round = 1; round <= rounds; round++) {
+        if (consumeAbort()) { changeLog.push('⏹️ Abgebrochen (Schwächster-Slot-Ersatz).'); break; }
+        const startMse = measureCurrentMse(appState, metric, optRegion);
+        const backup = new Uint8Array(appState.globalPaletteRAM);
+
+        const contrib = computeSlotErrorContribution(appState, maxSlots, optRegion);
+        const order = [];
+        for (let i = 1; i < maxSlots; i++) {
+            const absSlot = (currentOffset + i) % 256;
+            if (lockedSlots.has(absSlot)) continue;
+            order.push({ slot: i, err: contrib[i].err, count: contrib[i].count });
+        }
+        order.sort((a, b) => a.err - b.err);          // geringster Beitrag zuerst
+
+        const stats = computeDetailedAnalysis(
+            appState.originalImageData.data, appState.decodedImageData.data,
+            appState.currentImgW, appState.currentImgH, 0, totalPixels,
+            step, metric, HAM_CONFIGS[appState.currentFormat], optRegion
+        );
+        const cands = getErrorDrivenCandidates(stats, appState.globalPaletteRAM, perRound + 4);
+        if (cands.length === 0) {
+            changeLog.push(`♻️ Schwächster-Slot-Ersatz Runde ${round}: keine neuen Fehlerfarben mehr.`);
+            break;
+        }
+
+        let placed = 0;
+        for (let k = 0; k < perRound && k < order.length && k < cands.length; k++) {
+            writeSlotColor(appState.globalPaletteRAM, (currentOffset + order[k].slot) % 256, cands[k]);
+            placed++;
+        }
+        if (placed === 0) break;
+
+        renderUIPalette();
+        updateOptProgress(`Schwächster-Slot-Ersatz Runde ${round}: ${placed} Slots ersetzt...`, 0, 1);
+        await triggerEncodeFn();
+        const newMse = measureCurrentMse(appState, metric, optRegion);
+
+        if (newMse < startMse - 0.005) {
+            improvedAny = true;
+            const list = order.slice(0, placed).map(t => `S${t.slot}(${t.count}px)`).join(', ');
+            changeLog.push(`♻️ <span style="color:#28a745;">Schwächster-Slot-Ersatz Runde ${round}: ${placed} schwache Slots ersetzt [${list}] → MSE ${newMse.toFixed(2)} (−${(startMse - newMse).toFixed(2)})</span>`);
+        } else {
+            appState.globalPaletteRAM.set(backup);
+            await triggerEncodeFn();
+            changeLog.push(`♻️ Schwächster-Slot-Ersatz Runde ${round}: verworfen (kein Gewinn).`);
+            break;
+        }
+    }
+    return improvedAny;
+}
+
+// ---------------------------------------------------------------------------
+// ABBRUCH (#4 Auto-Budget): Die UI kann eine laufende Optimierung abbrechen.
+// Das Flag wird an Stufen-/Schleifengrenzen geprüft und dabei zurückgesetzt.
+// ---------------------------------------------------------------------------
+let abortRequested = false;
+
+export function requestOptimizationAbort() { abortRequested = true; }
+
+function consumeAbort() {
+    if (!abortRequested) return false;
+    abortRequested = false;
+    return true;
+}
+
+// Dauer-Schätzung.
+//
+// Erste Wahl: der zuletzt gelaufene Durchlauf DESSELBEN Verfahrens, hochgerechnet
+// auf die aktuelle Pixelzahl (Encode-Zeit ist ~linear in der Pixelzahl). Das ist
+// belastbar, weil es Maschine, Worker-Anzahl und Bildgröße schon enthält.
+//
+// Sonst ein grober Faktor auf EINEN Encode. Der Faktor ist bewusst getrennt für
+// In-Thread-Betrieb (kein Worker verfügbar: pro Kandidat fallen Encode + Decode +
+// Bewertung an, ~4-8x teurer als ein reiner Encode) und für echte Worker.
+// Gemessen an einem echten 876x882-Foto:
+//   Browser: Proxy-Encode 912 ms, "langsam" 184.6 s → Faktor 202; "normal"
+//            (= Stufen 1-4 + 4a + 4c) 107.3 s → 118; "sehr_schnell" ~99.
+//   Node/In-Thread (128²): 90 / 307 / 558.
+const FALLBACK_FACTOR = {
+    threaded: { sehr_schnell: 90, normal: 310, langsam: 560 },
+    workers: { sehr_schnell: 100, normal: 120, langsam: 200 }
+};
+
+export function estimateOptimizationMs(singleEncodeMs, intensity, pixels) {
+    const prev = lastRunStats;
+    if (prev && prev.intensity === intensity && prev.encodeCount >= 3 && prev.pixels > 0) {
+        const scale = pixels ? pixels / prev.pixels : 1;
+        return { ms: Math.round(prev.totalMs * scale), exact: true };
+    }
+    const tbl = (typeof Worker === 'undefined') ? FALLBACK_FACTOR.threaded : FALLBACK_FACTOR.workers;
+    const factor = tbl[intensity] || tbl.langsam;
+    return { ms: Math.round(singleEncodeMs * factor), exact: false };
+}
+
+// Bilanz des letzten Laufs: Anzahl Encodes, Dauer und Pixelzahl. Damit stützt
+// sich die Schätzung auf das GEMESSENE Tempo statt auf fest verdrahtete
+// Faktoren — die hängen stark von Maschine und Worker-Anzahl ab (im Browser mit
+// echten Workern war "langsam" 2,2x schneller als der Node-Faktor sagte).
+let lastRunStats = null;
+
+// Die Proxy-Optimierung umfasst mehr als die Pipeline (Vorab-Encode + Anwenden
+// auf das Vollbild). Diese Randzeiten werden nachgetragen, damit die Schätzung
+// des nächsten Laufs die GESAMTE Operation abdeckt — sonst fehlten z. B. auf
+// einem 876x882-Bild rund 8 s.
+export function setLastRunTotal(totalMs) {
+    if (lastRunStats && totalMs > 0) lastRunStats.totalMs = totalMs;
+}
+
+// Live-Restdauer über STUFEN-ANTEILE statt über Encode-Zahlen.
+//
+// Die absolute Anzahl Encodes ist umgebungsabhängig (maxCores bestimmt die
+// Kandidatenzahl im Battle: Node/4 → 83, Browser/16 → ~200), die relativen
+// Stufen-Anteile dagegen nicht. Gemessen an einem echten 876x882-Foto,
+// Node-In-Thread vs. Browser bei "langsam":
+//   Stufe 2: 7.1% vs 7.7% | Stufe 4: 6.7% vs 5.9%
+//   4a:     29.4% vs 23.4% | 4c:    14.1% vs 18.5% | Schritt 5: 40.3% vs 38.2%
+// Die Gewichte sind die Mittelwerte daraus; sie werden in der Reihenfolge der
+// pushMseStand()-Aufrufe abgearbeitet.
+const STAGE_WEIGHTS = {
+    sehr_schnell: [0.06, 0.45, 0.02, 0.42, 0.05],
+    normal: [0.03, 0.13, 0.00, 0.11, 0.45, 0.28],
+    langsam: [0.02, 0.07, 0.00, 0.06, 0.26, 0.03, 0.16, 0.39]
+};
+
 export async function runHybridOptimization(appState, optRegion, step, metric, currentOffset, lockedSlots, updateOptProgress, triggerEncodeFn, renderUIPalette, intensity = 'langsam') {
     const globalStart = performance.now();
+    // Jeden Encode mitzählen: die Laufzeit der Pipeline ist (Anzahl Encodes) ×
+    // (Zeit pro Encode). Die Anzahl hängt nur vom Verfahren ab, die Zeit pro
+    // Encode von Maschine/Bildgröße — daher ist der Zähler die verlässliche
+    // Bezugsgröße für eine Dauer-Schätzung.
+    let encodeCount = 0;
+    const rawTriggerEncode = triggerEncodeFn;
+    const countedEncode = async () => { encodeCount++; return await rawTriggerEncode(); };
+    triggerEncodeFn = countedEncode;
+
     const config = HAM_CONFIGS[appState.currentFormat];
     const totalPixels = appState.currentImgW * appState.currentImgH;
+
+    // Live-Restdauer: aus dem BEOBACHTETEN Tempo und dem Anteil der bereits
+    // erledigten Stufen. Das ist ehrlicher als ein a-priori-Faktor, weil pro
+    // Kandidat Encode, Decode und Bewertung zusammenkommen und je nach Maschine
+    // und Worker-Anzahl stark variieren.
+    //
+    // Wichtig: die Hochrechnung wird nur an STUFENGRENZEN neu berechnet und
+    // dazwischen konstant gehalten. Sonst wird die Restzeit mitten in einer
+    // langen Stufe immer weiter aufgebläht (die verstrichene Zeit wächst, der
+    // fertige Stufenanteil nicht) — gemessen ergab das "4 min" statt 88 s.
+    const stageWeights = STAGE_WEIGHTS[intensity] || STAGE_WEIGHTS.langsam;
+    let stagesDone = 0;
+    let projectedTotalMs = null;
+    // Ein früherer Lauf desselben Verfahrens ist die beste Grundlage.
+    if (lastRunStats && lastRunStats.intensity === intensity && lastRunStats.pixels > 0) {
+        projectedTotalMs = lastRunStats.totalMs * (totalPixels / lastRunStats.pixels);
+    }
+    const fmtDur = (ms) => ms >= 90000 ? `${Math.round(ms / 60000)} min` : `${Math.max(1, Math.round(ms / 1000))} s`;
+    const rawUpdateOptProgress = updateOptProgress;
+    updateOptProgress = (msg, cur, total) => {
+        let suffix = '';
+        if (projectedTotalMs) {
+            const elapsed = performance.now() - globalStart;
+            const remain = Math.max(0, projectedTotalMs - elapsed);
+            suffix = ` ⏳ noch ca. ${fmtDur(remain)} (Stufe ${stagesDone}/${stageWeights.length})`;
+        }
+        return rawUpdateOptProgress(msg + suffix, cur, total);
+    };
     const { formatsInUse, maxSlots } = resolveBankLayout(appState.currentFormat, config);
     const maxCores = navigator.hardwareConcurrency || 4;
     const changeLog = [];
@@ -764,6 +1008,41 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
             `</div>`
         );
         mseStand = mse;
+        // Stufengrenze: Hochrechnung neu berechnen (nur wenn kein früherer Lauf
+        // desselben Verfahrens als Grundlage vorliegt).
+        stagesDone++;
+        if (!lastRunStats || lastRunStats.intensity !== intensity) {
+            const doneWeight = stageWeights.slice(0, stagesDone).reduce((a, b) => a + b, 0);
+            if (doneWeight >= 0.03) {
+                projectedTotalMs = (performance.now() - globalStart) / doneWeight;
+            }
+        }
+    };
+
+    // Ein evtl. noch gesetztes Abbruch-Flag aus einem früheren Lauf verwerfen,
+    // sonst bricht die nächste Optimierung sofort ab.
+    abortRequested = false;
+    let aborted = false;
+    // Prüft das Abbruch-Flag an einer Stufengrenze und beendet die Pipeline
+    // wirklich (ein "break" in einer Schleife ließ früher alle Folgestufen
+    // trotzdem noch komplett durchlaufen).
+    const abortNow = () => {
+        if (!consumeAbort()) return false;
+        aborted = true;
+        changeLog.push('<div style="color:#dc3545; font-weight:bold; margin-top:8px;">⏹️ Optimierung abgebrochen — bisherige Palette bleibt erhalten.</div>');
+        return true;
+    };
+
+    // Gemeinsamer Ausstieg aller Zweige: protokolliert die Encode-Bilanz, aus der
+    // sich die Dauer-Schätzung ableitet (Anzahl Encodes × Zeit pro Encode).
+    const finish = () => {
+        const totalMs = performance.now() - globalStart;
+        // Ein abgebrochener Lauf taugt nicht als Zeitgrundlage für den nächsten.
+        if (!aborted) {
+            lastRunStats = { intensity, encodeCount, totalMs, pixels: totalPixels };
+        }
+        console.log(`[Palette] ${intensity}: ${encodeCount} Encodes, ${stagesDone}/${stageWeights.length} Stufen in ${(totalMs / 1000).toFixed(2)}s${aborted ? ' (abgebrochen)' : ''}`);
+        return changeLog;
     };
 
     // =======================================================================
@@ -778,12 +1057,39 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
         step, 1000, appState.globalPaletteRAM, currentOffset, optRegion
     );
 
+    // Fehlergetriebene Kandidaten: die Farben, deren Fehler am meisten wehtut
+    // (MSE × Anzahl). Ohne sie füllt der reine Histogramm-Prefill den Pool mit
+    // den großen ruhigen Flächen und die Problemzonen (helle Glanzlichter,
+    // Kanten) bekommen zu wenige Slots.
+    const statsPrefill = computeDetailedAnalysis(
+        appState.originalImageData.data, appState.decodedImageData.data,
+        appState.currentImgW, appState.currentImgH, 0, totalPixels, step, metric, config, optRegion
+    );
+    const errCands = getErrorDrivenCandidates(statsPrefill, appState.globalPaletteRAM, maxSlots);
+
+    // Mischung: 1 fehlergetriebene Farbe auf 2 Histogrammfarben (fehlergetriebene
+    // zuerst, weil die niedrigen Pool-Slots von allen Phasen erreichbar sind).
+    // 1:1 hatte sich bei 256x256 als leicht nachteilig erwiesen (verdrängt gut
+    // gewählte Histogrammfarben), bei 128x128 aber stark geholfen.
+    const ERROR_PREFILL_EVERY = 3;
+    const poolCandidates = [];
+    {
+        let ei = 0, hi = 0, k = 0;
+        while (hi < hist.length || ei < errCands.length) {
+            if (ei < errCands.length && (k % ERROR_PREFILL_EVERY) === 0) poolCandidates.push(errCands[ei++]);
+            else if (hi < hist.length) poolCandidates.push(hist[hi++]);
+            else poolCandidates.push(errCands[ei++]);
+            k++;
+        }
+    }
+    changeLog.push(`🧪 Prefill-Mix: ${errCands.length} fehlergetriebene + ${hist.length} Histogramm-Farben (1:${ERROR_PREFILL_EVERY - 1})`);
+
     let prefillIdx = 0;
     for (let i = 8; i < maxSlots; i++) {
         const absSlot = (currentOffset + i) % 256;
         if (lockedSlots.has(absSlot)) continue;
-        if (prefillIdx < hist.length) {
-            writeSlotColor(appState.globalPaletteRAM, absSlot, hist[prefillIdx]);
+        if (prefillIdx < poolCandidates.length) {
+            writeSlotColor(appState.globalPaletteRAM, absSlot, poolCandidates[prefillIdx]);
             prefillIdx++;
         }
     }
@@ -805,6 +1111,7 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     // =======================================================================
     // STUFE 2: HAM04-KASKADE (SLOTS 4–7 BEFÜLLEN & 1x ABSTEIGEND OPTIMIEREN)
     // =======================================================================
+    if (abortNow()) return finish();
     stageStart = performance.now();
     changeLog.push(`<div style="color:#17a2b8; font-weight:bold; margin-top:10px;">--- STUFE 2: HAM04-Kaskade (Slots 4–7) ---</div>`);
     updateOptProgress(`Optimiere HAM04-Zugriff (Slots 4–7)...`);
@@ -859,6 +1166,7 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     pushMseStand("Stufe 2 (HAM04-Kaskade Slots 4–7)", stageStart);
 
     // STUFE 3: REFILL & RE-ERADICATION GESAMTER POOL
+    if (abortNow()) return finish();
     stageStart = performance.now();
     await forceFillUnusedSlots(
         appState, maxSlots, currentOffset, lockedSlots, optRegion, step, metric, config,
@@ -870,6 +1178,7 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     // =======================================================================
     // STUFE 4: HAM03-KASKADE (SLOTS 1–3 BEFÜLLEN & 1x ABSTEIGEND OPTIMIEREN)
     // =======================================================================
+    if (abortNow()) return finish();
     stageStart = performance.now();
     changeLog.push(`<div style="color:#ffc107; font-weight:bold; margin-top:10px;">--- STUFE 4: HAM03-Kaskade (Slots 1–3) ---</div>`);
     updateOptProgress(`Optimiere HAM03-Hauptzugriff (Slots 1–3)...`);
@@ -924,15 +1233,25 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     pushMseStand("Stufe 4 (HAM03-Kaskade Slots 1–3)", stageStart);
 
     if (intensity === 'sehr_schnell') {
+        // Billiger Abschluss: schwächste Slots gegen die stärksten Fehlerfarben
+        // tauschen. Kostet nur wenige Encodes (bricht bei fehlendem Gewinn ab)
+        // und ist der beste Qualitätsgewinn pro Millisekunde in dieser Stufe —
+        // der teure Kandidaten-Battle lohnt sich hier nicht.
+        stageStart = performance.now();
+        changeLog.push(`<div style="color:#28a745; font-size:12px; font-weight:bold; margin-top:6px;">♻️ Schwächster-Slot-Ersatz (billiger Abschluss)</div>`);
+        await replaceWeakestSlots(appState, maxSlots, currentOffset, lockedSlots, step, metric, optRegion,
+            triggerEncodeFn, updateOptProgress, renderUIPalette, changeLog, 4, 3);
+        pushMseStand("Abschluss (Schwächster-Slot-Ersatz)", stageStart);
+
         const totalDurationSec = ((performance.now() - globalStart) / 1000).toFixed(2);
         const endMse = measureCurrentMse(appState, metric, optRegion);
         changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">⚡ Sehr schnelle Optimierung beendet [End-MSE: ${endMse.toFixed(2)} | Gesamtdauer: ${totalDurationSec}s]</div>`);
-        return changeLog;
+        return finish();
     }
 
     // SCHRITT 4: 50/50 USAGE-PARTITIONING (TOP 50% VEKTOR | BOTTOM 50% BATTLE)
     stageStart = performance.now();
-    changeLog.push(`<div style="color:#17a2b8; font-weight:bold; margin-top:10px;">--- SCHRITT 4: Nutzungs-Partitionierung (Top 50% Vektor | Bottom 50% Battle) ---</div>`);
+    changeLog.push(`<div style="color:#17a2b8; font-weight:bold; margin-top:10px;">--- SCHRITT 4: Nutzungs-Partitionierung (Top 50% Vektor | Bottom 50% Ersatz/Battle) ---</div>`);
 
     const usageSummary = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
     const movableSlots = [];
@@ -951,6 +1270,7 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     changeLog.push(`📊 Aufteilung: ${top50Slots.length} Slots in Top 50% (Vektor-Suche), ${bottom50Slots.length} Slots in Bottom 50% (Kandidaten-Battle).`);
 
     // A. Vektor-Suche Top 50% (Absteigend nach Slot-Index sortiert)
+    if (abortNow()) return finish();
     changeLog.push(`<div style="color:#28a745; font-size:12px; font-weight:bold; margin-top:6px;">🔹 Vektor-Liniensuche (Top 50% meistgenutzte Slots)</div>`);
     top50Slots.sort((a, b) => b.slotIdx - a.slotIdx);
     const currentVectors = computeSlotErrorVectors(appState, maxSlots, optRegion);
@@ -974,7 +1294,28 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     }
     pushMseStand("Schritt 4a (Top 50% Vektor-Suche)", stageStart);
 
-    // B. Kandidaten-Battle Bottom 50%
+    // B. Schwächster-Slot-Ersatz (billig): Slots mit dem geringsten Fehlerbeitrag
+    //    werden durch die stärksten Fehlerfarben ersetzt.
+    //
+    //    Messung am ECHTEN Bild 128², jeweils identischer Zustand nach 4a (MSE 31.42):
+    //      • 4b allein (4 Runden x 3):           30.15  in   0.6 s
+    //      • Kandidaten-Battle allein:           29.51  in  10.8 s
+    //      • 4b, DANN Battle:                    29.70  (4b nimmt dem Battle die Kandidaten)
+    //    Pro Sekunde ist 4b ~12x effizienter, aber der Battle erreicht die bessere
+    //    Endqualität. Deshalb: 4b nur dort, wo der Battle nicht läuft.
+    if (intensity === 'langsam') {
+        if (abortNow()) return finish();
+        stageStart = performance.now();
+        changeLog.push(`<div style="color:#28a745; font-size:12px; font-weight:bold; margin-top:6px;">♻️ Schwächster-Slot-Ersatz (Slots mit kleinstem Fehlerbeitrag → Top-Fehlerfarben)</div>`);
+        await replaceWeakestSlots(appState, maxSlots, currentOffset, lockedSlots, step, metric, optRegion,
+            triggerEncodeFn, updateOptProgress, renderUIPalette, changeLog, 8, 4);
+        pushMseStand("Schritt 4b (Schwächster-Slot-Ersatz)", stageStart);
+    } else {
+        changeLog.push(`<div style="color:#888; font-size:11px; margin-top:4px;">♻️ Schwächster-Slot-Ersatz übersprungen — hier übernimmt der Kandidaten-Battle.</div>`);
+    }
+
+    // C. Kandidaten-Battle Bottom 50% (bei "normal" und "langsam")
+    if (abortNow()) return finish();
     stageStart = performance.now();
     changeLog.push(`<div style="color:#e83e8c; font-size:12px; font-weight:bold; margin-top:6px;">🔸 Kandidaten-Battle (Bottom 50% wenigstgenutzte Slots)</div>`);
 
@@ -990,6 +1331,7 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     );
 
     for (const item of bottom50Slots) {
+        if (consumeAbort()) { changeLog.push('⏹️ Abgebrochen (Kandidaten-Battle).'); break; }
         const i = item.slotIdx;
         const absSlot = (currentOffset + i) % 256;
         const bitDepths = getSlotBitDepths(i, formatsInUse);
@@ -1035,35 +1377,44 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
             changeLog.push(`🛡️ Bottom-Slot ${i} (${item.useCount}x): Farbe beibehalten.`);
         }
     }
-    pushMseStand("Schritt 4b (Bottom 50% Candidate Battle)", stageStart);
+    pushMseStand("Schritt 4c (Bottom 50% Candidate Battle)", stageStart);
 
     if (intensity === 'normal') {
         const totalDurationSec = ((performance.now() - globalStart) / 1000).toFixed(2);
         const endMse = measureCurrentMse(appState, metric, optRegion);
         changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">✅ Normale Kaskaden-Optimierung beendet [End-MSE: ${endMse.toFixed(2)} | Gesamtdauer: ${totalDurationSec}s]</div>`);
-        return changeLog;
+        return finish();
     }
 
     // =======================================================================
     // SCHRITT 5: TIEFEN-OPTIMIERUNG (SIMULTAN-SHIFT 31..8 & 3x ANKER 7→1)
     // =======================================================================
+    if (abortNow()) return finish();
     stageStart = performance.now();
     changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">--- SCHRITT 5: Tiefen-Optimierung (Simultan-Pool 31→8 & 3x Anker 7→1) ---</div>`);
 
     // Pre-Step 5 Auto-Injection für tote/wenig genutzte Slots (< 5 Nutzungen)
     const preStep5Usage = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
+    const lowUseSlots = [];
     for (let i = 1; i < maxSlots; i++) {
         const absSlot = (currentOffset + i) % 256;
-        if (!lockedSlots.has(absSlot) && preStep5Usage[i] < 5) {
-            const stats = computeDetailedAnalysis(
-                appState.originalImageData.data, appState.decodedImageData.data,
-                appState.currentImgW, appState.currentImgH, 0, totalPixels, step, metric, config, optRegion
-            );
-            const topErr = stats.global.top10[0];
-            if (topErr) {
-                writeSlotColor(appState.globalPaletteRAM, absSlot, { r: topErr.r1, g: topErr.g1, b: topErr.b1 });
-                changeLog.push(`💉 Auto-Injection vor Schritt 5: Slot ${i} mit HAM-Fehler belegt.`);
-            }
+        if (!lockedSlots.has(absSlot) && preStep5Usage[i] < 5) lowUseSlots.push({ i, absSlot });
+    }
+    if (lowUseSlots.length > 0) {
+        // Die Analyse ist innerhalb dieser Schleife konstant (das Decodiert-Bild
+        // ändert sich erst beim nächsten Encode) — daher EINMAL berechnen und
+        // daraus UNTERSCHIEDLICHE Fehlerfarben ziehen. Vorher bekamen alle Slots
+        // dieselbe Farbe top10[0], was den Pool mit Duplikaten gefüllt hat.
+        const stats5 = computeDetailedAnalysis(
+            appState.originalImageData.data, appState.decodedImageData.data,
+            appState.currentImgW, appState.currentImgH, 0, totalPixels, step, metric, config, optRegion
+        );
+        const injCands = getErrorDrivenCandidates(stats5, appState.globalPaletteRAM, lowUseSlots.length + 8);
+        for (let k = 0; k < lowUseSlots.length; k++) {
+            const cand = injCands[k];
+            if (!cand) break;
+            writeSlotColor(appState.globalPaletteRAM, lowUseSlots[k].absSlot, cand);
+            changeLog.push(`💉 Auto-Injection vor Schritt 5: Slot ${lowUseSlots[k].i} mit Fehlerfarbe RGB(${cand.r}, ${cand.g}, ${cand.b}) belegt.`);
         }
     }
     await triggerEncodeFn();
@@ -1073,6 +1424,7 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     let lastPassMse = measureCurrentMse(appState, metric, optRegion);
 
     while (passSlow <= MAX_SLOW_PASSES) {
+        if (consumeAbort()) { changeLog.push('⏹️ Abgebrochen (Schritt 5).'); break; }
         // 1. SIMULTANER PARALLELER SHIFT FÜR ALLE POOL-SLOTS (31 DOWN TO 8)
         updateOptProgress(`Pass ${passSlow}: Simultaner Vektor-Shift für Basis-Slots 31→8...`);
         await refineAllPoolSlotsParallel(8, maxSlots - 1, appState, maxSlots, currentOffset, lockedSlots, triggerEncodeFn, metric, optRegion, changeLog);
@@ -1108,7 +1460,127 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     changeLog.push(`<div style="color:#ccc; font-size:10px; background:#111; padding:4px; border-radius:3px;">Nutzung: ${endUsageStr || "Keine Anker verwendet"}</div>`);
     changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:5px;">Ergebnis: End-MSE ${endMse.toFixed(2)} | Gesamtdauer: ${totalDurationSec}s</div>`);
 
-    return changeLog;
+    return finish();
+}
+
+// ---------------------------------------------------------------------------
+// PROXY-OPTIMIERUNG
+//
+// Die Optimierung kostet pro Durchlauf einen kompletten Bild-Encode. Auf einem
+// 876x882-Bild dauert das Minuten. Da die Palette (31 Farben) kaum von der
+// Auflösung abhängt, wird sie auf einem Vorschaubild optimiert und danach auf
+// das Original angewendet. Messung an einem echten 876x882-Foto:
+//   volle Auflösung (extrapoliert) ~13 min  |  Proxy 256x256: 67 s
+//   Ergebnis auf voller Auflösung: MSE 33.6 statt 427 (leere Palette).
+// ---------------------------------------------------------------------------
+const PROXY_MAX_SIDE = 320;
+const PROXY_FORCE_ABOVE = 512;   // ab dieser Kantenlänge wird der Proxy erzwungen
+
+export async function runOptimizationWithProxy(appState, optRegion, step, metric, currentOffset, lockedSlots,
+                                               updateOptProgress, triggerEncodeFn, renderUIPalette,
+                                               intensity = 'langsam', useProxy = true) {
+    const W = appState.currentImgW, H = appState.currentImgH;
+    const maxSide = Math.max(W, H);
+
+    // Auto-Budget: sehr große Bilder werden IMMER über den Proxy optimiert —
+    // eine Vollbild-Optimierung dauert dort viele Minuten.
+    let forced = false;
+    if (maxSide > PROXY_FORCE_ABOVE && !useProxy) { useProxy = true; forced = true; }
+
+    // Klein genug (oder Proxy abgewählt) → direkt optimieren
+    if (!useProxy || maxSide <= PROXY_MAX_SIDE) {
+        return await runHybridOptimization(appState, optRegion, step, metric, currentOffset, lockedSlots,
+            updateOptProgress, triggerEncodeFn, renderUIPalette, intensity);
+    }
+
+    const scale = PROXY_MAX_SIDE / maxSide;
+    const pw = Math.max(16, Math.round(W * scale));
+    const ph = Math.max(16, Math.round(H * scale));
+    const proxyOpStart = Date.now();
+
+    // Zustand sichern (die Palette ist das Ergebnis und bleibt erhalten)
+    const saved = {
+        original: appState.originalImageData,
+        modified: appState.modifiedImageData,
+        decoded: appState.decodedImageData,
+        error: appState.errorViewData,
+        commands: appState.latestCommandArray,
+        packed: appState.latestPackedData,
+        commandSource: appState.commandSource,
+        W, H
+    };
+    const toProxy = (img) => img
+        ? { width: pw, height: ph, data: downscaleRgba(img.data, W, H, pw, ph) }
+        : null;
+
+    appState.originalImageData = toProxy(saved.original);
+    appState.modifiedImageData = toProxy(saved.modified);
+    appState.decodedImageData = null;
+    appState.errorViewData = null;
+    appState.latestCommandArray = null;
+    appState.latestPackedData = null;
+    appState.commandSource = null;
+    appState.currentImgW = pw;
+    appState.currentImgH = ph;
+
+    const proxyRegion = (optRegion && optRegion.width > 0)
+        ? {
+            x: Math.max(0, Math.round(optRegion.x * scale)),
+            y: Math.max(0, Math.round(optRegion.y * scale)),
+            width: Math.max(1, Math.round(optRegion.width * scale)),
+            height: Math.max(1, Math.round(optRegion.height * scale))
+        }
+        : null;
+
+    const factor = (maxSide / PROXY_MAX_SIDE).toFixed(1);
+    const autoTxt = forced ? ' — automatisch aktiviert (Bild > ' + PROXY_FORCE_ABOVE + ' px)' : '';
+    updateOptProgress(`Proxy ${pw}x${ph} (${factor}x kleiner)${autoTxt}: Vorab-Encode...`, 0, 1);
+
+    // Einmal mit der aktuellen Palette encodieren: die Pipeline braucht ein
+    // Decodiert-Bild (Prefill-Analyse, Kaskaden), genau wie im normalen Ablauf.
+    const tEnc0 = Date.now();
+    await triggerEncodeFn();
+    const proxyEncodeMs = Math.max(1, Date.now() - tEnc0);
+
+    // Dauer-Schätzung: aus dem letzten Lauf desselben Verfahrens (belastbar) oder
+    // grob aus einem Faktor auf einen Encode. Die Live-Anzeige während des Laufs
+    // korrigiert sich danach selbst (siehe updateOptProgress-Wrapper).
+    const { ms: est, exact: estExact } = estimateOptimizationMs(proxyEncodeMs, intensity, pw * ph);
+    const estTxt = est >= 1000 ? `~${Math.round(est / 1000)} s` : `~${est} ms`;
+    const estLabel = estExact ? 'geschätzte Dauer' : 'grobe Schätzung';
+    console.log(`[Palette] Proxy ${pw}x${ph}: Encode ${proxyEncodeMs} ms → ${estLabel} ${estTxt} (${intensity})${autoTxt}`);
+    updateOptProgress(`Proxy ${pw}x${ph} (${factor}x kleiner)${autoTxt}, ${estLabel} ${estTxt}...`, 0, 1);
+
+    let log;
+    try {
+        log = await runHybridOptimization(appState, proxyRegion, step, metric, currentOffset, lockedSlots,
+            updateOptProgress, triggerEncodeFn, renderUIPalette, intensity);
+    } finally {
+        // Originalzustand wiederherstellen; nur die Palette ist das Ergebnis
+        appState.originalImageData = saved.original;
+        appState.modifiedImageData = saved.modified;
+        appState.decodedImageData = saved.decoded;
+        appState.errorViewData = saved.error;
+        appState.latestCommandArray = saved.commands;
+        appState.latestPackedData = saved.packed;
+        appState.commandSource = saved.commandSource;
+        appState.currentImgW = saved.W;
+        appState.currentImgH = saved.H;
+    }
+
+    updateOptProgress(`Palette wird auf ${W}x${H} angewendet...`, 0, 1);
+    await triggerEncodeFn();
+    renderUIPalette();
+    // Gesamtdauer der Proxy-Operation nachtragen (Vorab-Encode + Anwenden).
+    setLastRunTotal(Date.now() - proxyOpStart);
+
+    if (Array.isArray(log)) {
+        // Die Dauer-Schätzung nur in der Statuszeile zu zeigen bringt wenig —
+        // die wird sofort von der ersten Stufe überschrieben. Daher auch hier.
+        log.unshift(`<div style="color:#6f42c1;">⏱️ Proxy-Vorab-Encode ${proxyEncodeMs} ms → ${estLabel} ${estTxt} (${intensity})</div>`);
+        log.unshift(`<div style="color:#6f42c1; font-weight:bold;">🖼️ Proxy-Optimierung: auf ${pw}x${ph} optimiert, dann auf ${W}x${H} angewendet${forced ? ' (Proxy erzwungen: Bild > ' + PROXY_FORCE_ABOVE + ' px)' : ''}.</div>`);
+    }
+    return log;
 }
 
 export async function runManualRefinement(appState, optRegion, step, metric, currentOffset, lockedSlots, updateOptProgress, triggerEncodeFn, renderUIPalette) {
