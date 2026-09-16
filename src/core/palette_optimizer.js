@@ -1,38 +1,7 @@
 // src/core/palette_optimizer.js
 //
 // ===========================================================================
-// HAM-PALETTE OPTIMIZER (HYBRID OPTIMIZATION PIPELINE)
-// ===========================================================================
-// Diese Datei optimiert die Farbpalette (globalPaletteRAM) für Amiga HAM-Formate
-// (HAM06, HAM03, HAM04, Gemischt 63436343 etc.).
-//
-// NEUE OPTIMIERUNGEN & ABLAUF:
-//
-// 1. SCHRITT 1: Pre-Fill & Zero-Usage Eradication (Slots 4..max)
-//    - Befüllt Slots 4..max mit Histogramm-Farben und erzwingt sofortige Vollbelegung.
-//    - Slots 1–3 bleiben vorerst frei.
-//
-// 2. SCHRITT 2: Befüllung der Slots 1–3
-//    - Befüllt Slots 1–3 mit den größten HAM03-/Detail-Fehlerfarben.
-//
-// 3. SCHRITT 3: Vektor-Liniensuche Schleife (Slots 1–3)
-//    - Vektor-Schleife (max. 5 Durchläufe) auf Slots 1–3 bis Konvergenz.
-//
-// 4. SCHRITT 3.5 (NEU): Safe Slot-Sorting nach Nutzung
-//    - Verschiebt alle bisher extrem häufig genutzten Farben (z. B. aus Slot 17/31)
-//      nach vorne auf Slots 1..7 bzw. 1..15, um die Erreichbarkeit in HAM03/HAM04
-//      drastisch zu steigern. Wird nur übernommen, wenn MSE sinkt/gleichbleibt.
-//    --> ENDE DER PIPELINE BEI INTENSITÄT 'sehr_schnell'
-//
-// 5. SCHRITT 4: Nutzungs-Partitionierung (50/50 Split)
-//    - Top 50% (meistgenutzt): Vektor-Liniensuche zur Feinabstimmung.
-//    - Bottom 50% (wenigstgenutzt): Kandidaten-Battle zur Erneuerung schwacher Farben.
-//    --> ENDE DER PIPELINE BEI INTENSITÄT 'normal'
-//
-// 6. SCHRITT 5: Tiefen-Optimierung (Intensität 'langsam')
-//    - Dynamischer Wechselzyklus: Vektor-Liniensuche (von wenigst- bis meistgenutzt)
-//      mit integrierten Mikro-Integer-Schritten (±1, ±2, ±3) kombiniert mit
-//      automatischem Safe Slot-Sorting nach jedem Pass.
+// HAM-PALETTE OPTIMIZER (PARALLEL VECTOR SHIFT 8-31 & DESCENDING ANCHOR LOOP)
 // ===========================================================================
 
 import { HAM_CONFIGS } from '../codecs/configs.js';
@@ -54,7 +23,7 @@ const MIN_DISTINCT_DIST_SQ = 576;
 let workerFallbackWarned = false;
 
 // ---------------------------------------------------------------------------
-// Helfer & Distanzfunktionen
+// Helfer & Statistiken
 // ---------------------------------------------------------------------------
 
 function colorDistanceSq(a, b) {
@@ -89,6 +58,43 @@ function colorDistinctFromPalette(paletteRAM, color, minDistSq) {
         if (colorDistanceSq(color, { r, g, b }) < minDistSq) return false;
     }
     return true;
+}
+
+function computeErrorHistogramSummary(appState, metric, optRegion) {
+    const orig = appState.originalImageData.data;
+    const dec = appState.decodedImageData.data;
+    const imgW = appState.currentImgW;
+    const totalPixels = imgW * appState.currentImgH;
+    const useRegion = optRegion && optRegion.width > 0 && optRegion.height > 0;
+
+    const buckets = { "0-4": 0, "5-16": 0, "17-36": 0, "37-64": 0, ">64": 0 };
+    let count = 0;
+
+    for (let i = 0; i < totalPixels; i++) {
+        const x = i % imgW;
+        const y = Math.floor(i / imgW);
+        if (useRegion && (x < optRegion.x || x >= optRegion.x + optRegion.width || y < optRegion.y || y >= optRegion.y + optRegion.height)) {
+            continue;
+        }
+        const idx = i * 4;
+        const dR = orig[idx] - dec[idx];
+        const dG = orig[idx + 1] - dec[idx + 1];
+        const dB = orig[idx + 2] - dec[idx + 2];
+        const errSq = (dR * dR * LUMA_W_R) + (dG * dG * LUMA_W_G) + (dB * dB * LUMA_W_B);
+
+        if (errSq <= 4) buckets["0-4"]++;
+        else if (errSq <= 16) buckets["5-16"]++;
+        else if (errSq <= 36) buckets["17-36"]++;
+        else if (errSq <= 64) buckets["37-64"]++;
+        else buckets[">64"]++;
+        count++;
+    }
+
+    if (count === 0) return "";
+
+    return Object.entries(buckets)
+        .map(([k, v]) => `[${k}]: ${((v / count) * 100).toFixed(1)}%`)
+        .join(" | ");
 }
 
 function resolveBankLayout(format, config) {
@@ -383,28 +389,116 @@ async function runWorkerBattle(candidates, args, absSlot) {
 }
 
 // ---------------------------------------------------------------------------
-// Vektor-Feinabstimmung (inklusive Mikro-Integer-Schritten ±1, ±2, ±3)
+// SIMULTANE PARALLELE VEKTOR-OPTIMIERUNG (SLOTS 8–31 IN EINEM RUTSCH)
+// ---------------------------------------------------------------------------
+
+async function refineAllPoolSlotsParallel(minSlot, maxSlot, appState, maxSlots, currentOffset, lockedSlots, triggerEncodeFn, metric, optRegion, changeLog) {
+    const lastMse = measureCurrentMse(appState, metric, optRegion);
+    const vectors = computeSlotErrorVectors(appState, maxSlots, optRegion);
+    const backupRAM = new Uint8Array(appState.globalPaletteRAM);
+
+    const scalesToTest = [1.0, 0.5, 0.25];
+    let bestMse = lastMse;
+    let bestRAM = null;
+    let bestScale = 0;
+
+    for (const scale of scalesToTest) {
+        appState.globalPaletteRAM.set(backupRAM);
+        let shiftedCount = 0;
+
+        for (let i = minSlot; i <= maxSlot; i++) {
+            const absSlot = (currentOffset + i) % 256;
+            if (lockedSlots.has(absSlot)) continue;
+
+            const v = vectors[i];
+            if (v && v.count > 0 && (Math.abs(v.dR) + Math.abs(v.dG) + Math.abs(v.dB) > 0.3)) {
+                appState.globalPaletteRAM[absSlot * 3]     = clamp(Math.round(backupRAM[absSlot * 3]     + v.dR * scale), 0, 255);
+                appState.globalPaletteRAM[absSlot * 3 + 1] = clamp(Math.round(backupRAM[absSlot * 3 + 1] + v.dG * scale), 0, 255);
+                appState.globalPaletteRAM[absSlot * 3 + 2] = clamp(Math.round(backupRAM[absSlot * 3 + 2] + v.dB * scale), 0, 255);
+                shiftedCount++;
+            }
+        }
+
+        if (shiftedCount === 0) continue;
+
+        await triggerEncodeFn();
+        const newMse = measureCurrentMse(appState, metric, optRegion);
+
+        if (newMse < bestMse - 0.005) {
+            bestMse = newMse;
+            bestRAM = new Uint8Array(appState.globalPaletteRAM);
+            bestScale = scale;
+        }
+    }
+
+    if (bestRAM) {
+        appState.globalPaletteRAM.set(bestRAM);
+        await triggerEncodeFn();
+        const diff = lastMse - bestMse;
+        changeLog.push(`⚡ Simultan-Vektor-Shift (Slots ${minSlot}–${maxSlot}, ×${(bestScale*100).toFixed(0)}%): [MSE: ${bestMse.toFixed(2)} (−${diff.toFixed(2)})]`);
+        return true;
+    } else {
+        appState.globalPaletteRAM.set(backupRAM);
+        await triggerEncodeFn();
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Single-Slot Vektor-Feinabstimmung
 // ---------------------------------------------------------------------------
 
 async function refineSlotColorVector(startColor, absSlot, slotIdx, vector, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette) {
     const { paletteRAM } = battleArgs;
+
+    if (!vector || vector.count === 0) {
+        const totalPixels = battleArgs.imgW * battleArgs.imgH;
+        const stats = computeDetailedAnalysis(
+            battleArgs.origData, battleArgs.origData, 
+            battleArgs.imgW, battleArgs.imgH, 0, totalPixels,
+            battleArgs.step, battleArgs.metric, null, battleArgs.optRegion
+        );
+
+        const topErrors = stats.global.top10 || [];
+        const reactCandidates = topErrors.slice(0, 4).map(e => ({ r: e.r1, g: e.g1, b: e.b1 }));
+
+        if (reactCandidates.length > 0) {
+            updateOptProgress(`Slot ${slotIdx} hat 0 Nutzungen — Versuche Reaktivierung mit Fehlerfarben...`);
+            const baseline = await runWorkerBattle([startColor], battleArgs, absSlot);
+            const best = await runWorkerBattleAll(reactCandidates, battleArgs, absSlot);
+
+            if (best[0] && best[0].score < baseline.score) {
+                writeSlotColor(paletteRAM, absSlot, best[0].candidate);
+                updateOptProgress(`🔥 Slot ${slotIdx} reaktiviert mit Fehlerfarbe! [MSE: ${best[0].score.toFixed(2)}]`);
+                renderUIPalette();
+                await new Promise(r => requestAnimationFrame(r));
+                await triggerEncodeFn();
+                await new Promise(r => requestAnimationFrame(r));
+                return { candidate: best[0].candidate, score: best[0].score, didImprove: true };
+            }
+        }
+        return { candidate: startColor, score: Infinity, didImprove: false };
+    }
+
+    const vectorMag = Math.abs(vector.dR) + Math.abs(vector.dG) + Math.abs(vector.dB);
+    if (vectorMag < 0.3) {
+        return { candidate: startColor, score: Infinity, didImprove: false };
+    }
+
     const baseline = await runWorkerBattle([startColor], battleArgs, absSlot);
 
-    // 1. Skalierte Vektor-Kandidaten
-    const candidates = VECTOR_SCALES.map(scale => ({
+    const rawCandidates = VECTOR_SCALES.map(scale => ({
         r: clamp(Math.round(startColor.r + vector.dR * scale), 0, 255),
         g: clamp(Math.round(startColor.g + vector.dG * scale), 0, 255),
         b: clamp(Math.round(startColor.b + vector.dB * scale), 0, 255),
         scale
     }));
 
-    // 2. Ergaenze Mikro-Integer-Schritte entlang der Vektorrichtung (verhindert Fließkomma-Abrundungsfehler)
     const signR = Math.sign(vector.dR);
     const signG = Math.sign(vector.dG);
     const signB = Math.sign(vector.dB);
-    
     for (const step of [1, 2, 3]) {
-        candidates.push({
+        rawCandidates.push({
             r: clamp(startColor.r + signR * step, 0, 255),
             g: clamp(startColor.g + signG * step, 0, 255),
             b: clamp(startColor.b + signB * step, 0, 255),
@@ -412,7 +506,47 @@ async function refineSlotColorVector(startColor, absSlot, slotIdx, vector, trigg
         });
     }
 
-    const best = await runWorkerBattle(candidates, battleArgs, absSlot);
+    const uniqueCandidates = [];
+    const seen = new Set([`${startColor.r},${startColor.g},${startColor.b}`]);
+
+    for (const cand of rawCandidates) {
+        const key = `${cand.r},${cand.g},${cand.b}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            uniqueCandidates.push(cand);
+        }
+    }
+
+    if (uniqueCandidates.length < POOL_CAP) {
+        const altVariations = [
+            { r: signR * 2, g: -signG * 2, b: signB * 2 },
+            { r: -signR * 2, g: signG * 2, b: -signB * 2 },
+            { r: signR * 3, g: 0, b: 0 },
+            { r: 0, g: signG * 3, b: 0 },
+            { r: 0, g: 0, b: signB * 3 }
+        ];
+
+        for (const alt of altVariations) {
+            if (uniqueCandidates.length >= POOL_CAP) break;
+            const cand = {
+                r: clamp(startColor.r + alt.r, 0, 255),
+                g: clamp(startColor.g + alt.g, 0, 255),
+                b: clamp(startColor.b + alt.b, 0, 255),
+                scale: 0.99
+            };
+            const key = `${cand.r},${cand.g},${cand.b}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                uniqueCandidates.push(cand);
+            }
+        }
+    }
+
+    if (uniqueCandidates.length === 0) {
+        return { candidate: startColor, score: baseline.score, didImprove: false };
+    }
+
+    const best = await runWorkerBattle(uniqueCandidates, battleArgs, absSlot);
 
     if (best.score >= baseline.score) {
         return { candidate: startColor, score: baseline.score, didImprove: false };
@@ -434,10 +568,40 @@ async function refineSlotColorVector(startColor, absSlot, slotIdx, vector, trigg
     return { candidate: best.candidate, score: best.score, didImprove: true };
 }
 
-function generateHierarchicalSlotOrder(maxSlots) {
-    const order = [];
-    for (let i = 1; i < maxSlots; i++) order.push(i);
-    return order;
+// ---------------------------------------------------------------------------
+// Helper: Absteigender Vektor-Liniensuch-Pass (von maxSlot runter zu minSlot)
+// ---------------------------------------------------------------------------
+
+async function runVectorLoopDescending(maxSlot, minSlot, maxPasses, appState, maxSlots, currentOffset, lockedSlots, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette, changeLog, label) {
+    let loopPass = 1;
+    let anyImproved = true;
+
+    while (anyImproved && loopPass <= maxPasses) {
+        anyImproved = false;
+        const slotVectors = computeSlotErrorVectors(appState, maxSlots, battleArgs.optRegion);
+
+        for (let slotIdx = maxSlot; slotIdx >= minSlot; slotIdx--) {
+            const absSlot = (currentOffset + slotIdx) % 256;
+            if (lockedSlots.has(absSlot)) continue;
+
+            updateOptProgress(`${label} (Pass ${loopPass}): Slot ${slotIdx}...`);
+            const slotVector = slotVectors[slotIdx];
+            const usageCount = getSlotUsageSummary(appState.latestCommandArray, maxSlots)[slotIdx] || 0;
+
+            const startColor = {
+                r: appState.globalPaletteRAM[absSlot * 3],
+                g: appState.globalPaletteRAM[absSlot * 3 + 1],
+                b: appState.globalPaletteRAM[absSlot * 3 + 2]
+            };
+
+            const result = await refineSlotColorVector(startColor, absSlot, slotIdx, slotVector, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette);
+            if (result.didImprove) {
+                anyImproved = true;
+                changeLog.push(`🔥 Slot ${slotIdx} (${label} Pass ${loopPass}): RGB(${result.candidate.r}, ${result.candidate.g}, ${result.candidate.b}) [Nutzung: ${usageCount}x | MSE: ${result.score.toFixed(2)}]`);
+            }
+        }
+        loopPass++;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -507,21 +671,23 @@ async function forceFillUnusedSlots(appState, maxSlots, currentOffset, lockedSlo
 }
 
 // ---------------------------------------------------------------------------
-// Automatische Safe Slot-Sortierung (Sicherheits-Check inklusive)
+// Safe Slot-Sortierung
 // ---------------------------------------------------------------------------
 
-async function safeSortPalette(appState, maxSlots, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette) {
+async function safeSortPaletteRange(minSlot, maxSlot, appState, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette) {
+    const tStart = performance.now();
     const startMse = measureCurrentMse(appState, metric, optRegion);
-    const usage = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
+    const usage = getSlotUsageSummary(appState.latestCommandArray, appState.globalPaletteRAM.length / 3);
 
     const movableSlots = [];
-    for (let i = 1; i < maxSlots; i++) {
-        if (!lockedSlots.has((currentOffset + i) % 256)) {
+    for (let i = minSlot; i <= maxSlot; i++) {
+        const absSlot = (currentOffset + i) % 256;
+        if (!lockedSlots.has(absSlot)) {
             movableSlots.push(i);
         }
     }
 
-    if (movableSlots.length <= 1) return startMse; 
+    if (movableSlots.length <= 1) return startMse;
 
     const colorData = movableSlots.map(i => {
         const absSlot = (currentOffset + i) % 256;
@@ -548,19 +714,24 @@ async function safeSortPalette(appState, maxSlots, currentOffset, lockedSlots, m
 
     await triggerEncodeFn();
     const newMse = measureCurrentMse(appState, metric, optRegion);
+    const durationMs = Math.round(performance.now() - tStart);
 
     if (newMse <= startMse + 0.01) {
         const diff = startMse - newMse;
         const diffTxt = diff > 0.005 ? ` (−${diff.toFixed(2)})` : "";
-        changeLog.push(`🔄 <span style="color:#28a745;">Safe Slot-Sortierung erfolgreich.</span> Meistgenutzte Farben nach vorne verschoben. [MSE: ${newMse.toFixed(2)}${diffTxt}]`);
+        changeLog.push(`🔄 <span style="color:#28a745;">Safe-Sorting für Slots ${minSlot}–${maxSlot} erfolgreich.</span> [MSE: ${newMse.toFixed(2)}${diffTxt}] ⏱️ ${durationMs}ms`);
         renderUIPalette();
         return newMse;
     } else {
         appState.globalPaletteRAM.set(backupRAM);
         await triggerEncodeFn();
-        changeLog.push(`🔄 <span style="color:#6c757d;">Sortierung verworfen</span> (MSE wäre schlechter geworden: ${newMse.toFixed(2)} vs ${startMse.toFixed(2)}).`);
+        changeLog.push(`🔄 <span style="color:#6c757d;">Sortierung Slots ${minSlot}–${maxSlot} verworfen.</span> ⏱️ ${durationMs}ms`);
         return startMse;
     }
+}
+
+async function safeSortPalette(appState, maxSlots, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette) {
+    return await safeSortPaletteRange(1, maxSlots - 1, appState, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette);
 }
 
 // ---------------------------------------------------------------------------
@@ -568,181 +739,199 @@ async function safeSortPalette(appState, maxSlots, currentOffset, lockedSlots, m
 // ---------------------------------------------------------------------------
 
 export async function runHybridOptimization(appState, optRegion, step, metric, currentOffset, lockedSlots, updateOptProgress, triggerEncodeFn, renderUIPalette, intensity = 'langsam') {
+    const globalStart = performance.now();
     const config = HAM_CONFIGS[appState.currentFormat];
     const totalPixels = appState.currentImgW * appState.currentImgH;
     const { formatsInUse, maxSlots } = resolveBankLayout(appState.currentFormat, config);
     const maxCores = navigator.hardwareConcurrency || 4;
     const changeLog = [];
     const battleArgs = createBattleArgs(appState, step, metric, currentOffset, optRegion, (msg) => changeLog.push(`<div style="color:#ffc107;">${msg}</div>`));
-    const slotOrder = generateHierarchicalSlotOrder(maxSlots);
 
     let mseStand = measureCurrentMse(appState, metric, optRegion);
-    const pushMseStand = (phaseLabel) => {
+
+    const pushMseStand = (phaseLabel, startTime) => {
+        const durationMs = Math.round(performance.now() - startTime);
+        const durationTxt = durationMs >= 1000 ? `${(durationMs / 1000).toFixed(2)}s` : `${durationMs}ms`;
         const mse = measureCurrentMse(appState, metric, optRegion);
         const diff = mseStand - mse;
         const diffTxt = Math.abs(diff) < 0.005 ? "" : (diff > 0 ? ` (−${diff.toFixed(2)})` : ` (+${(-diff).toFixed(2)})`);
-        changeLog.push(`<div style="color:#17a2b8; font-size:11px; margin-top:2px;">📊 Nach ${phaseLabel}: MSE ${mse.toFixed(2)}${diffTxt}</div>`);
+        const histStr = computeErrorHistogramSummary(appState, metric, optRegion);
+
+        changeLog.push(
+            `<div style="color:#17a2b8; font-size:11px; margin-top:2px; background:rgba(23,162,184,0.08); padding:3px 6px; border-radius:3px;">` +
+            `📊 Nach ${phaseLabel}: <b>MSE ${mse.toFixed(2)}</b>${diffTxt} | ⏱️ ${durationTxt}<br/>` +
+            `<span style="color:#aaa;">📉 Fehler-Histogramm: ${histStr}</span>` +
+            `</div>`
+        );
         mseStand = mse;
     };
 
     // =======================================================================
-    // SCHRITT 1: PRE-FILL & ZERO-USAGE ERADICATION (SLOTS 4 BIS MAX)
+    // STUFE 1: GLOBALER BASIS-POOL (SLOTS 8–31) + SIMULTAN-VEKTOR-SHIFT
     // =======================================================================
-    changeLog.push(`<div style="color:#6f42c1; font-weight:bold; margin-top:5px;">--- SCHRITT 1: Pre-Fill & Zero-Usage Eradication (Slots 4–${maxSlots-1}) ---</div>`);
-    updateOptProgress(`Pre-Fill Histogramm für Slots 4 bis ${maxSlots-1}...`);
+    let stageStart = performance.now();
+    changeLog.push(`<div style="color:#6f42c1; font-weight:bold; margin-top:5px;">--- STUFE 1: Globaler Basis-Pool (Slots 8–${maxSlots-1}) ---</div>`);
+    updateOptProgress(`Befülle globalen Basis-Pool (Slots 8–${maxSlots-1})...`);
 
     const hist = getImageHistogram(
         appState.originalImageData, appState.currentImgW, appState.currentImgH,
         step, 1000, appState.globalPaletteRAM, currentOffset, optRegion
     );
 
-    const prefillColors = [];
-    for (const hc of hist) {
-        let isDistinct = true;
-        for (const pc of prefillColors) {
-            if (colorDistanceSq(hc, pc) < MIN_PREFILL_DIST_SQ) {
-                isDistinct = false;
-                break;
-            }
-        }
-        if (isDistinct) {
-            prefillColors.push(hc);
-            if (prefillColors.length >= maxSlots) break;
-        }
-    }
-
-    let prefillIdx = 0, prefillCount = 0;
-    for (const i of slotOrder) {
-        if (i >= maxSlots) continue;
-        if (i >= 1 && i <= 3) continue; // Slots 1-3 freihalten
-
+    let prefillIdx = 0;
+    for (let i = 8; i < maxSlots; i++) {
         const absSlot = (currentOffset + i) % 256;
         if (lockedSlots.has(absSlot)) continue;
-        
-        if (prefillIdx < prefillColors.length) {
-            writeSlotColor(appState.globalPaletteRAM, absSlot, prefillColors[prefillIdx]);
+        if (prefillIdx < hist.length) {
+            writeSlotColor(appState.globalPaletteRAM, absSlot, hist[prefillIdx]);
             prefillIdx++;
-            prefillCount++;
         }
     }
 
-    changeLog.push(`Pre-Fill: ${prefillCount} Slots belegt. Slots 1–3 freigehalten.`);
     renderUIPalette();
-    await new Promise(r => requestAnimationFrame(r));
-    
     await triggerEncodeFn();
-    await new Promise(r => requestAnimationFrame(r));
 
     await forceFillUnusedSlots(
-        appState, maxSlots, currentOffset, lockedSlots, optRegion, step, metric, config, 
-        triggerEncodeFn, updateOptProgress, renderUIPalette, changeLog, 
-        "Zero-Usage Eradication (Slots 4..max)", [1, 2, 3]
+        appState, maxSlots, currentOffset, lockedSlots, optRegion, step, metric, config,
+        triggerEncodeFn, updateOptProgress, renderUIPalette, changeLog,
+        "Zero-Usage Base-Pool (Slots 8..max)", [1, 2, 3, 4, 5, 6, 7]
     );
 
-    pushMseStand("Schritt 1 (Pre-Fill + Zero Usage Slots 4..max)");
+    // SIMULTANER VEKTOR-SHIFT FÜR ALLE POOL-SLOTS (8..31) IN EINEM SCHRITT
+    changeLog.push(`<div style="color:#6f42c1; font-size:12px; font-weight:bold; margin-top:4px;">⚡ Simultaner Vektor-Shift Basis-Pool (Slots 8–${maxSlots-1})</div>`);
+    await refineAllPoolSlotsParallel(8, maxSlots - 1, appState, maxSlots, currentOffset, lockedSlots, triggerEncodeFn, metric, optRegion, changeLog);
+    pushMseStand("Stufe 1 (Basis-Pool Slots 8..max)", stageStart);
 
     // =======================================================================
-    // SCHRITT 2: SLOTS 1–3 MIT MAXIMAL-FEHLERN BEFÜLLEN
+    // STUFE 2: HAM04-KASKADE (SLOTS 4–7 BEFÜLLEN & 1x ABSTEIGEND OPTIMIEREN)
     // =======================================================================
-    changeLog.push(`<div style="color:#ffc107; font-weight:bold; margin-top:10px;">--- SCHRITT 2: Slots 1–3 mit max. Fehlerfarben befüllen ---</div>`);
-    updateOptProgress(`Analysiere Fehlerfarben für Slots 1–3...`);
+    stageStart = performance.now();
+    changeLog.push(`<div style="color:#17a2b8; font-weight:bold; margin-top:10px;">--- STUFE 2: HAM04-Kaskade (Slots 4–7) ---</div>`);
+    updateOptProgress(`Optimiere HAM04-Zugriff (Slots 4–7)...`);
 
-    const stats13 = computeDetailedAnalysis(
+    const statsHam04 = computeDetailedAnalysis(
         appState.originalImageData.data, appState.decodedImageData.data,
-        appState.currentImgW, appState.currentImgH, 0, totalPixels,
-        step, metric, config, optRegion
+        appState.currentImgW, appState.currentImgH, 0, totalPixels, step, metric, config, optRegion
     );
 
-    let topErrors13 = stats13.global.byBitDepth["3"] || [];
-    if (topErrors13.length === 0) topErrors13 = stats13.global.top10 || [];
-    topErrors13.sort((a, b) => b.mse - a.mse);
+    let topHam04Errors = statsHam04.global.byBitDepth["4"] || statsHam04.global.top10 || [];
+    const chosen47 = [];
 
-    const chosen13 = [];
-    for (const err of topErrors13) {
-        const color = { r: err.r1, g: err.g1, b: err.b1 };
-        if (isDistinctFromAll(color, chosen13, MIN_DISTINCT_DIST_SQ) && 
-            !colorInPalette(appState.globalPaletteRAM, color.r, color.g, color.b, 12)) {
-            chosen13.push(color);
-            if (chosen13.length >= 3) break;
+    for (const err of topHam04Errors) {
+        if (chosen47.length >= 4) break;
+        const target = { r: err.r1, g: err.g1, b: err.b1 };
+        
+        let bestSlot = -1, minDist = Infinity;
+        for (let h = 8; h < maxSlots; h++) {
+            const absH = (currentOffset + h) % 256;
+            const hColor = { r: appState.globalPaletteRAM[absH*3], g: appState.globalPaletteRAM[absH*3+1], b: appState.globalPaletteRAM[absH*3+2] };
+            const dSq = colorDistanceSq(target, hColor);
+            if (dSq < minDist && isDistinctFromAll(hColor, chosen47, 144)) {
+                minDist = dSq; bestSlot = h;
+            }
+        }
+
+        if (bestSlot !== -1 && minDist < 1024) {
+            const absM = (currentOffset + bestSlot) % 256;
+            chosen47.push({ r: appState.globalPaletteRAM[absM*3], g: appState.globalPaletteRAM[absM*3+1], b: appState.globalPaletteRAM[absM*3+2], promotedFrom: bestSlot });
+        } else {
+            chosen47.push(target);
         }
     }
 
-    for (let slotIdx = 1; slotIdx <= 3; slotIdx++) {
-        const absSlot = (currentOffset + slotIdx) % 256;
+    for (let i = 4; i <= 7; i++) {
+        const absSlot = (currentOffset + i) % 256;
         if (lockedSlots.has(absSlot)) continue;
-
-        const c = chosen13[slotIdx - 1] || { r: 128, g: 128, b: 128 };
+        const c = chosen47[i - 4] || { r: 128, g: 128, b: 128 };
         writeSlotColor(appState.globalPaletteRAM, absSlot, c);
-        changeLog.push(`📌 Slot ${slotIdx} mit max. HAM03/Detail-Fehler belegt: RGB(${c.r}, ${c.g}, ${c.b})`);
+        const info = c.promotedFrom ? `(Befördert aus Slot ${c.promotedFrom})` : `(Neuer HAM04-Fehler)`;
+        changeLog.push(`📌 Slot ${i} belegt: RGB(${c.r},${c.g},${c.b}) ${info}`);
     }
 
     renderUIPalette();
-    await new Promise(r => requestAnimationFrame(r));
     await triggerEncodeFn();
-    await new Promise(r => requestAnimationFrame(r));
-    pushMseStand("Schritt 2 (Belegung Slots 1–3)");
+
+    await safeSortPaletteRange(4, 7, appState, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette);
+
+    // 1x Vektor-Feinabstimmung absteigend (Slots 7 -> 4)
+    changeLog.push(`<div style="color:#17a2b8; font-size:12px; font-weight:bold; margin-top:4px;">🔹 Vektor-Feinabstimmung HAM04 (7→4)</div>`);
+    await runVectorLoopDescending(7, 4, 1, appState, maxSlots, currentOffset, lockedSlots, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette, changeLog, "HAM04 (7->4)");
+    pushMseStand("Stufe 2 (HAM04-Kaskade Slots 4–7)", stageStart);
+
+    // STUFE 3: REFILL & RE-ERADICATION GESAMTER POOL
+    stageStart = performance.now();
+    await forceFillUnusedSlots(
+        appState, maxSlots, currentOffset, lockedSlots, optRegion, step, metric, config,
+        triggerEncodeFn, updateOptProgress, renderUIPalette, changeLog,
+        "Refill & Re-Eradication Pool", [1, 2, 3]
+    );
+    pushMseStand("Stufe 3 (Refill Pool)", stageStart);
 
     // =======================================================================
-    // SCHRITT 3: VEKTOR-LINIENSUCHE SCHLEIFE FÜR SLOTS 1–3
+    // STUFE 4: HAM03-KASKADE (SLOTS 1–3 BEFÜLLEN & 1x ABSTEIGEND OPTIMIEREN)
     // =======================================================================
-    changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">--- SCHRITT 3: Vektor-Liniensuche Schleife (Slots 1–3) ---</div>`);
-    
-    let loopPass = 1;
-    const MAX_13_LOOP_PASSES = 5;
-    let anyLoopImproved = true;
+    stageStart = performance.now();
+    changeLog.push(`<div style="color:#ffc107; font-weight:bold; margin-top:10px;">--- STUFE 4: HAM03-Kaskade (Slots 1–3) ---</div>`);
+    updateOptProgress(`Optimiere HAM03-Hauptzugriff (Slots 1–3)...`);
 
-    while (anyLoopImproved && loopPass <= MAX_13_LOOP_PASSES) {
-        anyLoopImproved = false;
-        const slotVectors13 = computeSlotErrorVectors(appState, maxSlots, optRegion);
+    const statsHam03 = computeDetailedAnalysis(
+        appState.originalImageData.data, appState.decodedImageData.data,
+        appState.currentImgW, appState.currentImgH, 0, totalPixels, step, metric, config, optRegion
+    );
 
-        for (let slotIdx = 1; slotIdx <= 3; slotIdx++) {
-            const absSlot = (currentOffset + slotIdx) % 256;
-            if (lockedSlots.has(absSlot)) continue;
+    let topHam03Errors = statsHam03.global.byBitDepth["3"] || statsHam03.global.top10 || [];
+    const chosen13 = [];
 
-            updateOptProgress(`Vektor-Suche Schleife ${loopPass}: Slot ${slotIdx}...`);
-            const slotVector = slotVectors13[slotIdx];
-            const usageCount = getSlotUsageSummary(appState.latestCommandArray, maxSlots)[slotIdx] || 0;
-
-            const startColor = {
-                r: appState.globalPaletteRAM[absSlot * 3],
-                g: appState.globalPaletteRAM[absSlot * 3 + 1],
-                b: appState.globalPaletteRAM[absSlot * 3 + 2]
-            };
-
-            if (slotVector && slotVector.count > 0) {
-                const result = await refineSlotColorVector(startColor, absSlot, slotIdx, slotVector, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette);
-                if (result.didImprove) {
-                    anyLoopImproved = true;
-                    changeLog.push(`🔥 Slot ${slotIdx} (Pass ${loopPass}): RGB(${result.candidate.r}, ${result.candidate.g}, ${result.candidate.b}) [Nutzung: ${usageCount}x | MSE: ${result.score.toFixed(2)}]`);
-                } else {
-                    changeLog.push(`ℹ️ Slot ${slotIdx} (Pass ${loopPass}): Keine Vektor-Verbesserung [Nutzung: ${usageCount}x | RGB(${startColor.r},${startColor.g},${startColor.b})]`);
-                }
-            } else {
-                changeLog.push(`⚠️ Slot ${slotIdx} (Pass ${loopPass}): Keine aktiven Pixel für Vektor-Analyse (0x genutzt).`);
+    for (const err of topHam03Errors) {
+        if (chosen13.length >= 3) break;
+        const target = { r: err.r1, g: err.g1, b: err.b1 };
+        
+        let bestSlot = -1, minDist = Infinity;
+        for (let h = 4; h < maxSlots; h++) {
+            const absH = (currentOffset + h) % 256;
+            const hColor = { r: appState.globalPaletteRAM[absH*3], g: appState.globalPaletteRAM[absH*3+1], b: appState.globalPaletteRAM[absH*3+2] };
+            const dSq = colorDistanceSq(target, hColor);
+            if (dSq < minDist && isDistinctFromAll(hColor, chosen13, 144)) {
+                minDist = dSq; bestSlot = h;
             }
         }
-        loopPass++;
+
+        if (bestSlot !== -1 && minDist < 1024) {
+            const absM = (currentOffset + bestSlot) % 256;
+            chosen13.push({ r: appState.globalPaletteRAM[absM*3], g: appState.globalPaletteRAM[absM*3+1], b: appState.globalPaletteRAM[absM*3+2], promotedFrom: bestSlot });
+        } else {
+            chosen13.push(target);
+        }
     }
-    pushMseStand("Schritt 3 (Vektor-Schleife Slots 1–3)");
 
-    // =======================================================================
-    // SCHRITT 3.5: SAFE SLOT-SORTIRUNG NACH NUTZUNG
-    // =======================================================================
-    changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">--- SCHRITT 3.5: Slot-Sortierung (Meistgenutzte nach vorne) ---</div>`);
-    updateOptProgress(`Sortiere Farbpalette nach Nutzungshäufigkeit...`);
-    mseStand = await safeSortPalette(appState, maxSlots, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette);
-    pushMseStand("Schritt 3.5 (Slot-Sortierung)");
+    for (let i = 1; i <= 3; i++) {
+        const absSlot = (currentOffset + i) % 256;
+        if (lockedSlots.has(absSlot)) continue;
+        const c = chosen13[i - 1] || { r: 128, g: 128, b: 128 };
+        writeSlotColor(appState.globalPaletteRAM, absSlot, c);
+        const info = c.promotedFrom ? `(Befördert aus Slot ${c.promotedFrom})` : `(Neuer HAM03-Fehler)`;
+        changeLog.push(`📌 Slot ${i} belegt: RGB(${c.r},${c.g},${c.b}) ${info}`);
+    }
 
-    // BEI 'SEHR_SCHNELL' JETZT BEENDEN
+    renderUIPalette();
+    await triggerEncodeFn();
+
+    await safeSortPaletteRange(1, 3, appState, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette);
+
+    // 1x Vektor-Feinabstimmung absteigend (Slots 3 -> 1)
+    changeLog.push(`<div style="color:#ffc107; font-size:12px; font-weight:bold; margin-top:4px;">🔸 Vektor-Feinabstimmung HAM03 (3→1)</div>`);
+    await runVectorLoopDescending(3, 1, 1, appState, maxSlots, currentOffset, lockedSlots, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette, changeLog, "HAM03 (3->1)");
+    pushMseStand("Stufe 4 (HAM03-Kaskade Slots 1–3)", stageStart);
+
     if (intensity === 'sehr_schnell') {
+        const totalDurationSec = ((performance.now() - globalStart) / 1000).toFixed(2);
         const endMse = measureCurrentMse(appState, metric, optRegion);
-        changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">⚡ Sehr schnelle Optimierung (Schritte 1–3.5) beendet mit End-MSE: ${endMse.toFixed(2)}</div>`);
+        changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">⚡ Sehr schnelle Optimierung beendet [End-MSE: ${endMse.toFixed(2)} | Gesamtdauer: ${totalDurationSec}s]</div>`);
         return changeLog;
     }
 
-    // =======================================================================
     // SCHRITT 4: 50/50 USAGE-PARTITIONING (TOP 50% VEKTOR | BOTTOM 50% BATTLE)
-    // =======================================================================
+    stageStart = performance.now();
     changeLog.push(`<div style="color:#17a2b8; font-weight:bold; margin-top:10px;">--- SCHRITT 4: Nutzungs-Partitionierung (Top 50% Vektor | Bottom 50% Battle) ---</div>`);
 
     const usageSummary = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
@@ -761,8 +950,9 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
 
     changeLog.push(`📊 Aufteilung: ${top50Slots.length} Slots in Top 50% (Vektor-Suche), ${bottom50Slots.length} Slots in Bottom 50% (Kandidaten-Battle).`);
 
-    // A. Vektor-Suche Top 50%
+    // A. Vektor-Suche Top 50% (Absteigend nach Slot-Index sortiert)
     changeLog.push(`<div style="color:#28a745; font-size:12px; font-weight:bold; margin-top:6px;">🔹 Vektor-Liniensuche (Top 50% meistgenutzte Slots)</div>`);
+    top50Slots.sort((a, b) => b.slotIdx - a.slotIdx);
     const currentVectors = computeSlotErrorVectors(appState, maxSlots, optRegion);
 
     for (const item of top50Slots) {
@@ -776,21 +966,16 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
             b: appState.globalPaletteRAM[absSlot * 3 + 2]
         };
 
-        if (vector && vector.count > 0) {
-            updateOptProgress(`Top 50% Vektor-Suche: Slot ${i} (${item.useCount}x genutzt)...`);
-            const result = await refineSlotColorVector(startColor, absSlot, i, vector, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette);
-            if (result.didImprove) {
-                changeLog.push(`✨ Top-Slot ${i} (${item.useCount}x): RGB(${result.candidate.r}, ${result.candidate.g}, ${result.candidate.b}) [MSE: ${result.score.toFixed(2)}]`);
-            } else {
-                changeLog.push(`ℹ️ Top-Slot ${i} (${item.useCount}x): Vektor-Suche unverändert.`);
-            }
-        } else {
-            changeLog.push(`ℹ️ Top-Slot ${i} (${item.useCount}x): Kein Vektor (0px).`);
+        updateOptProgress(`Top 50% Vektor-Suche: Slot ${i} (${item.useCount}x genutzt)...`);
+        const result = await refineSlotColorVector(startColor, absSlot, i, vector, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette);
+        if (result.didImprove) {
+            changeLog.push(`✨ Top-Slot ${i} (${item.useCount}x): RGB(${result.candidate.r}, ${result.candidate.g}, ${result.candidate.b}) [MSE: ${result.score.toFixed(2)}]`);
         }
     }
-    pushMseStand("Schritt 4a (Top 50% Vektor-Suche)");
+    pushMseStand("Schritt 4a (Top 50% Vektor-Suche)", stageStart);
 
     // B. Kandidaten-Battle Bottom 50%
+    stageStart = performance.now();
     changeLog.push(`<div style="color:#e83e8c; font-size:12px; font-weight:bold; margin-top:6px;">🔸 Kandidaten-Battle (Bottom 50% wenigstgenutzte Slots)</div>`);
 
     const statsBattle = computeDetailedAnalysis(
@@ -847,73 +1032,72 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
             await triggerEncodeFn();
             await new Promise(r => requestAnimationFrame(r));
         } else {
-            changeLog.push(`🛡️ Bottom-Slot ${i} (${item.useCount}x): Farbe beibehalten (keine Battle-Verbesserung).`);
+            changeLog.push(`🛡️ Bottom-Slot ${i} (${item.useCount}x): Farbe beibehalten.`);
         }
     }
-    pushMseStand("Schritt 4b (Bottom 50% Candidate Battle)");
+    pushMseStand("Schritt 4b (Bottom 50% Candidate Battle)", stageStart);
 
-    // BEI 'NORMAL' JETZT BEENDEN
     if (intensity === 'normal') {
+        const totalDurationSec = ((performance.now() - globalStart) / 1000).toFixed(2);
         const endMse = measureCurrentMse(appState, metric, optRegion);
-        changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">✅ Normale Optimierung (Schritte 1–4) beendet mit End-MSE: ${endMse.toFixed(2)}</div>`);
+        changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">✅ Normale Kaskaden-Optimierung beendet [End-MSE: ${endMse.toFixed(2)} | Gesamtdauer: ${totalDurationSec}s]</div>`);
         return changeLog;
     }
 
     // =======================================================================
-    // SCHRITT 5: TIEFEN-OPTIMIERUNG (NUR INTENSITÄT 'LANGSAM')
+    // SCHRITT 5: TIEFEN-OPTIMIERUNG (SIMULTAN-SHIFT 31..8 & 3x ANKER 7→1)
     // =======================================================================
-    changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">--- SCHRITT 5: Tiefen-Optimierung (Vektor-Suche von wenigst- zu meistgenutzt + Dynamic Sort) ---</div>`);
+    stageStart = performance.now();
+    changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:10px;">--- SCHRITT 5: Tiefen-Optimierung (Simultan-Pool 31→8 & 3x Anker 7→1) ---</div>`);
+
+    // Pre-Step 5 Auto-Injection für tote/wenig genutzte Slots (< 5 Nutzungen)
+    const preStep5Usage = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
+    for (let i = 1; i < maxSlots; i++) {
+        const absSlot = (currentOffset + i) % 256;
+        if (!lockedSlots.has(absSlot) && preStep5Usage[i] < 5) {
+            const stats = computeDetailedAnalysis(
+                appState.originalImageData.data, appState.decodedImageData.data,
+                appState.currentImgW, appState.currentImgH, 0, totalPixels, step, metric, config, optRegion
+            );
+            const topErr = stats.global.top10[0];
+            if (topErr) {
+                writeSlotColor(appState.globalPaletteRAM, absSlot, { r: topErr.r1, g: topErr.g1, b: topErr.b1 });
+                changeLog.push(`💉 Auto-Injection vor Schritt 5: Slot ${i} mit HAM-Fehler belegt.`);
+            }
+        }
+    }
+    await triggerEncodeFn();
 
     let passSlow = 1;
-    const MAX_SLOW_PASSES = 5;
-    let anyPassImproved = true;
+    const MAX_SLOW_PASSES = 3;
+    let lastPassMse = measureCurrentMse(appState, metric, optRegion);
 
-    while (anyPassImproved && passSlow <= MAX_SLOW_PASSES) {
-        anyPassImproved = false;
-        const currentUsage = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
-        
-        // Strenge Sortierung für Durchlauf: von am wenigsten zu am meisten genutzte Slots
-        const slotsAscending = [];
-        for (let i = 1; i < maxSlots; i++) {
-            if (!lockedSlots.has((currentOffset + i) % 256)) {
-                slotsAscending.push({ slotIdx: i, useCount: currentUsage[i] });
-            }
-        }
-        slotsAscending.sort((a, b) => a.useCount - b.useCount);
+    while (passSlow <= MAX_SLOW_PASSES) {
+        // 1. SIMULTANER PARALLELER SHIFT FÜR ALLE POOL-SLOTS (31 DOWN TO 8)
+        updateOptProgress(`Pass ${passSlow}: Simultaner Vektor-Shift für Basis-Slots 31→8...`);
+        await refineAllPoolSlotsParallel(8, maxSlots - 1, appState, maxSlots, currentOffset, lockedSlots, triggerEncodeFn, metric, optRegion, changeLog);
 
-        const vectorsSlow = computeSlotErrorVectors(appState, maxSlots, optRegion);
+        // 2. STRIKT ABSTEIGENDE VEKTOR-LINIENSUCHE FÜR ANKER-SLOTS (7 DOWN TO 1)
+        changeLog.push(`<div style="color:#28a745; font-size:11px; margin-top:4px;">🔹 Pass ${passSlow}: Absteigende Anker-Optimierung (7→1)</div>`);
+        await runVectorLoopDescending(7, 1, 1, appState, maxSlots, currentOffset, lockedSlots, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette, changeLog, `Pass ${passSlow} Anker (7->1)`);
 
-        for (const item of slotsAscending) {
-            const i = item.slotIdx;
-            const absSlot = (currentOffset + i) % 256;
-            const slotVector = vectorsSlow[i];
-            if (!slotVector || slotVector.count === 0) continue;
+        // 3. SAFE-SORTIERUNG NACH JEDEM DURCHLAUF
+        const newMse = await safeSortPalette(appState, maxSlots, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette);
+        const passGain = lastPassMse - newMse;
+        lastPassMse = newMse;
 
-            const startColor = {
-                r: appState.globalPaletteRAM[absSlot * 3],
-                g: appState.globalPaletteRAM[absSlot * 3 + 1],
-                b: appState.globalPaletteRAM[absSlot * 3 + 2]
-            };
-
-            updateOptProgress(`Pass ${passSlow}/${MAX_SLOW_PASSES} (Tiefen-Opt): Slot ${i} (${item.useCount}x)...`);
-            const result = await refineSlotColorVector(startColor, absSlot, i, slotVector, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette);
-            
-            if (result.didImprove) {
-                anyPassImproved = true;
-                changeLog.push(`✨ Slot ${i} (Tiefen-Pass ${passSlow}, ${item.useCount}x): RGB(${result.candidate.r}, ${result.candidate.g}, ${result.candidate.b}) [MSE: ${result.score.toFixed(2)}]`);
-            }
-        }
-
-        // Dynamische Re-Sortierung nach jedem vollen Vektor-Pass in Schritt 5
-        if (anyPassImproved) {
-            mseStand = await safeSortPalette(appState, maxSlots, currentOffset, lockedSlots, metric, optRegion, triggerEncodeFn, changeLog, renderUIPalette);
+        // EARLY-EXIT CHECK
+        if (passGain < 0.10 && passSlow > 1) {
+            changeLog.push(`⏱️ <span style="color:#ffc107;">Schritt 5 Early-Exit: MSE-Gewinn (Δ${passGain.toFixed(2)}) unter Schwelle (0.10).</span>`);
+            break;
         }
 
         passSlow++;
     }
-    pushMseStand("Schritt 5 (Tiefen-Optimierung)");
+    pushMseStand("Schritt 5 (Tiefen-Optimierung)", stageStart);
 
-    // ZUSAMMENFASSUNG LOGGING
+    // FINALE ZUSAMMENFASSUNG LOGGING
+    const totalDurationSec = ((performance.now() - globalStart) / 1000).toFixed(2);
     const endMse = measureCurrentMse(appState, metric, optRegion);
     const endUsage = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
 
@@ -922,12 +1106,13 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
 
     changeLog.push(`<div style="color:#17a2b8; font-weight:bold; margin-top:8px;">Format: ${activeFormatName}</div>`);
     changeLog.push(`<div style="color:#ccc; font-size:10px; background:#111; padding:4px; border-radius:3px;">Nutzung: ${endUsageStr || "Keine Anker verwendet"}</div>`);
-    changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:5px;">Ergebnis: End-MSE ${endMse.toFixed(2)}</div>`);
+    changeLog.push(`<div style="color:#28a745; font-weight:bold; margin-top:5px;">Ergebnis: End-MSE ${endMse.toFixed(2)} | Gesamtdauer: ${totalDurationSec}s</div>`);
 
     return changeLog;
 }
 
 export async function runManualRefinement(appState, optRegion, step, metric, currentOffset, lockedSlots, updateOptProgress, triggerEncodeFn, renderUIPalette) {
+    const tStart = performance.now();
     const config = HAM_CONFIGS[appState.currentFormat];
     const { maxSlots } = resolveBankLayout(appState.currentFormat, config);
 
@@ -943,7 +1128,6 @@ export async function runManualRefinement(appState, optRegion, step, metric, cur
         if (lockedSlots.has(absSlot)) continue;
 
         const slotVector = slotVectors[i];
-        if (slotVector.count === 0) continue;
 
         const startColor = {
             r: appState.globalPaletteRAM[absSlot * 3],
@@ -958,6 +1142,9 @@ export async function runManualRefinement(appState, optRegion, step, metric, cur
         }
     }
 
+    const durationSec = ((performance.now() - tStart) / 1000).toFixed(2);
     const endMse = measureCurrentMse(appState, metric, optRegion);
+    changeLog.push(`<div style="color:#28a745; font-size:11px;">⏱️ Dauer Manuelles Nachoptimieren: ${durationSec}s | End-MSE: ${endMse.toFixed(2)}</div>`);
+
     return changeLog;
 }
