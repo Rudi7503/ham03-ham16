@@ -55,6 +55,7 @@ export function initErrorWindow(appState, deps = {}) {
     let ranked = [];                 // {i, m} absteigend nach Abweichung
     let displayImageData = null;     // Anzeige-Puffer (Cache)
     let lastZoomApplied = null;      // für "bei Zoomwechsel auf Fehler zentrieren"
+    let tailMode = 'source';         // 'source' = Folgepixel neu optimieren | 'olddecode' = alte Farben behalten
     let thresholdTimer = null;
     let region = null;               // {x0,y0,x1,y1} Arbeits-Ausschnitt (Bildkoordinaten)
     let selecting = false;           // Ausschnitt wird gerade aufgezogen
@@ -123,6 +124,11 @@ export function initErrorWindow(appState, deps = {}) {
                     <button id="errwin-wavelet" style="${BTN}" title="Wavelet-Dämpfung auf die 3×3-Region anwenden + lokaler Re-Encode">Lokaler Wavelet-Filter (3×3)</button>
                     <button id="errwin-wavelet-region" style="${BTN}" title="Wavelet-Filter auf alle Fehler im Arbeits-Ausschnitt anwenden (je 3×3 + lokaler Re-Encode)">Wavelet auf Ausschnitt (alle Fehler)</button>
                     <button id="errwin-full" style="${BTN}" title="Komplettes Bild neu codieren (Fallback)">Vollständig neu codieren</button>
+                    <label style="color:#adb5bd; margin-left:6px;" title="Ziel der Nachcodierung bis zum Resync">Folgepixel:</label>
+                    <select id="errwin-tail" style="font-size:11px;" title="Original: Folgepixel werden neu optimiert (Farben können sich bis zum nächsten Anker ändern) · altes Decode: Farben bleiben wie vorher, nur die Kommandos werden neu">
+                        <option value="source" selected>Original (neu optimieren)</option>
+                        <option value="olddecode">altes Decode (unverändert)</option>
+                    </select>
                 </div>
                 <div id="errwin-hint" style="margin-top:6px; font-size:11px; color:#888; min-height:14px;"></div>
             </div>`;
@@ -243,6 +249,12 @@ export function initErrorWindow(appState, deps = {}) {
         panel.querySelector('#errwin-ignore').addEventListener('click', ignoreCurrent);
         panel.querySelector('#errwin-wavelet').addEventListener('click', applyWavelet);
         panel.querySelector('#errwin-wavelet-region').addEventListener('click', applyWaveletToRegion);
+        panel.querySelector('#errwin-tail').addEventListener('change', (e) => {
+            tailMode = e.target.value === 'olddecode' ? 'olddecode' : 'source';
+            hint(tailMode === 'source'
+                ? 'Folgepixel werden neu optimiert (Richtung Original) — Farben können sich bis zum nächsten Anker ändern.'
+                : 'Folgepixel behalten ihre bisherigen Farben — nur die Kommandos werden neu erzeugt.');
+        });
         panel.querySelector('#errwin-full').addEventListener('click', async () => {
             if (typeof D.requestFullEncode !== 'function') return;
             hint('Vollständiges Neu-Codieren läuft …');
@@ -685,7 +697,8 @@ export function initErrorWindow(appState, deps = {}) {
             startPx: editedPx, minEndPx: editedPx + 1,
             forcedFirstCmd: v.cmd,   // gewähltes Kommando pinnen → Pixel wird exakt getroffen
             lookaheadPx: 32,         // 32 px Receding-Horizon-Beam, danach Greedy
-            tailFromOldDecode: true  // Rest möglichst unverändert lassen (Resync = alter Wert)
+            // Folgepixel: 'source' = neu optimieren (Standard), 'olddecode' = alte Farben behalten
+            tailFromOldDecode: tailMode === 'olddecode'
         });
         if (!res.ok) { hint(res.reason); return; }
         finishLocalEdit(res, `Wert RGB(${v.r},${v.g},${v.b}) gesetzt [${label}]`);
