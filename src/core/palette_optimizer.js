@@ -9,6 +9,12 @@ import { clamp } from '../codecs/utils.js';
 import { computeDetailedAnalysis, computeAvgYuvScore, getImageHistogram } from './analysis.js';
 import { encodePaletted, decodePaletted } from './module_paletted.js';
 
+// ACHTUNG: Dieses Raster NICHT ohne Messung erweitern. Ein Versuch mit
+// [.. 1.75, 2.25, 3.0, 4.0] verschlechterte "sehr_schnell" auf 128² von 33.53
+// auf 46.32: größere Schritte lassen frühe Slots weit wandern, und die späteren
+// Stufen optimieren dann aus einem schlechteren Zustand (Greedy ist nicht
+// monoton). Rand-Treffer bei 1.75 sind meist ein Effekt des ERSTEN Durchgangs und
+// verschwinden beim Wiederholen (gemessen: Durchgang 1 14/28, Durchgang 4 0/17).
 const VECTOR_SCALES = [0.1, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75];
 const REPOP_HISTOGRAM_CANDIDATES = 8; 
 
@@ -350,7 +356,18 @@ async function acquirePoolWorker() {
     }
 }
 
+// Zählt Kandidaten-Bewertungen. Jede kostet einen kompletten Bild-Encode, läuft
+// aber über den Worker-Pool bzw. computeCandidateScoreInThread und damit NICHT
+// über triggerEncodeFn — in der Encode-Bilanz der Pipeline wäre sie unsichtbar.
+// Genau diese Bewertungen sind aber der Großteil der Arbeit.
+let candidateScoreCount = 0;
+export function getCandidateScoreCount() { return candidateScoreCount; }
+// Basiswert merken, damit jeder Lauf NUR seine eigenen Bewertungen meldet —
+// der Zähler ist modulglobal, sonst zählt eine vorherige Pipeline mit.
+function scoreBase() { return candidateScoreCount; }
+
 async function scoreCandidateViaPool(candidate, args, absSlot, onWorkerFallback) {
+    candidateScoreCount++;
     const warnFallback = () => {
         if (!workerFallbackWarned) {
             workerFallbackWarned = true;
@@ -499,7 +516,7 @@ async function refineAllPoolSlotsParallel(minSlot, maxSlot, appState, maxSlots, 
 // Single-Slot Vektor-Feinabstimmung
 // ---------------------------------------------------------------------------
 
-async function refineSlotColorVector(startColor, absSlot, slotIdx, vector, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette) {
+async function refineSlotColorVector(startColor, absSlot, slotIdx, vector, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette, knownBaseline = null) {
     const { paletteRAM } = battleArgs;
 
     if (!vector || vector.count === 0) {
@@ -521,7 +538,14 @@ async function refineSlotColorVector(startColor, absSlot, slotIdx, vector, trigg
         return { candidate: startColor, score: Infinity, didImprove: false };
     }
 
-    const baseline = await runWorkerBattle([startColor], battleArgs, absSlot);
+    // Der Score "Slot unverändert" ist der AKTUELLE MSE des Bildes. Ein eigener
+    // Encode dafür ist Verschwendung — im Browser (viele Kerne, Kandidaten laufen
+    // parallel) kostet er eine ganze Runde pro Slot, also rund ein Drittel der
+    // Laufzeit. Der Aufrufer kennt den Wert bereits und reicht ihn als
+    // knownBaseline herein.
+    const baseline = (knownBaseline != null)
+        ? { score: knownBaseline }
+        : await runWorkerBattle([startColor], battleArgs, absSlot);
 
     const rawCandidates = VECTOR_SCALES.map(scale => ({
         r: clamp(Math.round(startColor.r + vector.dR * scale), 0, 255),
@@ -951,6 +975,7 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     // (Zeit pro Encode). Die Anzahl hängt nur vom Verfahren ab, die Zeit pro
     // Encode von Maschine/Bildgröße — daher ist der Zähler die verlässliche
     // Bezugsgröße für eine Dauer-Schätzung.
+    const scoreBase0 = scoreBase();
     let encodeCount = 0;
     const rawTriggerEncode = triggerEncodeFn;
     const countedEncode = async () => { encodeCount++; return await rawTriggerEncode(); };
@@ -1041,7 +1066,7 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
         if (!aborted) {
             lastRunStats = { intensity, encodeCount, totalMs, pixels: totalPixels };
         }
-        console.log(`[Palette] ${intensity}: ${encodeCount} Encodes, ${stagesDone}/${stageWeights.length} Stufen in ${(totalMs / 1000).toFixed(2)}s${aborted ? ' (abgebrochen)' : ''}`);
+        console.log(`[Palette] ${intensity}: ${encodeCount} Basis-Encodes + ${candidateScoreCount - scoreBase0} Kandidaten-Bewertungen, ${stagesDone}/${stageWeights.length} Stufen in ${(totalMs / 1000).toFixed(2)}s${aborted ? ' (abgebrochen)' : ''}`);
         return changeLog;
     };
 
@@ -1476,27 +1501,19 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
 const PROXY_MAX_SIDE = 320;
 const PROXY_FORCE_ABOVE = 512;   // ab dieser Kantenlänge wird der Proxy erzwungen
 
-export async function runOptimizationWithProxy(appState, optRegion, step, metric, currentOffset, lockedSlots,
-                                               updateOptProgress, triggerEncodeFn, renderUIPalette,
-                                               intensity = 'langsam', useProxy = true) {
+// ---------------------------------------------------------------------------
+// Gemeinsames Gerüst für alle Proxy-Läufe: Zustand auf das Vorschaubild
+// umschalten, den eigentlichen Lauf ausführen, Zustand wiederherstellen und die
+// fertige Palette auf das Vollbild anwenden. Wird von der Auto-Optimierung UND
+// vom manuellen Nachoptimieren benutzt — letzteres lief früher auf dem Vollbild
+// und brauchte auf einem 876x882-Foto 510 s für −0.84 MSE.
+// ---------------------------------------------------------------------------
+async function runOnProxy(appState, optRegion, triggerEncodeFn, runInner) {
     const W = appState.currentImgW, H = appState.currentImgH;
-    const maxSide = Math.max(W, H);
-
-    // Auto-Budget: sehr große Bilder werden IMMER über den Proxy optimiert —
-    // eine Vollbild-Optimierung dauert dort viele Minuten.
-    let forced = false;
-    if (maxSide > PROXY_FORCE_ABOVE && !useProxy) { useProxy = true; forced = true; }
-
-    // Klein genug (oder Proxy abgewählt) → direkt optimieren
-    if (!useProxy || maxSide <= PROXY_MAX_SIDE) {
-        return await runHybridOptimization(appState, optRegion, step, metric, currentOffset, lockedSlots,
-            updateOptProgress, triggerEncodeFn, renderUIPalette, intensity);
-    }
-
-    const scale = PROXY_MAX_SIDE / maxSide;
+    const scale = PROXY_MAX_SIDE / Math.max(W, H);
     const pw = Math.max(16, Math.round(W * scale));
     const ph = Math.max(16, Math.round(H * scale));
-    const proxyOpStart = Date.now();
+    const opStart = Date.now();
 
     // Zustand sichern (die Palette ist das Ergebnis und bleibt erhalten)
     const saved = {
@@ -1532,29 +1549,15 @@ export async function runOptimizationWithProxy(appState, optRegion, step, metric
         }
         : null;
 
-    const factor = (maxSide / PROXY_MAX_SIDE).toFixed(1);
-    const autoTxt = forced ? ' — automatisch aktiviert (Bild > ' + PROXY_FORCE_ABOVE + ' px)' : '';
-    updateOptProgress(`Proxy ${pw}x${ph} (${factor}x kleiner)${autoTxt}: Vorab-Encode...`, 0, 1);
-
-    // Einmal mit der aktuellen Palette encodieren: die Pipeline braucht ein
-    // Decodiert-Bild (Prefill-Analyse, Kaskaden), genau wie im normalen Ablauf.
+    // Einmal mit der aktuellen Palette encodieren: Pipeline und Vektor-Suche
+    // brauchen ein Decodiert-Bild, genau wie im normalen Ablauf.
     const tEnc0 = Date.now();
     await triggerEncodeFn();
     const proxyEncodeMs = Math.max(1, Date.now() - tEnc0);
 
-    // Dauer-Schätzung: aus dem letzten Lauf desselben Verfahrens (belastbar) oder
-    // grob aus einem Faktor auf einen Encode. Die Live-Anzeige während des Laufs
-    // korrigiert sich danach selbst (siehe updateOptProgress-Wrapper).
-    const { ms: est, exact: estExact } = estimateOptimizationMs(proxyEncodeMs, intensity, pw * ph);
-    const estTxt = est >= 1000 ? `~${Math.round(est / 1000)} s` : `~${est} ms`;
-    const estLabel = estExact ? 'geschätzte Dauer' : 'grobe Schätzung';
-    console.log(`[Palette] Proxy ${pw}x${ph}: Encode ${proxyEncodeMs} ms → ${estLabel} ${estTxt} (${intensity})${autoTxt}`);
-    updateOptProgress(`Proxy ${pw}x${ph} (${factor}x kleiner)${autoTxt}, ${estLabel} ${estTxt}...`, 0, 1);
-
     let log;
     try {
-        log = await runHybridOptimization(appState, proxyRegion, step, metric, currentOffset, lockedSlots,
-            updateOptProgress, triggerEncodeFn, renderUIPalette, intensity);
+        log = await runInner(proxyRegion, proxyEncodeMs);
     } finally {
         // Originalzustand wiederherstellen; nur die Palette ist das Ergebnis
         appState.originalImageData = saved.original;
@@ -1568,55 +1571,218 @@ export async function runOptimizationWithProxy(appState, optRegion, step, metric
         appState.currentImgH = saved.H;
     }
 
+    return { log, W, H, pw, ph, proxyEncodeMs, totalMs: Date.now() - opStart };
+}
+
+export async function runOptimizationWithProxy(appState, optRegion, step, metric, currentOffset, lockedSlots,
+                                               updateOptProgress, triggerEncodeFn, renderUIPalette,
+                                               intensity = 'langsam', useProxy = true) {
+    const W = appState.currentImgW, H = appState.currentImgH;
+    const maxSide = Math.max(W, H);
+
+    // Auto-Budget: sehr große Bilder werden IMMER über den Proxy optimiert —
+    // eine Vollbild-Optimierung dauert dort viele Minuten.
+    let forced = false;
+    if (maxSide > PROXY_FORCE_ABOVE && !useProxy) { useProxy = true; forced = true; }
+
+    // Klein genug (oder Proxy abgewählt) → direkt optimieren
+    if (!useProxy || maxSide <= PROXY_MAX_SIDE) {
+        return await runHybridOptimization(appState, optRegion, step, metric, currentOffset, lockedSlots,
+            updateOptProgress, triggerEncodeFn, renderUIPalette, intensity);
+    }
+
+    const factor = (maxSide / PROXY_MAX_SIDE).toFixed(1);
+    const autoTxt = forced ? ' — automatisch aktiviert (Bild > ' + PROXY_FORCE_ABOVE + ' px)' : '';
+    updateOptProgress(`Proxy ${Math.max(16, Math.round(W * PROXY_MAX_SIDE / maxSide))}px${autoTxt}: Vorab-Encode...`, 0, 1);
+
+    const run = await runOnProxy(appState, optRegion, triggerEncodeFn, (proxyRegion, proxyEncodeMs) => {
+        // Dauer-Schätzung: aus dem letzten Lauf desselben Verfahrens (belastbar)
+        // oder grob aus einem Faktor auf einen Encode. Die Live-Anzeige während
+        // des Laufs korrigiert sich danach selbst.
+        const { ms: est, exact } = estimateOptimizationMs(proxyEncodeMs, intensity, appState.currentImgW * appState.currentImgH);
+        const estTxt = est >= 1000 ? `~${Math.round(est / 1000)} s` : `~${est} ms`;
+        console.log(`[Palette] Proxy ${appState.currentImgW}x${appState.currentImgH}: Encode ${proxyEncodeMs} ms → ${exact ? 'geschätzte Dauer' : 'grobe Schätzung'} ${estTxt} (${intensity})${autoTxt}`);
+        updateOptProgress(`Proxy ${appState.currentImgW}x${appState.currentImgH} (${factor}x kleiner)${autoTxt}, ${exact ? 'geschätzte Dauer' : 'grobe Schätzung'} ${estTxt}...`, 0, 1);
+        return runHybridOptimization(appState, proxyRegion, step, metric, currentOffset, lockedSlots,
+            updateOptProgress, triggerEncodeFn, renderUIPalette, intensity);
+    });
+
+    const { log, pw, ph, proxyEncodeMs, totalMs } = run;
     updateOptProgress(`Palette wird auf ${W}x${H} angewendet...`, 0, 1);
     await triggerEncodeFn();
     renderUIPalette();
     // Gesamtdauer der Proxy-Operation nachtragen (Vorab-Encode + Anwenden).
-    setLastRunTotal(Date.now() - proxyOpStart);
+    setLastRunTotal(totalMs);
 
     if (Array.isArray(log)) {
-        // Die Dauer-Schätzung nur in der Statuszeile zu zeigen bringt wenig —
-        // die wird sofort von der ersten Stufe überschrieben. Daher auch hier.
-        log.unshift(`<div style="color:#6f42c1;">⏱️ Proxy-Vorab-Encode ${proxyEncodeMs} ms → ${estLabel} ${estTxt} (${intensity})</div>`);
+        const estTxt2 = totalMs >= 1000 ? `~${Math.round(totalMs / 1000)} s` : `~${totalMs} ms`;
+        log.unshift(`<div style="color:#6f42c1;">⏱️ Proxy-Vorab-Encode ${proxyEncodeMs} ms (Ist-Dauer insgesamt ${estTxt2})</div>`);
         log.unshift(`<div style="color:#6f42c1; font-weight:bold;">🖼️ Proxy-Optimierung: auf ${pw}x${ph} optimiert, dann auf ${W}x${H} angewendet${forced ? ' (Proxy erzwungen: Bild > ' + PROXY_FORCE_ABOVE + ' px)' : ''}.</div>`);
     }
     return log;
 }
 
-export async function runManualRefinement(appState, optRegion, step, metric, currentOffset, lockedSlots, updateOptProgress, triggerEncodeFn, renderUIPalette) {
+// Manuelles Nachoptimieren über den Proxy — ~7x schneller (auf einem 876x882-Foto
+// gemessen 510 s auf dem Vollbild), ABER mit einem gemessenen Qualitätsrisiko:
+//
+// Auf 128² (Proxy testweise auf 64 px begrenzt, also nur 2x Verkleinerung) und
+// Start von einer VOLLBILD-optimierten Palette (MSE 27.98) ergab die
+// Nachoptimierung über den Proxy auf dem Vollbild 28.58 — also 0.60 SCHLECHTER,
+// obwohl sie auf dem Proxy selbst 33.56 → 31.01 verbesserte. Grund: die Palette
+// wird auf die heruntergerechneten Farbstatistiken gezogen und damit weg vom
+// Vollbild-Optimum. Bei der Auto-Optimierung fällt das nicht auf, weil sie bei
+// der leeren Palette startet und der Gewinn den Versatz um Größenordnungen
+// übersteigt. Beim VERFEINERN einer schon guten Palette dominiert der Versatz.
+//
+// Deshalb ist der Proxy hier NUR auf ausdrücklichen Wunsch zu benutzen
+// (useProxy = true) und nicht Standard.
+export async function runManualRefinementWithProxy(appState, optRegion, step, metric, currentOffset, lockedSlots,
+                                                   updateOptProgress, triggerEncodeFn, renderUIPalette,
+                                                   useProxy = false, slotOrder = 'desc') {
+    const W = appState.currentImgW, H = appState.currentImgH;
+    const maxSide = Math.max(W, H);
+
+    if (!useProxy || maxSide <= PROXY_MAX_SIDE) {
+        return await runManualRefinement(appState, optRegion, step, metric, currentOffset, lockedSlots,
+            updateOptProgress, triggerEncodeFn, renderUIPalette, slotOrder);
+    }
+
+    const run = await runOnProxy(appState, optRegion, triggerEncodeFn, (proxyRegion) =>
+        runManualRefinement(appState, proxyRegion, step, metric, currentOffset, lockedSlots,
+            updateOptProgress, triggerEncodeFn, renderUIPalette, slotOrder));
+
+    const { log, pw, ph, totalMs } = run;
+    updateOptProgress(`Palette wird auf ${W}x${H} angewendet...`, 0, 1);
+    await triggerEncodeFn();
+    renderUIPalette();
+
+    if (Array.isArray(log)) {
+        const ratio = (W * H) / (pw * ph);
+        const projectedSec = (totalMs / 1000) * ratio;
+        const projTxt = projectedSec >= 120 ? `${Math.round(projectedSec / 60)} min` : `${Math.round(projectedSec)} s`;
+        log.unshift(`<div style="color:#6f42c1; font-weight:bold;">🖼️ Nachoptimierung auf ${pw}x${ph} gerechnet (${ratio.toFixed(1)}x weniger Pixel pro Encode), dann auf ${W}x${H} angewendet. Dauer ${(totalMs / 1000).toFixed(1)} s statt grob ${projTxt} auf dem Vollbild.</div>`);
+        log.unshift(`<div style="color:#ffc107; font-size:11px;">⚠️ Proxy-Nachoptimierung: deutlich schneller, kann die Endqualität aber verschlechtern (gemessen +0.60 MSE bei 2x Verkleinerung), weil die Palette auf die verkleinerten Farbstatistiken gezogen wird.</div>`);
+    }
+    return log;
+}
+
+// Das manuelle Nachoptimieren ist eine Koordinatenabstieg-Schleife: pro Slot
+// wird entlang des Fehlervektors eine Liniensuche gemacht. EIN Durchgang
+// konvergiert dabei NICHT — die Fehlervektoren werden zu Beginn berechnet und
+// sind gegen Ende veraltet, und jede Slot-Änderung verschiebt das Optimum der
+// anderen. Gemessen auf 128² (echtes Bild), Start nach "langsam" (MSE 27.98):
+//   Durchgang 1 → 27.77 (−0.21) | 2 → 27.61 (−0.16) | 3 → 27.57 (−0.04)
+// Start nach "sehr_schnell" (MSE 33.53):
+//   Durchgang 1 → 29.42 (−4.11) | 2 → 28.65 | 3 → 28.31 | 4 → 28.21
+// Ein Durchgang holte dort nur 77% des erreichbaren Gewinns. Daher wird
+// wiederholt, bis ein Durchgang kaum noch etwas bringt.
+const MAX_REFINE_PASSES = 4;
+const REFINE_MIN_GAIN = 0.05;   // MSE-Gewinn, ab dem ein weiterer Durchgang lohnt
+
+export async function runManualRefinement(appState, optRegion, step, metric, currentOffset, lockedSlots, updateOptProgress, triggerEncodeFn, renderUIPalette, slotOrder = 'desc') {
     const tStart = performance.now();
     const config = HAM_CONFIGS[appState.currentFormat];
     const { maxSlots } = resolveBankLayout(appState.currentFormat, config);
+
+    // Ein evtl. noch gesetztes Abbruch-Flag verwerfen und auf Abbrüche hören:
+    // pro Slot fallen mehrere Vollbild-Encodes an, ein Abbruch muss greifen.
+    abortRequested = false;
+    const scoreBase1 = scoreBase();
 
     const startMse = measureCurrentMse(appState, metric, optRegion);
     const changeLog = [`<div style="color:#ffc107; font-weight:bold;">Manuelles Nachoptimieren (Start-MSE: ${startMse.toFixed(2)})</div>`];
     const battleArgs = createBattleArgs(appState, step, metric, currentOffset, optRegion, (msg) => changeLog.push(`<div style="color:#ffc107;">${msg}</div>`));
 
-    updateOptProgress(`Starte manuelle Nachoptimierung (Vektor-Analyse)...`);
-    const slotVectors = computeSlotErrorVectors(appState, maxSlots, optRegion);
-
+    // Reihenfolge der Slots. Die Fehlervektoren werden EINMAL pro Durchgang
+    // berechnet, sind also für spät bearbeitete Slots veraltet. 'usage' nimmt die
+    // meistgenutzten (wirkungsstärksten) Slots zuerst, damit die mit frischen
+    // Vektoren arbeiten; 'desc'/'asc' sind die reine Index-Reihenfolge.
+    const slotsToDo = [];
     for (let i = maxSlots - 1; i >= 1; i--) {
         const absSlot = (currentOffset + i) % 256;
-        if (lockedSlots.has(absSlot)) continue;
+        if (!lockedSlots.has(absSlot)) slotsToDo.push(i);
+    }
+    if (slotOrder === 'asc') {
+        slotsToDo.sort((a, b) => a - b);
+    } else if (slotOrder === 'usage') {
+        const usage = getSlotUsageSummary(appState.latestCommandArray, maxSlots);
+        slotsToDo.sort((a, b) => usage[b] - usage[a] || b - a);
+    }
+    if (slotsToDo.length === 0) {
+        changeLog.push(`<div style="color:#ffc107;">Keine veränderbaren Slots (alle gesperrt).</div>`);
+        return changeLog;
+    }
 
-        const slotVector = slotVectors[i];
+    // Der Basis-Score ("Slot unverändert") darf nur dann aus dem bekannten MSE
+    // übernommen werden, wenn gegen dasselbe Bild bewertet wird, das auch
+    // encodiert wird. Die Kandidaten-Bewertung rechnet immer gegen
+    // appState.originalImageData; im Ansichtsmodus "Modifiziert" encodiert die
+    // App aber modifiedImageData. Dann bleibt es beim echten Baseline-Encode.
+    const src = appState.commandSource;
+    const baselineFromMse = (src == null || src === appState.originalImageData);
 
-        const startColor = {
-            r: appState.globalPaletteRAM[absSlot * 3],
-            g: appState.globalPaletteRAM[absSlot * 3 + 1],
-            b: appState.globalPaletteRAM[absSlot * 3 + 2]
-        };
+    let mseStand = startMse;
+    let pass = 0;
+    let aborted = false;
+    let totalDone = 0;
 
-        const result = await refineSlotColorVector(startColor, absSlot, i, slotVector, triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette);
-        if (result.didImprove) {
-            const winScale = result.candidate.scale != null ? ` ×${(result.candidate.scale * 100).toFixed(0)}%` : "";
-            changeLog.push(`✨ Slot ${i}: RGB(${result.candidate.r}, ${result.candidate.g}, ${result.candidate.b})${winScale} [Neuer MSE: ${result.score.toFixed(2)}]`);
+    while (pass < MAX_REFINE_PASSES) {
+        pass++;
+        updateOptProgress(`Vektor-Analyse Durchgang ${pass}/${MAX_REFINE_PASSES}...`);
+        // mseStand ist immer der AKTUELLE MSE (Startwert gemessen, danach der
+        // Score des letzten Gewinners) — taugt daher als Durchgangs-Startwert.
+        const passStartMse = mseStand;
+        // Fehlervektoren pro Durchgang NEU berechnen — genau ihr Veralten ist der
+        // Grund, warum ein einzelner Durchgang nicht konvergiert.
+        const slotVectors = computeSlotErrorVectors(appState, maxSlots, optRegion);
+
+        let improvedThisPass = 0;
+        for (const i of slotsToDo) {
+            if (consumeAbort()) {
+                aborted = true;
+                changeLog.push(`<div style="color:#dc3545; font-weight:bold;">⏹️ Nachoptimierung abgebrochen in Durchgang ${pass} nach ${totalDone} Slots — bisherige Palette bleibt erhalten.</div>`);
+                break;
+            }
+
+            const absSlot = (currentOffset + i) % 256;
+            const startColor = {
+                r: appState.globalPaletteRAM[absSlot * 3],
+                g: appState.globalPaletteRAM[absSlot * 3 + 1],
+                b: appState.globalPaletteRAM[absSlot * 3 + 2]
+            };
+
+            const result = await refineSlotColorVector(startColor, absSlot, i, slotVectors[i], triggerEncodeFn, updateOptProgress, battleArgs, renderUIPalette,
+                baselineFromMse ? mseStand : null);
+            totalDone++;
+            if (result.didImprove) {
+                improvedThisPass++;
+                // Der Gewinner-Score IST der neue MSE des Bildes — er wurde gerade
+                // durch einen echten Encode ermittelt. Damit bleibt mseStand ohne
+                // zusätzliche Messung aktuell, und der nächste Slot braucht keinen
+                // eigenen Baseline-Encode. Gilt nur, wenn gegen dasselbe Bild
+                // bewertet wird, das auch encodiert wird.
+                mseStand = baselineFromMse ? result.score : measureCurrentMse(appState, metric, optRegion);
+                const winScale = result.candidate.scale != null ? ` ×${(result.candidate.scale * 100).toFixed(0)}%` : "";
+                changeLog.push(`✨ D${pass} Slot ${i}: RGB(${result.candidate.r}, ${result.candidate.g}, ${result.candidate.b})${winScale} [Neuer MSE: ${result.score.toFixed(2)}]`);
+            }
+        }
+
+        const mseNow = measureCurrentMse(appState, metric, optRegion);
+        const gain = passStartMse - mseNow;
+        changeLog.push(`<div style="color:#17a2b8; font-size:11px;">🔁 Durchgang ${pass}: MSE <b>${mseNow.toFixed(2)}</b> (−${gain.toFixed(2)}), ${improvedThisPass} Slots verbessert</div>`);
+        mseStand = mseNow;
+
+        if (aborted) break;
+        if (gain < REFINE_MIN_GAIN) {
+            changeLog.push(`<div style="color:#6c757d; font-size:11px;">✔️ konvergiert (Gewinn ${gain.toFixed(2)} &lt; ${REFINE_MIN_GAIN})</div>`);
+            break;
         }
     }
 
     const durationSec = ((performance.now() - tStart) / 1000).toFixed(2);
     const endMse = measureCurrentMse(appState, metric, optRegion);
-    changeLog.push(`<div style="color:#28a745; font-size:11px;">⏱️ Dauer Manuelles Nachoptimieren: ${durationSec}s | End-MSE: ${endMse.toFixed(2)}</div>`);
+    console.log(`[Palette] Nachoptimierung: ${pass} Durchgang/Durchgänge, ${totalDone} Slot-Läufe, ${candidateScoreCount - scoreBase1} Kandidaten-Bewertungen in ${durationSec}s${aborted ? ' (abgebrochen)' : ''}`);
+    changeLog.push(`<div style="color:#28a745; font-size:11px;">⏱️ Dauer Manuelles Nachoptimieren: ${durationSec}s | ${pass} Durchgang/Durchgänge | End-MSE: ${endMse.toFixed(2)} (Start ${startMse.toFixed(2)})</div>`);
 
     return changeLog;
 }

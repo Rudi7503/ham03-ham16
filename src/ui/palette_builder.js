@@ -3,7 +3,7 @@
 import { HAM_CONFIGS } from '../codecs/configs.js';
 import { rgbToHex } from '../codecs/utils.js';
 import { computeDetailedAnalysis, getImageHistogram } from '../core/analysis.js';
-import { runHybridOptimization, runOptimizationWithProxy, runManualRefinement, requestOptimizationAbort } from '../core/palette_optimizer.js';
+import { runOptimizationWithProxy, runManualRefinementWithProxy, requestOptimizationAbort } from '../core/palette_optimizer.js';
 
 let selectedTargetSlot = null;
 
@@ -22,6 +22,47 @@ export function initPaletteBuilderUI(appState, deps) {
     const btnAuto = document.getElementById('btn-builder-auto');
 
     if (!builderModal || !btnBuilder) return;
+
+    // Auswahl für das manuelle Nachoptimieren. Der Proxy ist hier NICHT der
+    // Standard: er ist ~7x schneller, zieht die Palette aber auf die
+    // verkleinerten Farbstatistiken und kann die Vollbild-Qualität senken
+    // (gemessen +0.60 MSE bei nur 2x Verkleinerung). Bei einer Verfeinerung
+    // einer schon guten Palette fällt das ins Gewicht.
+    async function askRefineMode(bigImage) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = "position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.75); z-index:10000; display:flex; justify-content:center; align-items:center;";
+            const box = document.createElement('div');
+            box.style.cssText = "background:#1e2124; padding:25px; border-radius:8px; border:1px solid #555; text-align:center; box-shadow:0 10px 30px rgba(0,0,0,0.5); max-width: 500px;";
+            box.innerHTML = `
+                <h3 style="margin-top:0; color:#ffc107; font-family:sans-serif;">Nachoptimieren: Genauigkeit wählen</h3>
+                <p style="color:#ccc; font-size:13px; margin-bottom:20px; font-family:sans-serif; line-height:1.4;">
+                    Die Vektor-Suche läuft so lange in Durchgängen, bis ein Durchgang kaum noch etwas bringt.
+                    ${bigImage ? 'Auf diesem Bild kostet ein Vollbild-Durchgang grob eine Minute pro Megapixel.' : ''}
+                </p>
+                <div style="display:flex; flex-direction:column; gap:10px; margin-bottom:20px;">
+                    <button id="btn-rf-full" style="background:#28a745; color:#fff; border:none; padding:10px; border-radius:4px; cursor:pointer; font-weight:bold; text-align:left;">
+                        🎯 Vollbild — genau (empfohlen) <span style="font-weight:normal; font-size:11px; display:block; opacity:0.85;">Rechnet auf dem echten Bild. Kein Qualitätsrisiko, aber langsam. Abbrechbar.</span>
+                    </button>
+                    <button id="btn-rf-proxy" style="background:#ffc107; color:#000; border:none; padding:10px; border-radius:4px; cursor:pointer; font-weight:bold; text-align:left;">
+                        ⚡ Proxy — ca. 7x schneller <span style="font-weight:normal; font-size:11px; display:block; opacity:0.85;">⚠️ Kann die Endqualität senken (gemessen +0.60 MSE), weil die Palette auf die verkleinerten Farbstatistiken gezogen wird.</span>
+                    </button>
+                </div>
+                <div>
+                    <button id="btn-rf-cancel" style="background:#555; color:#fff; border:none; padding:8px 20px; border-radius:4px; cursor:pointer;">Abbrechen</button>
+                </div>
+            `;
+            overlay.appendChild(box);
+            document.body.appendChild(overlay);
+            const done = (useProxy) => {
+                document.body.removeChild(overlay);
+                resolve(useProxy);
+            };
+            document.getElementById('btn-rf-full').onclick = () => done(false);
+            document.getElementById('btn-rf-proxy').onclick = () => done(true);
+            document.getElementById('btn-rf-cancel').onclick = () => done(null);
+        });
+    }
 
     // NEU: Auswahl-Dialog für die drei Intensitätsstufen
     async function askAutoFillMode() {
@@ -329,16 +370,46 @@ export function initPaletteBuilderUI(appState, deps) {
 
     btnRefine?.addEventListener('click', async () => {
         if (!appState.originalImageData || !appState.decodedImageData) return alert("Bitte zuerst codieren.");
-        let statusDiv = document.getElementById('builder-status');
-        
-        let changeLog = await runManualRefinement(
-            appState, getOptRegion(), getStep(), getMetric(), getCurrentOffset(), getLockedSlots(),
-            (msg) => { if (statusDiv) statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ ${msg}</span>`; },
-            triggerEncode,
-            liveUpdateUI
-        );
 
-        if (statusDiv) statusDiv.innerHTML = `<span style='color:#28a745; font-weight:bold;'>✅ Nachoptimierung beendet!</span>`;
+        const maxSide = Math.max(appState.currentImgW, appState.currentImgH);
+        const useProxy = await askRefineMode(maxSide > 512);
+        if (useProxy === null) return;   // abgebrochen
+
+        let statusDiv = document.getElementById('builder-status');
+
+        let abortBtn = document.getElementById('palette-abort-btn');
+        if (abortBtn) abortBtn.remove();
+        abortBtn = document.createElement('button');
+        abortBtn.id = 'palette-abort-btn';
+        abortBtn.textContent = '⏹️ Nachoptimierung abbrechen';
+        abortBtn.style.cssText = 'position:fixed; right:16px; bottom:16px; z-index:10001; background:#dc3545; color:#fff; border:none; padding:10px 16px; border-radius:6px; cursor:pointer; font-weight:bold; box-shadow:0 4px 14px rgba(0,0,0,0.55); font-family:sans-serif; font-size:13px;';
+        abortBtn.onclick = () => {
+            requestOptimizationAbort();
+            abortBtn.disabled = true;
+            abortBtn.style.background = '#6c757d';
+            abortBtn.style.cursor = 'default';
+            abortBtn.textContent = '⏹️ Abbruch angefordert... (Durchgangsende)';
+        };
+        document.body.appendChild(abortBtn);
+
+        let changeLog;
+        try {
+            changeLog = await runManualRefinementWithProxy(
+                appState, getOptRegion(), getStep(), getMetric(), getCurrentOffset(), getLockedSlots(),
+                (msg) => { if (statusDiv) statusDiv.innerHTML = `<span style='color:#ffc107; font-weight:bold;'>⏳ ${msg}</span>`; },
+                triggerEncode,
+                liveUpdateUI,
+                useProxy
+            );
+        } finally {
+            abortBtn.remove();
+        }
+
+        const refineAborted = Array.isArray(changeLog) &&
+            changeLog.some(l => String(l).includes('Nachoptimierung abgebrochen'));
+        if (statusDiv) statusDiv.innerHTML = refineAborted
+            ? `<span style='color:#dc3545; font-weight:bold;'>⏹️ Nachoptimierung abgebrochen — Palette auf dem zuletzt erreichten Stand.</span>`
+            : `<span style='color:#28a745; font-weight:bold;'>✅ Nachoptimierung beendet!</span>`;
         btnBuilder.click();
         renderPaletteWithLocks(appState);
 
