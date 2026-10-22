@@ -5,7 +5,7 @@ import { initSpriteStudioMode } from './modes/sprite_studio.js';
 import { initViewerMode } from './modes/viewer.js';
 import { unpackHam12_16, decodeHam12_16 } from './core/module_ham12_16.js';
 import { unpackPaletted, decodePaletted } from './core/module_paletted.js';
-import { resizeImage } from './core/resample.js';
+import { resizeImage, resizeInto } from './core/resample.js';
 import { testImagePixels } from './testimages.js';
 import { closeErrorWindow } from './ui/error_window.js';
 
@@ -210,6 +210,7 @@ fileBin.addEventListener('change', (e) => {
 const scalePreset = document.getElementById('scale-preset');
 const scaleWInput = document.getElementById('scale-w');
 const scaleHInput = document.getElementById('scale-h');
+const scaleMode = document.getElementById('scale-mode');
 const scaleMethod = document.getElementById('scale-method');
 const btnScale = document.getElementById('btn-scale');
 
@@ -224,10 +225,11 @@ function updateScaleControls() {
     }
 }
 
-// Skaliert das Originalbild auf die Zielgröße. Bewusst gestreckt (ohne
-// Seitenverhältnis): die Zielformate sind feste Rastergrößen, Letterbox-Ränder
-// wären verschenkte Bildfläche. Danach ist das Ergebnis das neue Original,
-// Palette und Codierung werden zurückgesetzt.
+// Skaliert das Originalbild auf die Zielgröße — seitenverhältnistreu, also
+// ohne Verzerrung. »Ausfüllen« füllt den Rahmen und beschneidet den Überstand,
+// »Einpassen« legt das ganze Bild hinein und lässt die Ränder schwarz.
+// Danach ist das Ergebnis das neue Original, Palette und Codierung werden
+// zurückgesetzt.
 //
 // Skaliert wird mit src/core/resample.js statt mit canvas.drawImage: die
 // Canvas-Filter sind nicht spezifiziert und je nach Browser unterschiedlich,
@@ -242,12 +244,17 @@ function scaleOriginalImage(targetW, targetH) {
     if (targetW > 8192 || targetH > 8192) { alert('Maximal 8192 Pixel je Seite.'); return; }
 
     const method = scaleMethod ? scaleMethod.value : 'lanczos';
-    const pixels = resizeImage(src.data, src.width, src.height, targetW, targetH, method);
+    const mode = scaleMode ? scaleMode.value : 'fill';
+    const res = resizeInto(src.data, src.width, src.height, targetW, targetH, method, mode);
 
     const from = `${src.width}x${src.height}`;
-    applyLoadedImage(new ImageData(pixels, targetW, targetH), appState.currentImgFileName);
+    const hinweis = mode === 'fit'
+        ? `Bild ${res.innerW}x${res.innerH} mittig, Ränder schwarz`
+        : `Bild ${res.innerW}x${res.innerH} mittig, Überstand beschnitten`;
+
+    applyLoadedImage(new ImageData(res.pixels, targetW, targetH), appState.currentImgFileName);
     loadCurrentMode();
-    console.log(`Bild skaliert (${method}): ${from} -> ${targetW}x${targetH}`);
+    console.log(`Bild skaliert (${method}, ${mode}): ${from} -> ${targetW}x${targetH} | ${hinweis}`);
 }
 
 if (scalePreset && scaleWInput && scaleHInput && btnScale) {

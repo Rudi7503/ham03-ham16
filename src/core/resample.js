@@ -235,3 +235,48 @@ export function resizeImage(src, sw, sh, dw, dh, method = 'wavelet') {
     if (method === 'box') return resizeBox(src, sw, sh, dw, dh);
     return resizeWavelet(src, sw, sh, dw, dh);
 }
+
+// ---------------------------------------------------------------------------
+// Seitenverhältnistreues Skalieren in einen festen Rahmen
+// ---------------------------------------------------------------------------
+// 'fit'  – ganzes Bild hineinpassen, Ränder bleiben schwarz (nichts geht verloren)
+// 'fill' – Rahmen füllen, Überstand wird beschnitten (keine Ränder, Randbereiche weg)
+// In beiden Fällen wird NICHT verzerrt; nur 'stretch' würde das (absichtlich nicht
+// mehr angeboten, weil es Bilder staucht).
+export function innerSize(sw, sh, dw, dh, mode) {
+    const s = mode === 'fill'
+        ? Math.max(dw / sw, dh / sh)
+        : Math.min(dw / sw, dh / sh);
+    return {
+        w: Math.max(1, Math.round(sw * s)),
+        h: Math.max(1, Math.round(sh * s))
+    };
+}
+
+export function resizeInto(src, sw, sh, dw, dh, method = 'lanczos', mode = 'fit') {
+    const { w: iw, h: ih } = innerSize(sw, sh, dw, dh, mode);
+    const inner = resizeImage(src, sw, sh, iw, ih, method);
+
+    const out = new Uint8ClampedArray(dw * dh * 4);
+    for (let i = 3; i < out.length; i += 4) out[i] = 255;   // Alpha, RGB bleibt 0
+
+    const ox = Math.round((dw - iw) / 2);
+    const oy = Math.round((dh - ih) / 2);
+
+    // Überlappungsbereich (bei 'fill' ist das innere Bild größer als der Rahmen)
+    const sx0 = Math.max(0, -ox), sy0 = Math.max(0, -oy);
+    const sx1 = Math.min(iw, dw - ox), sy1 = Math.min(ih, dh - oy);
+
+    for (let y = sy0; y < sy1; y++) {
+        const dy = y + oy;
+        if (dy < 0 || dy >= dh) continue;
+        for (let x = sx0; x < sx1; x++) {
+            const dx = x + ox;
+            if (dx < 0 || dx >= dw) continue;
+            const s = (y * iw + x) * 4;
+            const d = (dy * dw + dx) * 4;
+            out[d] = inner[s]; out[d + 1] = inner[s + 1]; out[d + 2] = inner[s + 2];
+        }
+    }
+    return { pixels: out, innerW: iw, innerH: ih, offsetX: ox, offsetY: oy };
+}
