@@ -20,12 +20,13 @@ Amiga-HAM6 ist 6 Bitplanes mit **2 Steuerbits + 4 Indexbits** (16 Grundfarben).
 
 Wer „HAM06" liest und Amiga-Wissen anwendet, baut den falschen Decoder.
 
-Zweitens: **HAM06 existiert in dieser Codebasis nur als Sub-Format.** Es gibt keinen
-eigenständigen HAM06-Container. HAM06 tritt als *Phase* innerhalb der gemischten
-32-Bit-Formate auf (siehe §5). Die Format-Auswahl der Anwendung bietet ausschließlich
-gemischte Formate sowie HAM12/HAM16/DXT1 an — ein reines HAM06 wird nie gepackt
-(`packPaletted` würde bei einem Format ohne `sequence` abstürzen). Ein Decoder
-dekodiert also **einen gemischten 32-Bit-Strom**, und HAM06 ist eine seiner Phasen.
+Zweitens: **HAM06 kommt in zwei Rollen vor.** Einmal als *Phase* innerhalb der
+gemischten 32-Bit-Formate (siehe §5), einmal als **reines Format** mit dem
+Formatnamen `HAM06`, bei dem jeder Bildpunkt dieselben 6 Bit bekommt. Beide
+Rollen liegen im selben Container und werden allein durch den Formatnamen im
+Kopf unterschieden. Ein Decoder muss daher beide beherrschen; §2 (Bitstrom) und
+§6 (Decoder) decken beide ab. Reine Formate gibt es für HAM03, HAM04, HAM05,
+HAM06 und HAM08.
 
 ---
 
@@ -67,21 +68,30 @@ Hinweise:
 
 ---
 
-## 2. Pixelstrom: Wortaufbau und Phasenzuordnung
+## 2. Pixelstrom: Bitstrom und Phasenzuordnung
+
+Der Pixelstrom ist ein **kontinuierlicher Bitstrom**, der in 32-Bit-Wörtern
+(Big-Endian) abgelegt wird:
 
 - Ein **Wort** ist 32 Bit = 4 Byte, im Byte-Strom **Big-Endian** (`Byte0 = MSB`).
-- Ein Wort enthält `pixelsPerWord` Pixel. `pixelsPerWord = sequence.length` des
-  Formats (4 bis 8; siehe §5).
-- Die Bits werden **von oben nach unten** gefüllt: das erste Pixel des Wortes belegt
-  die höchsten Bits. Innerhalb eines Pixelcodes ist das **höchstwertige Bit zuerst**.
-- Die Bitbreite je Position im Wort ist durch das Sub-Format an dieser Position
-  festgelegt (Tabelle §4). Die Breiten einer Sequenz summieren sich **immer auf 32**.
-- Das letzte Wort darf teilweise gefüllt sein, wenn `W*H` kein Vielfaches von
-  `pixelsPerWord` ist; die **niedrigen Restbits bleiben 0**.
+- Jedes Pixel schreibt `bits(fmt)` Bits, **höchstwertiges Bit zuerst** (Tabelle §4).
+  Es gibt keine Auffüll-Lücken zwischen den Pixeln: der Strom läuft durch.
+- Das **letzte** Wort wird mit Nullen auf 4 Byte aufgefüllt. Die Dateigröße ist
+  daher immer ein Vielfaches von 4 Byte.
+- Bei **gemischten** Formaten ist `fmt` das Sub-Format an dieser Position
+  (`sequence[pxIndex % sequence.length]`, siehe §5); die Breiten einer Sequenz
+  summieren sich **immer auf 32**, sodass jedes Sequenz-Vielfache genau ein Wort
+  füllt.
+- Bei **reinen** Formaten (HAM03 … HAM08, Formatname ohne `sequence`) gilt für
+  **jedes** Pixel dasselbe Sub-Format. Beispiele: HAM06 mit 6 Bit → 16 Pixel je
+  3 Wörter (96 Bit); HAM08 mit 8 Bit → 4 Pixel je Wort; HAM03 mit 3 Bit →
+  32 Pixel je 3 Wörter.
 - Die Phase eines Pixels ist `sequence[pxIndex % sequence.length]`, wobei `pxIndex`
   der **absolute Pixelindex im 1-D-Strom** ist (`pxIndex = y*W + x`), **nicht** `x`.
   Bei Bildbreiten, die kein Vielfaches der Sequenzlänge sind, verschiebt sich die
   Phasenfolge daher von Zeile zu Zeile.
+- Gepackte Nutzlast: `ceil(W*H * bits_je_pixel / 32) * 4` Byte — bei gemischten
+  Formaten mit dem Mittel der Sequenz, bei reinen Formaten mit der festen Breite.
 
 ---
 
@@ -185,7 +195,9 @@ Bit15, bei HAM12 Bit11 — ebenfalls `0` = Anker, `1` = Delta.
 
 ---
 
-## 5. Gemischte 32-Bit-Formate (wo HAM06 tatsächlich vorkommt)
+## 5. Formate im Container
+
+### 5a. Gemischte 32-Bit-Formate
 
 `sequence` ist die Phasenfolge; sie wiederholt sich alle `sequence.length` Pixel.
 Die Bitbreiten der Sequenz summieren sich immer auf 32 (ein Wort).
@@ -215,6 +227,22 @@ Für `HAM_32BIT_63436343` gilt konkret:
 „Schwache" Phasen (HAM03 mit 4 Plätzen, HAM04 mit 8) können nur wenige Palettenfarben
 anspringen; HAM06 kann alle 32. Das ist der Grund, warum die Anwendung Kanten auf
 HAM06-Phasen verschiebt.
+
+### 5b. Reine Formate
+
+Hier steht der Formatname direkt für ein Sub-Format, und **jeder** Bildpunkt nutzt es.
+Es gibt keine Sequenz und keine Phasenverschiebung über die Zeile.
+
+| Formatname | bits/Pixel | Slots | Turbo | Pixel je 32-Bit-Wort | Nutzlast für `W*H` Pixel |
+|---|---|---|---|---|---|
+| `HAM03` | 3 | 4 | nein | 32 je 3 Wörter | `ceil(W*H*3/32)*4` Byte |
+| `HAM04` | 4 | 8 | nein | 8 | `ceil(W*H*4/32)*4` Byte |
+| `HAM05` | 5 | 16 | ja | 32 je 5 Wörter | `ceil(W*H*5/32)*4` Byte |
+| `HAM06` | 6 | 32 | ja | 16 je 3 Wörter | `ceil(W*H*6/32)*4` Byte |
+| `HAM08` | 8 | 128 | ja | 4 | `W*H` Byte |
+
+Beispiel HAM06, `128*128 = 16384` Pixel: `16384*6/32 = 3072` Wörter = **12288 Byte**
+(gegenüber 8192 Byte beim gemischten `HAM_32BIT_63436343`).
 
 ---
 
@@ -291,46 +319,47 @@ function decodeHam(bytes) {
   const palette = u8.slice(p, p + 768); p += 768;
   const packed = u8.slice(p);
 
-  const seq = FORMATS[format];                 // siehe §5
-  const ppw = seq.length;
+  // Gemischt: Phasenfolge. Rein (kein Eintrag in FORMATS): ein Format für alle Pixel.
+  const seq = FORMATS[format] || null;
   const out = new Uint8ClampedArray(W * H * 4);
 
   let r = 127, g = 127, b = 127;
-  let px = 0, wi = 0;
+  let bx = 0, nbits = 0, acc = 0;              // Bitstrom-Leser
   const total = W * H;
-  while (px < total) {
-    // 32-Bit-Wort, BIG-Endian
-    const w32 = ((packed[wi]<<24) | (packed[wi+1]<<16) | (packed[wi+2]<<8) | packed[wi+3]) >>> 0;
-    wi += 4;
-    let shift = 32;
-    for (let j = 0; j < ppw && px < total; j++, px++) {
-      const fmt = seq[j];
-      const bits = BITS[fmt];
-      shift -= bits;
-      const v = (w32 >>> shift) & ((1 << bits) - 1);
-      const cmd = parseCode(v, fmt);
-      if (cmd.anchor) {
-        const a = ((offset + cmd.idx) % 256) * 3;
-        r = palette[a]; g = palette[a+1]; b = palette[a+2];
-      } else {
-        const m = (cmd.turbo && TURBO[fmt]) ? 4 : 1;
-        r = clamp(r + CH[fmt].r[cmd.r] * step.r * m);
-        g = clamp(g + CH[fmt].g[cmd.g] * step.g * m);
-        b = clamp(b + CH[fmt].b[cmd.b] * step.b * m);
-      }
-      const o = px * 4;
-      out[o] = r; out[o+1] = g; out[o+2] = b; out[o+3] = 255;
+  for (let px = 0; px < total; px++) {
+    const fmt = seq ? seq[px % seq.length] : format;
+    const bits = BITS[fmt];
+    while (nbits < bits) {                     // Bytes nachziehen, MSB-first
+      acc = (acc << 8) | (packed[bx++] || 0);
+      nbits += 8;
     }
+    nbits -= bits;
+    const v = (acc >> nbits) & ((1 << bits) - 1);
+    acc &= (1 << nbits) - 1;
+
+    const cmd = parseCode(v, fmt);
+    if (cmd.anchor) {
+      const a = ((offset + cmd.idx) % 256) * 3;
+      r = palette[a]; g = palette[a+1]; b = palette[a+2];
+    } else {
+      const m = (cmd.turbo && TURBO[fmt]) ? 4 : 1;
+      r = clamp(r + CH[fmt].r[cmd.r] * step.r * m);
+      g = clamp(g + CH[fmt].g[cmd.g] * step.g * m);
+      b = clamp(b + CH[fmt].b[cmd.b] * step.b * m);
+    }
+    const o = px * 4;
+    out[o] = r; out[o+1] = g; out[o+2] = b; out[o+3] = 255;
   }
   return { width: W, height: H, format, step, offset, palette, rgba: out };
 }
 ```
 
 `FORMATS` ist die Tabelle aus §5 (Sequenz je Formatname) und oben mit abgedruckt,
-damit der Code ohne Nachschlagen läuft. Der Anker-Test `(v & slots) === 0`
-funktioniert, weil `slots` (4/8/16/32/128) genau das jeweilige Modusbit ist — und
-das Modusbit ist 0, wenn ein Anker vorliegt. Für Formate **ohne** Slots (HAM01/02)
-gibt es kein Modusbit.
+damit der Code ohne Nachschlagen läuft. Fehlt ein Formatname in `FORMATS`, gilt er
+als **reines** Format: dann bekommt jedes Pixel das Format selbst (§2). Der
+Anker-Test `(v & slots) === 0` funktioniert, weil `slots` (4/8/16/32/128) genau das
+jeweilige Modusbit ist — und das Modusbit ist 0, wenn ein Anker vorliegt. Für
+Formate **ohne** Slots (HAM01/02) gibt es kein Modusbit.
 
 ---
 
@@ -389,7 +418,13 @@ absoluten Pixelindex (`phaseFormatAt`).
 - Der Referenz-Decoder aus §6 ist eine wörtliche Abschrift aus dieser Datei und
   liefert auf einem synthetischen 128×96-Bild für **alle 13 gemischten Formate**
   Pixel für Pixel dasselbe Ergebnis wie `decodePaletted`. Prüfskript:
-  `test_spec_decode.mjs`.
+  `test_spec_decode.mjs`. Er wird zusätzlich **direkt aus dieser Markdown-Datei
+  extrahiert** und erneut geprüft (`test_spec_extract.mjs`), damit der abgedruckte
+  Code nicht von der Implementierung abweichen kann.
+- Die **reinen Formate** sind mit der echten Encode-Kette geprüft
+  (`test_pure_e2e.mjs`): HAM03/04/05/06/08 auf einem echten 128×128-Foto, jeweils
+  Encode → Packen → Entpacken → Dekodieren ohne eine einzige Pixelabweichung, mit
+  den oben angegebenen Nutzlastgrößen, und Smart Target läuft auch ohne Mischraster.
 - Der Testvektor aus §7 (`0x067FC244` → die acht angegebenen Pixel) wird
   maschinell nachgerechnet; vorher war er nur von Hand gerechnet.
 - Die Modusbit-Konvention ist auf drei Ebenen geprüft (`test_modebit.mjs`):

@@ -45,6 +45,33 @@
         <input type="file" id="file-bin" accept=".ham" style="display: none;">
         
         <button id="btn-test-images" class="btn-global" title="Prozedural erzeugte Testbilder (4 Bit/pix HAM)">Testbilder</button>
+
+        <!-- Bild auf Standardauflösungen skalieren -->
+        <div style="display: flex; align-items: center; gap: 6px; margin-left: 10px;">
+            <label for="scale-preset" style="color: #adb5bd; font-size: 12px;" title="Standardauflösungen in Pixeln. Das Bild wird auf die Zielgröße gestreckt — das Seitenverhältnis bleibt NICHT erhalten.">Größe:</label>
+            <select id="scale-preset" title="Vorgabe wählen, sie füllt Breite und Höhe. Danach »Skalieren« drücken.">
+                <option value="">– Vorgabe –</option>
+                <option value="320x256">320 × 256 · Amiga Lowres</option>
+                <option value="640x256">640 × 256 · Amiga Hires</option>
+                <option value="640x480">640 × 480 · VGA</option>
+                <option value="800x600">800 × 600 · SVGA</option>
+                <option value="320x240">320 × 240 · QVGA</option>
+                <option value="320x200">320 × 200 · VGA 13h</option>
+                <option value="256x256">256 × 256</option>
+                <option value="512x384">512 × 384</option>
+                <option value="512x512">512 × 512</option>
+                <option value="640x400">640 × 400</option>
+                <option value="720x480">720 × 480 · NTSC</option>
+                <option value="720x576">720 × 576 · PAL</option>
+                <option value="1024x768">1024 × 768 · XGA</option>
+                <option value="1280x720">1280 × 720 · 720p</option>
+                <option value="1920x1080">1920 × 1080 · 1080p</option>
+            </select>
+            <input type="number" id="scale-w" min="1" max="8192" placeholder="B" style="width: 62px;" title="Zielbreite in Pixeln (1–8192)">
+            <span style="color: #888;">×</span>
+            <input type="number" id="scale-h" min="1" max="8192" placeholder="H" style="width: 62px;" title="Zielhöhe in Pixeln (1–8192)">
+            <button id="btn-scale" class="btn-global" disabled title="Skaliert das geladene Bild auf diese Größe (gestreckt) und setzt Palette, Codierung und Fehlerbild zurück. Das Ergebnis ist das neue Original.">Skalieren</button>
+        </div>
         
         <!-- NEU: Modus-Tabs -->
         <div style="margin-left: 30px; display: flex; gap: 5px;">

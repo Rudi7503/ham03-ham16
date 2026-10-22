@@ -152,6 +152,54 @@ for (const fmt of ['HAM12', 'HAM16']) {
     prob.forEach(m => console.log(`       ! ${m}`));
 }
 
+// --- Reine HAM-Modi: keine config.sequence, der Bitstrom füllt die Wörter ---
+const pureFormats = ['HAM03', 'HAM04', 'HAM05', 'HAM06', 'HAM08'];
+for (const fmt of pureFormats) {
+    let ok = true, detail = '';
+    const erwarteteBytes = Math.ceil(TOTAL * BITS[fmt] / 32) * 4;
+
+    for (const strategie of ['greedy', 'delta_only', 'anchor_only']) {
+        const { commands } = await encodePaletted(px, W, H, fmt, STEP, basePalette.slice(), 0, strategie, 'yuv_weight');
+        const bytes = packPaletted(commands, fmt);
+        if (bytes.length !== erwarteteBytes) {
+            ok = false; detail += ` ${strategie}: ${bytes.length} statt ${erwarteteBytes} Bytes;`;
+        }
+        const back = unpackPaletted(bytes, fmt, TOTAL);
+        const decA = decodePaletted(commands, W, H, STEP, basePalette, 0);
+        const decB = decodePaletted(back, W, H, STEP, basePalette, 0);
+
+        for (let i = 0; i < TOTAL; i++) {
+            const c = commands[i], b = back[i];
+            if (c.isAnchor !== b.isAnchor) { ok = false; detail += ` ${strategie} px${i} isAnchor;`; break; }
+            if (c.isAnchor && (c.anchorIdx ?? 0) !== (b.anchorIdx ?? 0)) { ok = false; detail += ` ${strategie} px${i} Slot;`; break; }
+            if (!c.isAnchor && (!!c.isTurbo !== !!b.isTurbo || (c.rIndex ?? 0) !== (b.rIndex ?? 0) || (c.gIndex ?? 0) !== (b.gIndex ?? 0) || (c.bIndex ?? 0) !== (b.bIndex ?? 0))) {
+                ok = false; detail += ` ${strategie} px${i} Deltarichtung;`; break;
+            }
+
+            // Modusbit direkt im Bitstrom prüfen (MSB-first, feste Breite)
+            const bits = BITS[fmt], mb = MODEBIT[fmt];
+            let v = 0;
+            for (let k = 0; k < bits; k++) {
+                const abs = i * bits + k;
+                v = (v << 1) | ((bytes[abs >> 3] >> (7 - (abs & 7))) & 1);
+            }
+            if (c.isAnchor) {
+                if ((v & mb) !== 0) { ok = false; detail += ` ${strategie} px${i} Anker ohne Modusbit 0;`; break; }
+                if ((v & (mb - 1)) !== (c.anchorIdx & (mb - 1))) { ok = false; detail += ` ${strategie} px${i} Slot im Strom;`; break; }
+            } else if ((v & mb) === 0) {
+                ok = false; detail += ` ${strategie} px${i} Delta ohne Modusbit 1;`; break;
+            }
+        }
+
+        for (let i = 0; i < decA.length; i++) if (decA[i] !== decB[i]) { ok = false; detail += ` ${strategie} Pixel;`; break; }
+    }
+
+    geprueftenFormate++;
+    if (!ok) fehler++;
+    console.log(`${ok ? 'OK  ' : 'FEHL'} ${fmt.padEnd(22)} rein | ${BITS[fmt]} Bit/px | ${erwarteteBytes} Bytes für ${TOTAL} px`);
+    if (detail) console.log('       !' + detail);
+}
+
 console.log(`\nFormate geprüft: ${geprueftenFormate} + HAM12/HAM16 | Anker: ${ankerGesamt} | Deltas: ${deltaGesamt}`);
 if (ankerGesamt === 0) { console.log('WARNUNG: kein einziger Anker geprüft — Test wäre wertlos'); fehler++; }
 if (deltaGesamt === 0) { console.log('WARNUNG: kein einziges Delta geprüft — Test wäre wertlos'); fehler++; }

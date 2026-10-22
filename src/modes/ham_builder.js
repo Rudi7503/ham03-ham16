@@ -155,6 +155,7 @@ export function initHamBuilderMode(appState, containerEl) {
                 <div class="control-group">
                     <label>Format:</label>
                     <select id="format">
+                        <optgroup label="Gemischte 32-Bit-Formate">
                         <option value="HAM_32BIT_44444444">HAM 32-Bit 44444444 (4/4/4/4/4/4/4/4)  4.0 Bit/pixel</option>
                         <option value="HAM_32BIT_53535353">HAM 32-Bit 53535353 (5/3/5/3/5/3/5/3)  4.0 Bit/pixel</option>
                         <option value="HAM_32BIT_63436343" selected>HAM 32-Bit 63436343 (6/3/4/3/6/3/4/3)  4.0 Bit/pixel</option>
@@ -164,9 +165,19 @@ export function initHamBuilderMode(appState, containerEl) {
                         <option value="HAM_32BIT_655655">HAM 32-Bit 655655   (6/5/5/6/5/5)      5.3 Bit/pixel</option>
                         <option value="HAM_32BIT_86666">HAM 32-Bit 86666    (8/6/6/6/6)        6.4 Bit/pixel</option>
                         <option value="HAM_32BIT_8888">HAM 32-Bit 8888     (8/8/8/8)          8.0 Bit/pixel</option>
+                        </optgroup>
+                        <optgroup label="Reine HAM-Modi (jeder Bildpunkt dasselbe Format)">
+                        <option value="HAM03">HAM03  3 Bit · 4 Slots · kein Turbo</option>
+                        <option value="HAM04">HAM04  4 Bit · 8 Slots · kein Turbo</option>
+                        <option value="HAM05">HAM05  5 Bit · 16 Slots · Turbo</option>
+                        <option value="HAM06">HAM06  6 Bit · 32 Slots · Turbo</option>
+                        <option value="HAM08">HAM08  8 Bit · 128 Slots · Turbo</option>
+                        </optgroup>
+                        <optgroup label="Andere Codecs">
                         <option value="HAM12">HAM12</option>
                         <option value="HAM16">HAM16</option>
                         <option value="DXT1">DXT1 (4.0 Bit/px, 4x4 Blocks)</option>
+                        </optgroup>
                     </select>
                 </div>
 

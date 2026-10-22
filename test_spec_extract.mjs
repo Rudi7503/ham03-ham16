@@ -93,7 +93,7 @@ const wrap = (u8) => u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLengt
     palette[0] = palette[1] = palette[2] = 0;
     const step = { r: 4, g: 4, b: 4 };
 
-    for (const format of ['HAM_32BIT_63436343', 'HAM_32BIT_655655', 'HAM_32BIT_8888', 'HAM_32BIT_53535353']) {
+    for (const format of ['HAM_32BIT_63436343', 'HAM_32BIT_655655', 'HAM_32BIT_8888', 'HAM_32BIT_53535353', 'HAM06', 'HAM04', 'HAM03']) {
         for (const strategie of ['greedy', 'delta_only', 'anchor_only']) {
             const { commands } = await encodePaletted(px, W, H, format, step, palette.slice(), 0, strategie, 'yuv_weight');
             const packed = packPaletted(commands, format);

@@ -83,6 +83,7 @@ function applyLoadedImage(imageData, fileName) {
     appState.showModified = false;
     appState.latestCommandArray = null;
     appState.globalPaletteRAM.fill(0); // RAM reset
+    updateScaleControls();
 }
 
 // ==========================================
@@ -176,6 +177,7 @@ fileBin.addEventListener('change', (e) => {
         appState.showModified = false;
         
         loadCurrentMode();
+        updateScaleControls();
         
         // UI-Felder im Builder nachträglich synchronisieren
         setTimeout(() => {
@@ -199,6 +201,80 @@ fileBin.addEventListener('change', (e) => {
     };
     reader.readAsArrayBuffer(file);
 });
+
+// ==========================================
+// BILD AUF STANDARDGRÖSSEN SKALIEREN
+// ==========================================
+
+const scalePreset = document.getElementById('scale-preset');
+const scaleWInput = document.getElementById('scale-w');
+const scaleHInput = document.getElementById('scale-h');
+const btnScale = document.getElementById('btn-scale');
+
+// Hält Eingabefelder und Knopf mit dem geladenen Bild synchron.
+function updateScaleControls() {
+    if (!scaleWInput || !scaleHInput || !btnScale) return;
+    const hasImage = !!appState.originalImageData && appState.originalImageData.width > 0;
+    btnScale.disabled = !hasImage;
+    if (hasImage) {
+        scaleWInput.value = appState.originalImageData.width;
+        scaleHInput.value = appState.originalImageData.height;
+    }
+}
+
+// Skaliert das Originalbild auf die Zielgröße. Bewusst gestreckt (ohne
+// Seitenverhältnis): die Zielformate sind feste Rastergrößen, Letterbox-Ränder
+// wären verschenkte Bildfläche. Danach ist das Ergebnis das neue Original,
+// Palette und Codierung werden zurückgesetzt.
+function scaleOriginalImage(targetW, targetH) {
+    const src = appState.originalImageData;
+    if (!src || !src.width || !src.height) { alert('Bitte zuerst ein Bild laden.'); return; }
+    if (!Number.isFinite(targetW) || !Number.isFinite(targetH) || targetW < 1 || targetH < 1) {
+        alert('Breite und Höhe müssen ganze Zahlen größer als 0 sein.');
+        return;
+    }
+    if (targetW > 8192 || targetH > 8192) { alert('Maximal 8192 Pixel je Seite.'); return; }
+
+    // ImageData ist nicht direkt zeichenbar -> über ein Zwischen-Canvas gehen
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = src.width;
+    tmpCanvas.height = src.height;
+    tmpCanvas.getContext('2d').putImageData(src, 0, 0);
+
+    const dstCanvas = document.createElement('canvas');
+    dstCanvas.width = targetW;
+    dstCanvas.height = targetH;
+    const ctx = dstCanvas.getContext('2d', { willReadFrequently: true });
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, targetW, targetH);
+    ctx.drawImage(tmpCanvas, 0, 0, targetW, targetH);
+
+    const from = `${src.width}x${src.height}`;
+    applyLoadedImage(ctx.getImageData(0, 0, targetW, targetH), appState.currentImgFileName);
+    loadCurrentMode();
+    console.log(`Bild skaliert: ${from} -> ${targetW}x${targetH}`);
+}
+
+if (scalePreset && scaleWInput && scaleHInput && btnScale) {
+    scalePreset.addEventListener('change', () => {
+        const m = /^(\d+)x(\d+)$/.exec(scalePreset.value || '');
+        if (m) { scaleWInput.value = m[1]; scaleHInput.value = m[2]; }
+    });
+    btnScale.addEventListener('click', () => {
+        scaleOriginalImage(parseInt(scaleWInput.value, 10), parseInt(scaleHInput.value, 10));
+    });
+    for (const el of [scaleWInput, scaleHInput]) {
+        el.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') {
+                ev.preventDefault();
+                scaleOriginalImage(parseInt(scaleWInput.value, 10), parseInt(scaleHInput.value, 10));
+            }
+        });
+    }
+    updateScaleControls();
+}
 
 // ==========================================
 // TESTBILDER (prozedural erzeugt)

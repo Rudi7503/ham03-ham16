@@ -316,29 +316,46 @@ function getCmdVal(cmd) {
     return { v, bits };
 }
 
+// Bitbreite je Sub-Format (nur hier geführt, damit Packen und Entpacken
+// dieselbe Quelle haben).
+const BITS_BY_FMT = { HAM01: 1, HAM02: 2, HAM03: 3, HAM04: 4, HAM05: 5, HAM06: 6, HAM08: 8 };
+
+// Packt die Befehlskette als kontinuierlichen Bitstrom (MSB-first) in
+// 32-Bit-Wörter.
+//
+// Die Breite kommt aus getCmdVal und hängt nur vom Sub-Format des jeweiligen
+// Pixels ab. Dadurch funktionieren gemischte UND reine Formate:
+//   • gemischt: die Breiten einer Sequenz summieren sich auf 32, der Strom
+//     erzeugt also Byte für Byte dieselben Wörter wie das frühere wortweise
+//     Packen (Dateien bleiben kompatibel).
+//   • rein (z. B. HAM06 mit 6 Bit): der Strom füllt die Wörter laufend weiter,
+//     ohne dass eine Sequenz nötig wäre.
+// Das letzte Wort wird mit Nullen auf 4 Byte aufgefüllt.
 export function packPaletted(commands, format) {
-    let config = HAM_CONFIGS[format];
-    let out = [];
-    let pixelsPerWord = config.sequence.length;
-    for (let i = 0; i < commands.length; i += pixelsPerWord) {
-        let w32 = 0, shift = 32; 
-        for (let j = 0; j < pixelsPerWord; j++) {
-            if (i + j >= commands.length) break;
-            let { v, bits } = getCmdVal(commands[i + j]);
-            shift -= bits;
-            w32 |= (v << shift);
+    const out = [];
+    let acc = 0, nbits = 0;
+    for (let i = 0; i < commands.length; i++) {
+        const { v, bits } = getCmdVal(commands[i]);
+        acc = (acc << bits) | (v & ((1 << bits) - 1));
+        nbits += bits;
+        while (nbits >= 8) {
+            nbits -= 8;
+            out.push((acc >> nbits) & 255);
         }
-        w32 >>>= 0;
-        out.push((w32 >>> 24) & 255, (w32 >>> 16) & 255, (w32 >>> 8) & 255, w32 & 255);
+        acc &= (1 << nbits) - 1;
     }
+    if (nbits > 0) out.push((acc << (8 - nbits)) & 255);
+    while (out.length % 4 !== 0) out.push(0);
     return new Uint8Array(out);
 }
 
 export function unpackPaletted(packedData, format, totalPixels) {
-    let config = HAM_CONFIGS[format];
-    let commands = new Array(totalPixels);
-    let pixelsPerWord = config.sequence.length;
-    let pIdx = 0;
+    const config = HAM_CONFIGS[format];
+    // Reine Formate haben keine Sequenz: dann gilt für jeden Pixel das Format selbst.
+    const seq = (config && config.isMixed && Array.isArray(config.sequence) && config.sequence.length > 0)
+        ? config.sequence : null;
+    const commands = new Array(totalPixels);
+    let p = 0, acc = 0, nbits = 0;
 
     // Modusbit = 0 → Anker, = 1 → Delta (siehe getCmdVal)
     function parseVal(v, fmt) {
@@ -366,18 +383,18 @@ export function unpackPaletted(packedData, format, totalPixels) {
         return { isAnchor: true, format: fmt, anchorIdx: 0 };
     }
 
-    for (let i = 0; i < packedData.length; i += 4) {
-        if (pIdx >= totalPixels) break;
-        let w32 = ((packedData[i] << 24) | (packedData[i+1] << 16) | (packedData[i+2] << 8) | packedData[i+3]) >>> 0;
-        let shift = 32;
-        
-        for (let j = 0; j < pixelsPerWord; j++) {
-            if (pIdx >= totalPixels) break;
-            let fmt = config.sequence[j];
-            let bits = (fmt === "HAM01") ? 1 : (fmt === "HAM02") ? 2 : (fmt === "HAM03") ? 3 : (fmt === "HAM04") ? 4 : (fmt === "HAM05") ? 5 : (fmt === "HAM06") ? 6 : 8;
-            shift -= bits;
-            commands[pIdx++] = parseVal((w32 >>> shift) & ((1 << bits) - 1), fmt);
+    // Bitstrom lesen: pro Pixel so viele Bits ziehen, wie sein Sub-Format braucht
+    for (let i = 0; i < totalPixels; i++) {
+        const fmt = seq ? seq[i % seq.length] : format;
+        const bits = BITS_BY_FMT[fmt] || 4;
+        while (nbits < bits) {
+            acc = (acc << 8) | (packedData[p++] || 0);
+            nbits += 8;
         }
+        nbits -= bits;
+        const v = (acc >> nbits) & ((1 << bits) - 1);
+        acc &= (1 << nbits) - 1;
+        commands[i] = parseVal(v, fmt);
     }
     return commands;
 }
