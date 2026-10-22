@@ -5,6 +5,7 @@ import { initSpriteStudioMode } from './modes/sprite_studio.js';
 import { initViewerMode } from './modes/viewer.js';
 import { unpackHam12_16, decodeHam12_16 } from './core/module_ham12_16.js';
 import { unpackPaletted, decodePaletted } from './core/module_paletted.js';
+import { resizeImage } from './core/resample.js';
 import { testImagePixels } from './testimages.js';
 import { closeErrorWindow } from './ui/error_window.js';
 
@@ -209,6 +210,7 @@ fileBin.addEventListener('change', (e) => {
 const scalePreset = document.getElementById('scale-preset');
 const scaleWInput = document.getElementById('scale-w');
 const scaleHInput = document.getElementById('scale-h');
+const scaleMethod = document.getElementById('scale-method');
 const btnScale = document.getElementById('btn-scale');
 
 // Hält Eingabefelder und Knopf mit dem geladenen Bild synchron.
@@ -226,6 +228,10 @@ function updateScaleControls() {
 // Seitenverhältnis): die Zielformate sind feste Rastergrößen, Letterbox-Ränder
 // wären verschenkte Bildfläche. Danach ist das Ergebnis das neue Original,
 // Palette und Codierung werden zurückgesetzt.
+//
+// Skaliert wird mit src/core/resample.js statt mit canvas.drawImage: die
+// Canvas-Filter sind nicht spezifiziert und je nach Browser unterschiedlich,
+// außerdem nicht prüfbar. Die Verfahren dort sind gemessen (test_resize.mjs).
 function scaleOriginalImage(targetW, targetH) {
     const src = appState.originalImageData;
     if (!src || !src.width || !src.height) { alert('Bitte zuerst ein Bild laden.'); return; }
@@ -235,26 +241,13 @@ function scaleOriginalImage(targetW, targetH) {
     }
     if (targetW > 8192 || targetH > 8192) { alert('Maximal 8192 Pixel je Seite.'); return; }
 
-    // ImageData ist nicht direkt zeichenbar -> über ein Zwischen-Canvas gehen
-    const tmpCanvas = document.createElement('canvas');
-    tmpCanvas.width = src.width;
-    tmpCanvas.height = src.height;
-    tmpCanvas.getContext('2d').putImageData(src, 0, 0);
-
-    const dstCanvas = document.createElement('canvas');
-    dstCanvas.width = targetW;
-    dstCanvas.height = targetH;
-    const ctx = dstCanvas.getContext('2d', { willReadFrequently: true });
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, targetW, targetH);
-    ctx.drawImage(tmpCanvas, 0, 0, targetW, targetH);
+    const method = scaleMethod ? scaleMethod.value : 'lanczos';
+    const pixels = resizeImage(src.data, src.width, src.height, targetW, targetH, method);
 
     const from = `${src.width}x${src.height}`;
-    applyLoadedImage(ctx.getImageData(0, 0, targetW, targetH), appState.currentImgFileName);
+    applyLoadedImage(new ImageData(pixels, targetW, targetH), appState.currentImgFileName);
     loadCurrentMode();
-    console.log(`Bild skaliert: ${from} -> ${targetW}x${targetH}`);
+    console.log(`Bild skaliert (${method}): ${from} -> ${targetW}x${targetH}`);
 }
 
 if (scalePreset && scaleWInput && scaleHInput && btnScale) {
