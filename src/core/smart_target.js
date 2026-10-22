@@ -16,8 +16,43 @@ const MIN_1PX_DIST_SQ = 576; // 24^2 für euklidische Distanz
 
 const LEVEL1_REST = 0.5;
 const LEVEL2_REST = 0.25;
-const RASTER_LINK_RATIO = 0.35;
+// Kernel-Breite der Wavelet-Dämpfung in Pixeln (±span). 1 = nur die direkten
+// Nachbarn.
+//
+// ACHTUNG, gemessen (876x882, Schwelle 8, Anker 24) — breiter und stärker hilft
+// NICHT, es macht die Zieltreue schlechter:
+//   span 1 / rest 0.25 → 19.99 | span 1 / rest 0 → 19.90
+//   span 3 / rest 0.25 → 20.70 | span 3 / rest 0 → 20.84
+// Grund siehe QUANTIZE_DAMP: die Dämpfung erzeugt Mischfarben, die nicht in der
+// Palette stehen. Mehr Dämpfung heißt nur mehr unrepräsentierbare Farben. Wer
+// die Wirkung erhöhen will, dreht an der Palettentreue, nicht an der Stärke.
+const DAMP_SPAN = 1;
+
+// Gedämpfte Werte auf eine Palettenfarbe ziehen, die die Phase dieses Pixels
+// auch anspringen kann. Das ist der eigentliche Hebel (gleiche Bedingungen):
+//   aus:  Zieltreue 19.99, Mittel 25.7 je geändertem Pixel
+//   an:   Zieltreue 16.32, Mittel 39.9
+// Also 18% bessere Zieltreue bei praktisch gleicher Pixelzahl (38852 → 39047).
+// Beleg für die Ursache: 38192 von 38195 gedämpften Pixeln lagen VORHER
+// außerhalb der Palette — der Encoder konnte die geglätteten Werte gar nicht
+// treffen. Deshalb brachte stärkeres Glätten nichts: es erzeugte nur noch mehr
+// solcher Farben.
+// Preis: der einzelne Pixel wird weiter verschoben (Mittel 26 → 40), weil eine
+// schwache Phase nur ihre 4 Plätze anspringen kann. Dafür steht dort eine
+// glatte, exakt reproduzierte Farbe statt eines verwaschenen Zwischentons.
+const QUANTIZE_DAMP = true;
+// Mindest-HL-Magnitude eines Nachbarn (als Anteil der Schwelle), damit er als
+// Teil DERSELBEN hochfrequenten Struktur gilt. Hieß vorher RASTER_LINK_RATIO.
+const STRUCTURE_MAG_RATIO = 0.35;
 const RASTER_HALF_SPAN = 2;
+
+// Ab dieser Distanz (euklidisch in RGB) gilt eine Farbe als "nicht durch die
+// Palette darstellbar", also als ohne Ankerfarbe. Gemessen am echten 876x882-Foto
+// mit fester Palette, 8000 Peaks: auf der STARKEN Phase liegen 76,8% der Peaks
+// innerhalb 24, auf der eigenen schwachen Phase nur 3,8% (Mittel 17,8 gegen 49,5).
+// Nur wenn auch die stärkste Phase nichts in Reichweite hat, kann Verschieben
+// nicht helfen — dann ist Dämpfen die einzige Möglichkeit.
+const ANCHOR_TOL = 24;
 
 // Luma-Gewichte zur psycho-visuellen Anpassung
 const LUMA_W = [0.299, 0.587, 0.114];
@@ -43,9 +78,9 @@ function hlDetailAtPixels(orig, dec, width, x, y) {
 }
 
 // Berechnet das komplette HL-Band einmal in ein Float32Array. detectPeaks,
-// localWindowError (Quellbild) und findRasterLinks greifen danach nur noch
+// localWindowError (Quellbild) und collectStructureNeighbours greifen danach nur noch
 // lesend zu, statt hlDetailAtPixels pro Pixel erneut auszuführen.
-function computeHlMap(orig, dec, width, height) {
+export function computeHlMap(orig, dec, width, height) {
     const map = new Float32Array(width * height);
     for (let y = 0; y < height; y++) {
         const row = y * width;
@@ -93,7 +128,7 @@ function localWindowErrorFromMap(hlMap, width, x, y) {
 // Peaks über der (manuellen) Schwelle. Schwelle 0 = KEINE Modifikation.
 // Die HL-Statistik wird zusätzlich zurückgegeben, damit das UI eine sinnvolle
 // Schwelle vorschlagen kann.
-function detectPeaks(hlMap, width, height, peakThreshold = 0) {
+export function detectPeaks(hlMap, width, height, peakThreshold = 0) {
     let sum = 0, sumSq = 0, count = 0;
     
     // Pass 1: Statistische Basis ermitteln (liest nur aus dem HL-Band)
@@ -149,11 +184,58 @@ function detectPeaks(hlMap, width, height, peakThreshold = 0) {
     return { peaks, threshold, mean, std };
 }
 
+// Nächste erreichbare Palettenfarbe für eine Phase (nicht nur der Abstand).
+function nearestPaletteColor(paletteRAM, nSlots, r, g, b) {
+    let best = null, bestD2 = Infinity;
+    const n = Math.min(nSlots, Math.floor(paletteRAM.length / 3));
+    for (let i = 0; i < n; i++) {
+        const dr = paletteRAM[i * 3] - r, dg = paletteRAM[i * 3 + 1] - g, db = paletteRAM[i * 3 + 2] - b;
+        const d2 = dr * dr + dg * dg + db * db;
+        if (d2 < bestD2) {
+            bestD2 = d2;
+            best = { r: paletteRAM[i * 3], g: paletteRAM[i * 3 + 1], b: paletteRAM[i * 3 + 2] };
+            if (d2 === 0) break;
+        }
+    }
+    return best;
+}
+
+// Nächste erreichbare Palettenfarbe für eine Phase: eine Phase kann nur die
+// ersten `nSlots` Einträge der Palette anspringen (HAM03 = 4, HAM04 = 8,
+// HAM06 = 32). Der Abstand sagt, welchen Farbfehler die Slot-Grenze erzwingt.
+function nearestPaletteDist(paletteRAM, nSlots, r, g, b) {
+    let best = Infinity;
+    const n = Math.min(nSlots, Math.floor(paletteRAM.length / 3));
+    for (let i = 0; i < n; i++) {
+        const dr = paletteRAM[i * 3] - r, dg = paletteRAM[i * 3 + 1] - g, db = paletteRAM[i * 3 + 2] - b;
+        const d2 = dr * dr + dg * dg + db * db;
+        if (d2 < best) { best = d2; if (best === 0) break; }
+    }
+    return Math.sqrt(best);
+}
+
 // ---------------------------------------------------------------------------
 // Raster-Info
 // ---------------------------------------------------------------------------
 
-function getRasterInfo(format) {
+// Phasen-Info des Mischrasters.
+//
+// "Schwach" heißt: diese Phase hat WENIGER ALS DIE HÄLFTE der Ankerplätze der
+// stärksten Phase und kann eine harte Kante deshalb nicht zuverlässig exakt
+// darstellen. Genau diese Phasen sind das Ziel der Modifikation (Kante auf die
+// starke Phase schieben bzw. den Rest dort stärker dämpfen).
+//
+// Vorher wurde `!sub.slotsPerBank` geprüft — das ist nur bei HAM01/HAM02 wahr,
+// und die kommen in KEINER Sequenz vor. Die Menge war damit für jedes reale
+// Format leer und der Zweig lief nie.
+//
+// Die Hälfte-Regel trifft für die 32-Bit-Formate genau die Phasen, die keine
+// harte Kante tragen können (HAM03 = 4, HAM04 = 8), lässt aber HAM05 (16) als
+// Zielphase in Ruhe — bei 655655 (32/16/16) ist also nichts schwach, bei
+// 63436343 (32/4/8/4) sind es die Phasen 1, 2 und 3, bei 53535353 (16/4) nur
+// Phase 1. Ein gleichmäßiges Raster (44444444, 8888) hat korrekt keine schwache
+// Phase — dort gibt es keine bessere, auf die man ausweichen könnte.
+export function getRasterInfo(format) {
     const cfg = HAM_CONFIGS[format];
     if (!cfg || !cfg.isMixed || !Array.isArray(cfg.sequence) || cfg.sequence.length === 0) return null;
     const seq = cfg.sequence;
@@ -168,17 +250,53 @@ function getRasterInfo(format) {
         if (ok) { period = p; break; }
     }
 
-    const weak = new Set();
+    const slots = [];
     for (let i = 0; i < period; i++) {
         const sub = HAM_CONFIGS[seq[i]];
-        if (!sub || !sub.slotsPerBank) weak.add(i);
+        slots.push(sub && sub.slotsPerBank ? sub.slotsPerBank : 0);
     }
-    return { period, weak };
+    const maxSlots = Math.max(...slots);
+
+    const weak = new Set();
+    for (let i = 0; i < period; i++) {
+        if (slots[i] * 2 < maxSlots) weak.add(i);
+    }
+    return { period, weak, slots, maxSlots, names: seq.slice(0, period) };
 }
 
-function buildShiftedImage(source, width, peaks, dir) {
+// Nächste Position, die die Kante überhaupt tragen kann: kleinster Versatz je
+// Richtung, der von dieser Phase auf eine STARKE (nicht-schwache) Phase führt.
+// 0 = kein Versatz möglich oder nötig. Das ist der "next"-Teil des Rasters —
+// bewusst NICHT "find irgendeinen Nachbarn", sondern "finde die nächste Position
+// mit genug Ankerplätzen". Gegenstück zu collectStructureNeighbours, das die
+// Nachbarn DERSELBEN Phase für die Dämpfung sammelt.
+//
+// Beispiel 63436343 (Periode 4, Plätze 32/4/8/4, schwach {1,2,3}, stark {0}):
+//   Phase 1 → −1 (auf 0)      | Phase 2 → −2 oder +2 (auf 0)  ← mit ±1 NICHT erreichbar
+//   Phase 3 → +1 (auf 0)      | Phase 0 → 0 (schon stark)
+// Ohne diesen Schritt bleiben die Peaks auf Phase 2 (gemessen 21,8% aller Peaks)
+// unerreichbar, weil ±1 von Phase 2 nur auf HAM03 führt — also auf eine noch
+// schwächere Phase.
+function nextStrongPhaseOffset(phase, raster) {
+    if (!raster || raster.weak.size === 0 || !raster.weak.has(phase)) return { plus: 0, minus: 0 };
+    const P = raster.period;
+    let plus = 0, minus = 0;
+    for (let d = 1; d <= P; d++) {
+        if (!raster.weak.has((phase + d) % P)) { plus = d; break; }
+    }
+    for (let d = 1; d <= P; d++) {
+        if (!raster.weak.has(((phase - d) % P + P) % P)) { minus = -d; break; }
+    }
+    return { plus, minus };
+}
+
+// Verschiebt jeden Peak um SEINEN Versatz (Feld `key` = 'dPlus'/'dMinus').
+// Versatz 0 bedeutet: dieser Peak wird nicht verschoben.
+function buildShiftedImage(source, width, peaks, key) {
     const out = new Uint8ClampedArray(source);
     for (const p of peaks) {
+        const dir = p[key] || 0;
+        if (dir === 0) continue;
         const fromX = p.x + dir;
         if (fromX < 0 || fromX >= width) continue;
         const toIdx = (p.y * width + p.x) * 4;
@@ -195,31 +313,65 @@ function buildShiftedImage(source, width, peaks, dir) {
 // Phase 4: Wavelet-Dämpfung (Referenz-gesichert)
 // ---------------------------------------------------------------------------
 
-function dampHlAt(target, reference, width, x, y, rest) {
+function dampHlAt(target, reference, width, x, y, rest, span = 1) {
     if (x < 1 || x >= width - 1) return;
     const i = y * width + x;
-    const l = i - 1, r = i + 1;
+    // Kernel-Breite: span = 1 ist der bisherige 3-Tap-Filter (nur linker und
+    // rechter Nachbar). Größere Werte mitteln über ±span Pixel und erfassen
+    // damit auch Wechsel, die dichter als 2 Pixel sind — genau der Fall
+    // "Rot/Blau im Wechsel", den ein 3-Tap-Filter kaum berührt.
+    const x0 = Math.max(0, x - span), x1 = Math.min(width - 1, x + span);
     for (let c = 0; c < 3; c++) {
-        const el = reference[l * 4 + c];
-        const er = reference[r * 4 + c];
         const e0 = reference[i * 4 + c];
-        
-        // Exaktes Integer-Lifting über Referenzbild
-        const h = e0 - ((el + er) >> 1);
+        let low;
+        if (span === 1) {
+            // unverändert zum bisherigen Verhalten (exaktes Integer-Lifting)
+            low = (reference[(i - 1) * 4 + c] + reference[(i + 1) * 4 + c]) >> 1;
+        } else {
+            let sum = 0, n = 0;
+            for (let xx = x0; xx <= x1; xx++) {
+                if (xx === x) continue;
+                sum += reference[(y * width + xx) * 4 + c];
+                n++;
+            }
+            if (n === 0) continue;
+            low = Math.round(sum / n);
+        }
+        const h = e0 - low;
         target[i * 4 + c] = clamp(Math.round(e0 - h * (1 - rest)), 0, 255);
     }
 }
 
-function findRasterLinks(hlMap, width, height, x, y, threshold) {
+// Sammelt die Nachbarn, die zur SELBEN hochfrequenten Struktur gehören wie der
+// Peak — also Pixel, die selbst strukturiert sind (HL über STRUCTURE_MAG_RATIO
+// der Schwelle), aber nicht stark genug, um eigene Peaks zu sein.
+//
+// Zwei Arten von Nachbarn:
+//   • horizontal im Abstand der Raster-Periode (step): dieselbe Phase, also
+//     dieselbe Ankerkapazität. Das ist die Struktur, die der Encoder entlang
+//     der Zeile zusammenhängend behandeln muss.
+//   • direkt darüber/darunter: eine waagerechte Kante erstreckt sich über
+//     Zeilen, ein nur in einer Zeile gedämpfter Peak würde sie stehen lassen.
+//     (Diese Nachbarn liegen übrigens nur dann auf derselben Phase, wenn die
+//     Bildbreite ein Vielfaches der Periode ist — bei 876 und Periode 4 ja,
+//     bei 876 und Periode 7 nicht.)
+//
+// Hieß vorher `findRasterLinks`. Der Name war doppelt irreführend: "Links" liest
+// sich in dieser Datei als "links" = left (direkt daneben stehen dL/dR für
+// distance-left/right), und die vertikalen Nachbarn sind eben nicht
+// raster-phasengleich. Der Rückgabewert ist keine Verknüpfung, sondern eine
+// Kandidatenmenge für die Dämpfung. Alternative Namen, falls gewünscht:
+// `findRasterSiblings` oder `collectSamePhaseNeighbours`.
+function collectStructureNeighbours(hlMap, width, height, x, y, threshold, step = 4) {
     const out = [];
-    const minMag = threshold * RASTER_LINK_RATIO;
+    const minMag = threshold * STRUCTURE_MAG_RATIO;
     const consider = (xx, yy) => {
         if (xx < 1 || xx >= width - 1 || yy < 0 || yy >= height) return;
         if (hlMap[yy * width + xx] > minMag) out.push({ x: xx, y: yy });
     };
     for (let k = 1; k <= RASTER_HALF_SPAN; k++) {
-        consider(x + 4 * k, y);
-        consider(x - 4 * k, y);
+        consider(x + step * k, y);
+        consider(x - step * k, y);
     }
     consider(x, y - 1);
     consider(x, y + 1);
@@ -360,7 +512,7 @@ export function applyLocalWaveletDamping(data, width, height, cx, cy, rest = LEV
 
 export async function generateSmartTarget({
     sourceData, width, height, step, metric, format, paletteRAM, offset, strategy, onProgress,
-    snapBlack = 0, snapWhite = 0, peakThreshold = 0
+    snapBlack = 0, snapWhite = 0, peakThreshold = 0, anchorTol = ANCHOR_TOL, dampSpan = DAMP_SPAN, level2Rest = LEVEL2_REST, quantizeDamp = QUANTIZE_DAMP
 }) {
     const log = [];
     const report = (p, c, t) => { if (onProgress) onProgress(p, c, t); };
@@ -368,7 +520,7 @@ export async function generateSmartTarget({
     report('Phase 1/4: Scanner (Encode/Decode + HL-Peaks)', 0, 4);
     const dec = await encodeDecode(sourceData, width, height, format, step, paletteRAM, offset, strategy, metric, onProgress);
 
-    // HL-Band einmal berechnen und für Peaks, Edge-Snapping und Raster-Links teilen.
+    // HL-Band einmal berechnen und für Peaks, Edge-Snapping und Struktur-Nachbarn teilen.
     const hlMap = computeHlMap(sourceData, dec, width, height);
     const { peaks, threshold, mean, std } = detectPeaks(hlMap, width, height, peakThreshold);
     log.push(`HL-Statistik: Mittelwert ${mean.toFixed(1)}, σ ${std.toFixed(1)} (Vorschlag Schwelle: ${Math.max(1, Math.round(mean + 2 * std))})`);
@@ -396,14 +548,54 @@ export async function generateSmartTarget({
     }
 
     report('Phase 2/4: Edge-Snapping (A/B-Batch-Test)', 1, 4);
-    const testA = buildShiftedImage(sourceData, width, peaks, +1);
-    const testB = buildShiftedImage(sourceData, width, peaks, -1);
+    // Raster-Info schon hier: der Versatz je Peak richtet sich nach der Phase,
+    // nicht mehr pauschal nach ±1. Peaks auf Phase 2 (HAM04) erreichen die starke
+    // Phase erst mit 2 Pixeln Abstand.
+    const raster = getRasterInfo(format);
+    const tailIdx = (x, y) => ((y * width + x) % (raster ? raster.period : 1));
+
+    let shiftable = 0, unreachable = 0, anchorless = 0, capacityLimited = 0;
+    for (const p of peaks) {
+        // Ankerfarben-Test: kann die Farbe dieses Pixels von irgendeiner Phase
+        // dargestellt werden? Wenn nicht einmal die stärkste Phase etwas in
+        // Reichweite hat, hilft Verschieben nicht — dann ist Dämpfen das Mittel.
+        const o = (p.y * width + p.x) * 4;
+        p.ownDist = 0;
+        p.anchorless = false;
+        if (raster) {
+            const own = nearestPaletteDist(paletteRAM, raster.slots[tailIdx(p.x, p.y)], sourceData[o], sourceData[o + 1], sourceData[o + 2]);
+            const strong = nearestPaletteDist(paletteRAM, raster.maxSlots, sourceData[o], sourceData[o + 1], sourceData[o + 2]);
+            p.ownDist = own;
+            p.anchorless = strong > anchorTol;
+            if (p.anchorless) anchorless++;
+            else if (own > anchorTol) capacityLimited++;
+        }
+
+        if (!raster) { p.dPlus = 0; p.dMinus = 0; continue; }
+        const phase = tailIdx(p.x, p.y);
+        const off = nextStrongPhaseOffset(phase, raster);
+        // Ein Versatz, der über den Bildrand hinausführt, ist unbrauchbar.
+        if (off.plus !== 0 && (p.x + off.plus < 0 || p.x + off.plus >= width)) off.plus = 0;
+        if (off.minus !== 0 && (p.x + off.minus < 0 || p.x + off.minus >= width)) off.minus = 0;
+        p.dPlus = off.plus; p.dMinus = off.minus;
+        if (off.plus || off.minus) shiftable++;
+        else if (raster.weak.has(phase)) unreachable++;
+    }
+    if (raster) {
+        log.push(`Verschiebbar: ${shiftable} von ${peaks.length} Peaks (Ziel: nicht-schwache Phase); ` +
+                 `nicht erreichbar: ${unreachable} (Phase schon stark oder kein Ziel vorhanden)`);
+        log.push(`Ankerfarbe (Toleranz ${anchorTol}): ${anchorless} Peaks ohne jede erreichbare Farbe → nur Dämpfen; ` +
+                 `${capacityLimited} durch die Slot-Grenze der eigenen Phase benachteiligt`);
+    }
+
+    const testA = buildShiftedImage(sourceData, width, peaks, 'dPlus');
+    const testB = buildShiftedImage(sourceData, width, peaks, 'dMinus');
     const decA = await encodeDecode(testA, width, height, format, step, paletteRAM, offset, strategy, metric, onProgress);
     const decB = await encodeDecode(testB, width, height, format, step, paletteRAM, offset, strategy, metric, onProgress);
 
     const target = new Uint8ClampedArray(sourceData);
     const remaining = [];
-    let snapCount = 0;
+    let snapCount = 0, snapDist1 = 0, snapDist2 = 0;
 
     for (const p of peaks) {
         const oi = p.y * width + p.x;
@@ -420,10 +612,14 @@ export async function generateSmartTarget({
             }
         }
         if (dL > MIN_1PX_DIST_SQ && dR > MIN_1PX_DIST_SQ) { remaining.push(p); continue; }
+        // Ohne Ankerfarbe kann keine noch so gute Zielphase die Farbe darstellen
+        // → nicht verschieben, sondern dämpfen (kommt unten in die starke Stufe).
+        if (p.anchorless) { remaining.push(p); continue; }
+        if (!p.dPlus && !p.dMinus) { remaining.push(p); continue; }
 
         const w0 = localWindowErrorFromMap(hlMap, width, p.x, p.y);
-        const wA = localWindowError(testA, decA, width, p.x, p.y);
-        const wB = localWindowError(testB, decB, width, p.x, p.y);
+        const wA = p.dPlus ? localWindowError(testA, decA, width, p.x, p.y) : Infinity;
+        const wB = p.dMinus ? localWindowError(testB, decB, width, p.x, p.y) : Infinity;
 
         const isCleanFix = (wCand) =>
             wCand < w0 * ACCEPT_IMPROVE_RATIO && 
@@ -433,10 +629,11 @@ export async function generateSmartTarget({
         const okA = isCleanFix(wA);
         const okB = isCleanFix(wB);
 
+        // Der Versatz kann je Richtung unterschiedlich weit sein (Phase 2 → ±2).
         let dir = 0;
-        if (okA && okB) dir = wA <= wB ? +1 : -1;
-        else if (okA) dir = +1;
-        else if (okB) dir = -1;
+        if (okA && okB) dir = wA <= wB ? p.dPlus : p.dMinus;
+        else if (okA) dir = p.dPlus;
+        else if (okB) dir = p.dMinus;
 
         const fromX = p.x + dir;
         if (dir !== 0 && fromX >= 0 && fromX < width) {
@@ -446,29 +643,53 @@ export async function generateSmartTarget({
             target[toIdx + 1] = sourceData[fromIdx + 1];
             target[toIdx + 2] = sourceData[fromIdx + 2];
             snapCount++;
+            if (Math.abs(dir) === 1) snapDist1++; else snapDist2++;
         } else {
             remaining.push(p);
         }
     }
-    log.push(`Edge-Snapping: ${snapCount} Kanten verschoben, ${remaining.length} verbleiben`);
+    log.push(`Edge-Snapping: ${snapCount} Kanten verschoben (Abstand 1: ${snapDist1}, Abstand ≥2: ${snapDist2}), ${remaining.length} verbleiben`);
     report(`Phase 3/4: ${snapCount} Kanten gesnappt`, 2, 4);
 
     report('Phase 4/4: Wavelet-Dämpfung (2 Ebenen)', 3, 4);
-    const raster = getRasterInfo(format);
-    const level2Pos = new Set(); 
+    // `raster` und `tailIdx` stammen aus Phase 2. Die Phase bestimmt sich aus dem
+    // ABSOLUTEN Pixelindex (so macht es der Encoder: phaseFormatAt →
+    // sequence[pxIndex % sequence.length]); `x % period` stimmt nur, wenn die
+    // Bildbreite ein Vielfaches der Periode ist.
+    const level2Pos = new Set();
 
-    for (const p of remaining) {
-        if (p.x < 1 || p.x >= width - 1) continue;
-        const phase = raster ? ((p.x % raster.period) + raster.period) % raster.period : -1;
-        const onWeakSlot = raster ? raster.weak.has(phase) : false;
-        const links = findRasterLinks(hlMap, width, height, p.x, p.y, threshold);
-        if (onWeakSlot || links.length > 0) {
-            level2Pos.add(p.y * width + p.x);
-            for (const l of links) level2Pos.add(l.y * width + l.x);
-        }
+    if (raster) {
+        const wk = [...raster.weak].map(i => `${i}=${raster.names[i]}/${raster.slots[i]}`).join(', ');
+        log.push(`Raster: Periode ${raster.period}, stärkste Phase ${raster.maxSlots} Plätze | schwach: ${wk || 'keine'}`);
     }
 
-    let spikeCount = 0, structPixel = 0;
+    let weakPeaks = 0, anchorlessPeaks = 0;
+    const perPhase = raster ? new Array(raster.period).fill(0) : null;
+    for (const p of remaining) {
+        if (p.x < 1 || p.x >= width - 1) continue;
+        const ph = raster ? tailIdx(p.x, p.y) : -1;
+        if (perPhase && ph >= 0) perPhase[ph]++;
+        const onWeakSlot = raster ? raster.weak.has(ph) : false;
+        if (onWeakSlot) weakPeaks++;
+        if (p.anchorless) anchorlessPeaks++;
+        // Starke Dämpfung (25%) für Peaks ohne Ankerfarbe: dort hat der Encoder
+        // keine Chance, den hochfrequenten Wechsel darzustellen — genau der Fall,
+        // für den die Wavelet-Dämpfung gedacht ist.
+        const forceStrong = !!p.anchorless;
+        const neighbours = collectStructureNeighbours(hlMap, width, height, p.x, p.y, threshold, raster ? raster.period : 4);
+        if (onWeakSlot || forceStrong || neighbours.length > 0) {
+            level2Pos.add(p.y * width + p.x);
+            for (const l of neighbours) level2Pos.add(l.y * width + l.x);
+        }
+    }
+    log.push(`Peaks auf schwachen Phasen: ${weakPeaks} von ${remaining.length} → dort 25% Detail, Rest 50%`);
+    log.push(`davon ohne Ankerfarbe: ${anchorlessPeaks} → ebenfalls 25% Detail`);
+    if (perPhase) {
+        const dist = perPhase.map((n, i) => `P${i}(${raster.names[i]}/${raster.slots[i]}):${n}`).join(', ');
+        log.push(`Peak-Verteilung je Phase: ${dist}`);
+    }
+
+    let spikeCount = 0, structPixel = 0, quantized = 0;
     const damped = new Set();
     
     // Referenzbild für Wavelet-Dämpfung, um Kaskadeneffekte zu vermeiden
@@ -478,7 +699,20 @@ export async function generateSmartTarget({
         const key = y * width + x;
         if (damped.has(key)) return;
         damped.add(key);
-        dampHlAt(target, reference, width, x, y, rest);
+        dampHlAt(target, reference, width, x, y, rest, dampSpan);
+        // Optional: den gedämpften Wert auf eine Palettenfarbe ziehen, die die
+        // Phase DIESES Pixels auch anspringen kann. Die Dämpfung erzeugt sonst
+        // Mischfarben, die in der Palette gar nicht vorkommen — der Encoder
+        // kann sie nicht treffen, und die Zieltreue sinkt (gemessen).
+        if (quantizeDamp) {
+            const o = key * 4;
+            const nSlots = raster ? raster.slots[tailIdx(x, y)] : Math.floor(paletteRAM.length / 3);
+            const q = nearestPaletteColor(paletteRAM, nSlots, target[o], target[o + 1], target[o + 2]);
+            if (q) {
+                if (q.r !== target[o] || q.g !== target[o + 1] || q.b !== target[o + 2]) quantized++;
+                target[o] = q.r; target[o + 1] = q.g; target[o + 2] = q.b;
+            }
+        }
     };
 
     for (const p of remaining) {
@@ -486,14 +720,14 @@ export async function generateSmartTarget({
         const key = p.y * width + p.x;
         if (level2Pos.has(key)) structPixel++;
         else spikeCount++;
-        damp(p.x, p.y, level2Pos.has(key) ? LEVEL2_REST : LEVEL1_REST);
+        damp(p.x, p.y, level2Pos.has(key) ? level2Rest : LEVEL1_REST);
     }
     for (const key of level2Pos) {
         if (damped.has(key)) continue;
         structPixel++;
-        damp(key % width, (key / width) | 0, LEVEL2_REST);
+        damp(key % width, (key / width) | 0, level2Rest);
     }
-    log.push(`Wavelet-Dämpfung: ${spikeCount} Spikes auf ${Math.round(LEVEL1_REST * 100)}%, ${structPixel} Raster-Struktur-Pixel auf ${Math.round(LEVEL2_REST * 100)}% (gesamt ${damped.size} px modifiziert)`);
+    log.push(`Wavelet-Dämpfung: ${spikeCount} Spikes auf ${Math.round(LEVEL1_REST * 100)}%, ${structPixel} Raster-Struktur-Pixel auf ${Math.round(level2Rest * 100)}% (gesamt ${damped.size} px modifiziert), Kernel ±${dampSpan}${quantizeDamp ? `, davon ${quantized} auf Palettenfarbe gezogen` : ''}`);
 
     // Kontrast-Snap zuletzt: nahe Schwarz/Weiß liegende Pixel exakt auf 0 bzw. 255
     const snap = snapExtremes(target, snapBlack, snapWhite);

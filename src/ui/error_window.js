@@ -91,9 +91,9 @@ export function initErrorWindow(appState, deps = {}) {
             </div>
             <div id="errwin-body" style="padding:10px;">
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; font-size:12px;">
-                    <label title="Alle Fehler unterhalb dieser Abweichung werden im Fehlerbild auf 0,0,0 gesetzt">Max. Abweichung:</label>
-                    <input id="errwin-threshold" type="number" min="0" max="255" value="0" style="width:58px;">
-                    <span style="color:#888;">(0 = alles anzeigen)</span>
+                    <label title="Einheit: größter Kanalabstand |Original − Decodiert| in 0–255. Betrifft NUR die Anzeige und die Springliste — das Fehlerbild selbst und die Modifikation bleiben unverändert.">Max. Abweichung (0–255):</label>
+                    <input id="errwin-threshold" type="number" min="0" max="255" value="0" style="width:58px;" title="Fehler unterhalb dieses größten Kanalabstands werden in der Liste und beim Springen übersprungen. 0 = alles anzeigen.">
+                    <span style="color:#888;">(0 = alles anzeigen &nbsp;·&nbsp; nur Filter, ändert nichts)</span>
                     <button id="errwin-ignore-reset" style="${BTN}">Ignorierte zurücksetzen <span id="errwin-ign-count">(0)</span></button>
                 </div>
                 <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:12px; margin-top:6px;">

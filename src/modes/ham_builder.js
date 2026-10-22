@@ -6,7 +6,7 @@ import { encodePaletted, decodePaletted, packPaletted, describeCommand } from '.
 import { encodeHam12_16, decodeHam12_16, packHam12_16 } from '../core/module_ham12_16.js';
 import { debugRoundtripHam12_16, debugRoundtripPaletted } from '../core/debugger.js';
 import { computeDetailedAnalysis, errorBins } from '../core/analysis.js';
-import { generateSmartTarget, applySnapFromOriginal, buildErrorMap } from '../core/smart_target.js';
+import { generateSmartTarget, applySnapFromOriginal, buildErrorMap, getRasterInfo } from '../core/smart_target.js';
 import { setZoomMode, centerOnCoordinate, setupCanvasEvents, setZoomScale, setPickEnabled } from '../ui/canvas-view.js';
 import { encodeDXT1, decodeDXT1 } from '../core/module_dxt1.js';
 import { initPaletteBuilderUI } from '../ui/palette_builder.js';
@@ -182,22 +182,24 @@ export function initHamBuilderMode(appState, containerEl) {
                 
                 <div class="control-group" id="smart-target-group" style="background:#111; padding:2px 8px; border-radius:4px; border:1px solid #007bff;">
                     <label style="color:#4dabf7;">Smart Target:</label>
-                    <button id="btn-modify-image" title="Originalbild wavelet-basiert modifizieren, damit der HAM-Codec es artefaktfrei codiert">Originalbild modifizieren</button>
+                    <button id="btn-modify-image" title="Modifiziert das ORIGINAL: harte Kanten werden auf Pixelpositionen mit vielen Palettenplätzen verschoben, der hochfrequente Rest wird per Wavelet gedämpft. Danach »2. Codieren« drücken.">Originalbild modifizieren</button>
                     <div id="target-switch" style="display:inline-flex; border:1px solid #444; border-radius:4px; overflow:hidden;">
                         <button id="sw-original" class="target-sw active" title="Linke Anzeige: Originalbild">Original</button>
                         <button id="sw-modified" class="target-sw" disabled title="Linke Anzeige: modifiziertes Bild">Modifiziert</button>
-                        <button id="sw-error" class="target-sw" disabled title="Linke Anzeige: Fehlerbild = |Original − Decodiert| je Kanal (Farbsäume zeigen, wo der Codec abweicht)">Fehlerbild</button>
+                        <button id="sw-error" class="target-sw" disabled title="Linke Anzeige: Fehlerbild = |Original − Decodiert| je Kanal. Ein roter Saum heißt z. B., dass Rot daneben liegt.">Fehlerbild</button>
                     </div>
-                    <button id="btn-error-window" title="Eigenes, verschiebbares Fenster für das Fehlerbild (Schwelle, Fehler-Navigation, lokale Korrektur)">Fehler-Fenster</button>
-                    <button id="btn-next-error" title="Zum nächstgrößten Fehler springen (öffnet das Fehler-Fenster)">Nächst größter Fehler</button>
-                    <button id="btn-replace-original" disabled title="Modifiziertes Bild als neues Original übernehmen (ermöglicht mehrfaches Modifizieren)">Mod. übernehmen</button>
-                    <label style="color:#adb5bd;" title="Pixel mit r+g+b < Schwelle werden exakt Schwarz (0,0,0). 0 = aus.">Schwarz-Snap:</label>
-                    <input type="number" id="snap-black" min="0" max="765" value="0" style="width:48px;" title="Schwarz-Snap: alle Pixel mit r+g+b < Schwelle → RGB(0,0,0). Beispiel: 20">
-                    <label style="color:#adb5bd;" title="Pixel mit (255-r)+(255-g)+(255-b) < Schwelle werden exakt Weiß (255,255,255). 0 = aus.">Weiß-Snap:</label>
-                    <input type="number" id="snap-white" min="0" max="765" value="0" style="width:48px;" title="Weiß-Snap: alle Pixel mit (255-r)+(255-g)+(255-b) < Schwelle → RGB(255,255,255). Beispiel: 20">
-                    <button id="btn-snap-transfer" title="Schwarz/Weiß-Snap am ORIGINAL auswerten und exakt 0/255 in das modifizierte Bild schreiben (erzeugt das modifizierte Bild bei Bedarf aus dem Original)">Snap → modifiziert</button>
-                    <label style="color:#adb5bd;" title="Schwelle für die Modifikation: nur Artefakte ≥ Schwelle werden bearbeitet. 0 = KEINE Modifikation.">Schwelle:</label>
-                    <input type="number" id="st-threshold" min="0" max="4095" value="0" style="width:56px;" title="Modifikations-Schwelle (HL-Magnitude). 0 = KEINE Modifikation; höher = nur starke Artefakte werden repariert. Im Fehlerbild werden Pixel ≥ Schwelle WEISS markiert.">
+                    <button id="btn-error-window" title="Verschiebbares Fenster mit Fehlerbild, Zoom, Ausschnitt, Fehler-Navigation und lokaler Korrektur. Eigene »Max. Abweichung« (0–255, größter Kanalabstand) filtert nur Anzeige und Springliste.">Fehler-Fenster</button>
+                    <button id="btn-next-error" title="Zum nächstgrößten Fehler springen (öffnet das Fehler-Fenster).">Nächst größter Fehler</button>
+                    <button id="btn-replace-original" disabled title="Modifiziertes Bild als neues Original übernehmen — nur nötig, wenn du mehrfach hintereinander modifizieren willst.">Mod. übernehmen</button>
+                    <label style="color:#adb5bd;" title="Einheit: Summe r+g+b (0–765). Pixel darunter werden exakt zu (0,0,0); Palettenplatz 0 ist immer Schwarz. 0 = aus.">Schwarz-Snap:</label>
+                    <input type="number" id="snap-black" min="0" max="765" value="0" style="width:48px;" title="Einheit: Summe r+g+b (0–765). Beispiel 20: alle Pixel mit r+g+b &lt; 20 werden exakt (0,0,0). 0 = aus.">
+                    <label style="color:#adb5bd;" title="Einheit: Summe der Abstände zu 255, also (255−r)+(255−g)+(255−b), Bereich 0–765. Pixel darunter werden exakt (255,255,255). 0 = aus.">Weiß-Snap:</label>
+                    <input type="number" id="snap-white" min="0" max="765" value="0" style="width:48px;" title="Einheit: Summe der Abstände zu 255 (0–765). Beispiel 20: alle Pixel, deren drei Abstände zusammen &lt; 20 sind, werden exakt (255,255,255). 0 = aus.">
+                    <button id="btn-snap-transfer" title="Setzt dunkle/helle Pixel exakt auf 0 bzw. 255. Achtung: erzeugt das modifizierte Bild NEU als Original + Snap — eine vorherige Modifikation wird dabei verworfen.">Snap → modifiziert</button>
+                    <label id="st-threshold-label" style="color:#adb5bd;" title="Nur Artefakte ab dieser Schwelle werden bearbeitet. 0 = es wird nichts verändert.">Schwelle:</label>
+                    <input type="number" id="st-threshold" min="0" max="4095" value="0" style="width:56px;" title="Nur Artefakte ab dieser Schwelle werden bearbeitet. 0 = es wird nichts verändert.">
+                    <label id="st-anchor-tol-label" style="color:#adb5bd;" title="Ankerfarben-Toleranz in RGB-Abstand (0–255).">Anker:</label>
+                    <input type="number" id="st-anchor-tol" min="0" max="255" value="24" style="width:48px;" title="Ankerfarben-Toleranz in RGB-Abstand (0–255).">
                 </div>
                 
                 <div class="control-group">
@@ -476,6 +478,88 @@ export function initHamBuilderMode(appState, containerEl) {
     });
 
     // 4. FORMAT-WECHSEL & UI-LOGIK
+
+    // Alles erklärende steht in den Tooltips (Hover), nicht in der Fläche.
+    // Hier werden sie für das aktuelle Format und die aktuellen Werte gesetzt:
+    //  · Schwelle  → Einheit, 8000-Peak-Grenze, Phasen-Tabelle des Formats
+    //  · Anker     → was die Toleranz bedeutet, mit Messwert
+    //  · Modifizieren → was mit den jetzigen Einstellungen passieren wird
+    function updateSmartTooltips() {
+        const info = getRasterInfo(appState.currentFormat);
+
+        let phaseTxt;
+        if (!info) {
+            phaseTxt = `Dieses Format hat kein Mischraster — es gibt nur eine Positionsart. `
+                + `Verschieben auf eine stärkere Position ist nicht möglich, es wirkt nur die Wavelet-Dämpfung.`;
+        } else {
+            const rows = [];
+            for (let i = 0; i < info.period; i++) {
+                rows.push(`Pos ${i}: ${info.names[i]} mit ${info.slots[i]} Plätzen (${info.weak.has(i) ? 'schwach' : 'ZIEL'})`);
+            }
+            phaseTxt = info.weak.size === 0
+                ? `Raster (Periode ${info.period}): ${rows.join(', ')}. Keine Position ist schwach — `
+                  + `es gibt nichts, wohin eine Kante ausweichen könnte; es wirkt nur die Dämpfung.`
+                : `Raster (Periode ${info.period}): ${rows.join(', ')}. Schwach = weniger als die Hälfte der Plätze `
+                  + `der stärksten Position (${info.maxSlots}); dorthin wird nicht verschoben, sondern auf eine ZIEL-Position. `
+                  + `Gemessen an einem echten Foto tragen die schwachen Positionen 62,8 % des Fehlers bei 50 % der Pixel, `
+                  + `und 11,9 % der Pixel (harte Kanten) tragen 71,1 % des Fehlers.`;
+        }
+
+        const thrEl = document.getElementById('st-threshold');
+        const thrLabel = document.getElementById('st-threshold-label');
+        const thrTxt = `Nur Artefakte ab dieser Schwelle werden bearbeitet; 0 = es wird nichts verändert. `
+            + `Einheit ist die HL-Magnitude — der luma-gewichtete HOCHPASS des Fehlers, nicht der Fehler selbst. `
+            + `Ein flächiger Farbfehler hat daher kaum HL, ein Kantenwechsel viel. Es werden höchstens 8000 Peaks `
+            + `bearbeitet (die stärksten), deshalb wirken Werte wie 1…8 praktisch gleich. `
+            + `STÄRKSTE EINSTELLUNG: 1. Gemessen am Testbild (876x882, feste Palette) mit Anker 255: die Werte 1…24 `
+            + `wählen dieselben 8000 Peaks und dieselben 1334 Verschiebungen; ein kleinerer Wert dämpft aber mehr `
+            + `Pixel (Schwelle 1 → 42 638 px, Schwelle 24 → 22 564 px). Ab etwa 30 sinkt die Peak-Zahl und damit auch `
+            + `das Verschieben (Schwelle 30 → 4304 Peaks, 713 Verschiebungen). ${phaseTxt}`;
+        if (thrLabel) thrLabel.title = thrTxt;
+        if (thrEl) thrEl.title = thrTxt;
+
+        const tolEl = document.getElementById('st-anchor-tol');
+        const tolLabel = document.getElementById('st-anchor-tol-label');
+        const tolTxt = `Ankerfarben-Toleranz: RGB-Abstand (0–255) zur nächsten erreichbaren Palettenfarbe. `
+            + `Geprüft wird gegen die STÄRKSTE Position. Hat selbst die keine Palettenfarbe in diesem Abstand, `
+            + `kann Verschieben nichts retten — der Peak wird nur gedämpft. Größer = mehr Peaks dürfen verschoben werden; `
+            + `0 = alles gilt als ohne Ankerfarbe, es wird gar nicht verschoben. `
+            + `STÄRKSTE EINSTELLUNG: 255 (dann gilt kein Peak als ankerlos und es wird maximal verschoben). `
+            + `Gemessen am Testbild (876x882, Schwelle 8): Anker 0 → 0 Verschiebungen, Standard 24 → 1052, `
+            + `Anker 255 → 1334. Standard 24.`;
+        if (tolLabel) tolLabel.title = tolTxt;
+        if (tolEl) tolEl.title = tolTxt;
+
+        // Was passiert mit den JETZIGEN Einstellungen?
+        const btn = document.getElementById('btn-modify-image');
+        if (btn) {
+            const thr = parseInt(thrEl?.value) || 0;
+            const tol = parseInt(tolEl?.value) || 0;
+            const sb = parseInt(document.getElementById('snap-black')?.value) || 0;
+            const sw = parseInt(document.getElementById('snap-white')?.value) || 0;
+            const parts = [];
+            if (thr <= 0) {
+                parts.push('Schwelle 0 → es wird nichts verschoben und nichts gedämpft');
+            } else if (!info) {
+                parts.push(`Schwelle ${thr} → es wird nur gedämpft (kein Mischraster)`);
+            } else if (tol <= 0) {
+                parts.push(`Schwelle ${thr} → Toleranz 0, es wird nicht verschoben, nur gedämpft`);
+            } else {
+                parts.push(`Schwelle ${thr} → Kanten werden auf die ZIEL-Positionen verschoben (Toleranz ${tol}), der Rest gedämpft`);
+            }
+            if (sb > 0) parts.push(`Schwarz-Snap aktiv (r+g+b < ${sb} → exakt 0)`);
+            if (sw > 0) parts.push(`Weiß-Snap aktiv (fast weiß < ${sw} → exakt 255)`);
+            if (thr <= 0 && sb <= 0 && sw <= 0) parts.push('Ergebnis: das Bild bleibt unverändert');
+            btn.title = `Modifiziert das ORIGINAL und legt das Ergebnis als modifiziertes Bild ab; `
+                + `danach »2. Codieren« drücken. Jetzt: ${parts.join(' · ')}. `
+                + `Die Dämpfung zieht geglättete Werte auf eine Palettenfarbe, die die Position auch anspringen kann `
+                + `(»Palettentreue«) — ohne das erzeugt sie Mischfarben, die der Codec nicht treffen kann. `
+                + `STÄRKSTE EINSTELLUNG: Schwelle 1 + Anker 255 (dämpft und verschiebt am meisten); `
+                + `0 bei der Schwelle schaltet die Modifikation ganz ab. Stärke ≠ besser — wie gut das Ergebnis `
+                + `wird, siehst du erst nach dem Codieren im Fehlerbild.`;
+        }
+    }
+
     function handleFormatChange() {
         let fmtSelect = document.getElementById('format');
         appState.currentFormat = fmtSelect ? fmtSelect.value : "HAM_32BIT_63436343";
@@ -494,13 +578,23 @@ export function initHamBuilderMode(appState, containerEl) {
         if (smartGroup) smartGroup.style.display = isPalFormat ? 'flex' : 'none';
         let btnModify = document.getElementById('btn-modify-image');
         if (btnModify) btnModify.disabled = !isPalFormat || !appState.originalImageData;
-        
+
+        updateSmartTooltips();
+
         renderPaletteWithLocks(appState);
     }
     
     document.getElementById('format').value = appState.currentFormat;
     document.getElementById('format').addEventListener('change', handleFormatChange);
     document.getElementById('pal-offset-input').addEventListener('change', handleFormatChange);
+
+    // Tooltips bei Parameteränderung mitziehen (damit die Vorschau im
+    // Modifizieren-Tooltip stimmt)
+    for (const id of ['st-threshold', 'st-anchor-tol', 'snap-black', 'snap-white']) {
+        const el = document.getElementById(id);
+        if (el) { el.addEventListener('input', updateSmartTooltips); el.addEventListener('change', updateSmartTooltips); }
+    }
+    updateSmartTooltips();
 
     // RESET PALETTE BUTTON LOGIK
     document.getElementById('btn-reset-palette')?.addEventListener('click', async () => {
@@ -631,10 +725,18 @@ export function initHamBuilderMode(appState, containerEl) {
         let offset = parseInt(document.getElementById('pal-offset-input')?.value || 0);
         let snapBlack = parseInt(document.getElementById('snap-black')?.value) || 0;
         let snapWhite = parseInt(document.getElementById('snap-white')?.value) || 0;
+        const anchorTolEl = document.getElementById('st-anchor-tol');
+        const anchorTol = anchorTolEl ? (parseInt(anchorTolEl.value) || 0) : 24;
+        const peakThreshold = parseInt(document.getElementById('st-threshold')?.value) || 0;
+
+        // Bei Schwelle 0 und ohne Snap passiert nichts — dann gar nicht erst rechnen.
+        if (peakThreshold <= 0 && snapBlack <= 0 && snapWhite <= 0) {
+            updateProgress('Nichts zu tun: Änderungs-Schwelle ist 0 und beide Snaps sind aus.', 0, 100);
+            return;
+        }
 
         btnModify.disabled = true; btnEncode.disabled = true; btnSave.disabled = true;
         try {
-            const peakThreshold = parseInt(document.getElementById('st-threshold')?.value) || 0;
             // Smart Target rechnet immer vom ORIGINAL (nicht vom Fehlerbild/Modifizierten)
             const srcForTarget = appState.originalImageData ? appState.originalImageData.data : getEncodeSourceImageData().data;
             const { target, log } = await generateSmartTarget({
@@ -644,7 +746,7 @@ export function initHamBuilderMode(appState, containerEl) {
                 step, metric, format,
                 paletteRAM: appState.globalPaletteRAM,
                 offset, strategy,
-                snapBlack, snapWhite, peakThreshold,
+                snapBlack, snapWhite, peakThreshold, anchorTol,
                 onProgress: updateProgress
             });
             appState.modifiedImageData = new ImageData(new Uint8ClampedArray(target), appState.currentImgW, appState.currentImgH);
