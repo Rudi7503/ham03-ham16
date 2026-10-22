@@ -1508,9 +1508,9 @@ const PROXY_FORCE_ABOVE = 512;   // ab dieser Kantenlänge wird der Proxy erzwun
 // vom manuellen Nachoptimieren benutzt — letzteres lief früher auf dem Vollbild
 // und brauchte auf einem 876x882-Foto 510 s für −0.84 MSE.
 // ---------------------------------------------------------------------------
-async function runOnProxy(appState, optRegion, triggerEncodeFn, runInner) {
+async function runOnProxy(appState, optRegion, triggerEncodeFn, runInner, proxyMaxSide = PROXY_MAX_SIDE) {
     const W = appState.currentImgW, H = appState.currentImgH;
-    const scale = PROXY_MAX_SIDE / Math.max(W, H);
+    const scale = proxyMaxSide / Math.max(W, H);
     const pw = Math.max(16, Math.round(W * scale));
     const ph = Math.max(16, Math.round(H * scale));
     const opStart = Date.now();
@@ -1576,7 +1576,7 @@ async function runOnProxy(appState, optRegion, triggerEncodeFn, runInner) {
 
 export async function runOptimizationWithProxy(appState, optRegion, step, metric, currentOffset, lockedSlots,
                                                updateOptProgress, triggerEncodeFn, renderUIPalette,
-                                               intensity = 'langsam', useProxy = true) {
+                                               intensity = 'langsam', useProxy = true, proxyMaxSide = PROXY_MAX_SIDE) {
     const W = appState.currentImgW, H = appState.currentImgH;
     const maxSide = Math.max(W, H);
 
@@ -1586,26 +1586,32 @@ export async function runOptimizationWithProxy(appState, optRegion, step, metric
     if (maxSide > PROXY_FORCE_ABOVE && !useProxy) { useProxy = true; forced = true; }
 
     // Klein genug (oder Proxy abgewählt) → direkt optimieren
-    if (!useProxy || maxSide <= PROXY_MAX_SIDE) {
+    if (!useProxy || maxSide <= proxyMaxSide) {
         return await runHybridOptimization(appState, optRegion, step, metric, currentOffset, lockedSlots,
             updateOptProgress, triggerEncodeFn, renderUIPalette, intensity);
     }
 
-    const factor = (maxSide / PROXY_MAX_SIDE).toFixed(1);
+    // Pixel-Verhältnis, nicht Seiten-Verhältnis: bei 4800x3200 ist die Seite 15x
+    // kleiner, die Pixelzahl aber 225x — Letzteres bestimmt die Encode-Kosten.
+    const pw0 = Math.max(16, Math.round(W * proxyMaxSide / maxSide));
+    const ph0 = Math.max(16, Math.round(H * proxyMaxSide / maxSide));
+    const pxRatio = (W * H) / (pw0 * ph0);
     const autoTxt = forced ? ' — automatisch aktiviert (Bild > ' + PROXY_FORCE_ABOVE + ' px)' : '';
-    updateOptProgress(`Proxy ${Math.max(16, Math.round(W * PROXY_MAX_SIDE / maxSide))}px${autoTxt}: Vorab-Encode...`, 0, 1);
+    updateOptProgress(`Proxy-Vorbereitung (${pxRatio.toFixed(0)}x weniger Pixel)${autoTxt}: Vorab-Encode...`, 0, 1);
 
+    let estInfo = null;
     const run = await runOnProxy(appState, optRegion, triggerEncodeFn, (proxyRegion, proxyEncodeMs) => {
         // Dauer-Schätzung: aus dem letzten Lauf desselben Verfahrens (belastbar)
         // oder grob aus einem Faktor auf einen Encode. Die Live-Anzeige während
         // des Laufs korrigiert sich danach selbst.
         const { ms: est, exact } = estimateOptimizationMs(proxyEncodeMs, intensity, appState.currentImgW * appState.currentImgH);
+        estInfo = { est, exact };
         const estTxt = est >= 1000 ? `~${Math.round(est / 1000)} s` : `~${est} ms`;
-        console.log(`[Palette] Proxy ${appState.currentImgW}x${appState.currentImgH}: Encode ${proxyEncodeMs} ms → ${exact ? 'geschätzte Dauer' : 'grobe Schätzung'} ${estTxt} (${intensity})${autoTxt}`);
-        updateOptProgress(`Proxy ${appState.currentImgW}x${appState.currentImgH} (${factor}x kleiner)${autoTxt}, ${exact ? 'geschätzte Dauer' : 'grobe Schätzung'} ${estTxt}...`, 0, 1);
+        console.log(`[Palette] Proxy ${appState.currentImgW}x${appState.currentImgH} (${pxRatio.toFixed(0)}x weniger Pixel): Encode ${proxyEncodeMs} ms → ${exact ? 'geschätzte Dauer' : 'grobe Schätzung'} ${estTxt} (${intensity})${autoTxt}`);
+        updateOptProgress(`Proxy ${appState.currentImgW}x${appState.currentImgH} (${pxRatio.toFixed(0)}x weniger Pixel)${autoTxt}, ${exact ? 'geschätzte Dauer' : 'grobe Schätzung'} ${estTxt}...`, 0, 1);
         return runHybridOptimization(appState, proxyRegion, step, metric, currentOffset, lockedSlots,
             updateOptProgress, triggerEncodeFn, renderUIPalette, intensity);
-    });
+    }, proxyMaxSide);
 
     const { log, pw, ph, proxyEncodeMs, totalMs } = run;
     updateOptProgress(`Palette wird auf ${W}x${H} angewendet...`, 0, 1);
@@ -1615,9 +1621,13 @@ export async function runOptimizationWithProxy(appState, optRegion, step, metric
     setLastRunTotal(totalMs);
 
     if (Array.isArray(log)) {
-        const estTxt2 = totalMs >= 1000 ? `~${Math.round(totalMs / 1000)} s` : `~${totalMs} ms`;
-        log.unshift(`<div style="color:#6f42c1;">⏱️ Proxy-Vorab-Encode ${proxyEncodeMs} ms (Ist-Dauer insgesamt ${estTxt2})</div>`);
-        log.unshift(`<div style="color:#6f42c1; font-weight:bold;">🖼️ Proxy-Optimierung: auf ${pw}x${ph} optimiert, dann auf ${W}x${H} angewendet${forced ? ' (Proxy erzwungen: Bild > ' + PROXY_FORCE_ABOVE + ' px)' : ''}.</div>`);
+        // Schätzung UND Ist-Dauer nebeneinander — nur so sieht man, wie gut die
+        // Schätzung war. (Vorher stand hier ein "~" vor einem echten Messwert.)
+        const estTxt = !estInfo ? '—'
+            : (estInfo.est >= 1000 ? `~${Math.round(estInfo.est / 1000)} s` : `~${estInfo.est} ms`);
+        const estLabel = estInfo && estInfo.exact ? 'geschätzt' : 'grob geschätzt';
+        log.unshift(`<div style="color:#6f42c1;">⏱️ Vorab-Encode ${proxyEncodeMs} ms · ${estLabel} ${estTxt} · tatsächlich ${(totalMs / 1000).toFixed(1)} s</div>`);
+        log.unshift(`<div style="color:#6f42c1; font-weight:bold;">🖼️ Proxy-Optimierung: auf ${pw}x${ph} gerechnet (${pxRatio.toFixed(0)}x weniger Pixel pro Encode), dann auf ${W}x${H} angewendet${forced ? ' — Proxy erzwungen: Bild > ' + PROXY_FORCE_ABOVE + ' px' : ''}.</div>`);
     }
     return log;
 }
@@ -1649,7 +1659,8 @@ export async function runManualRefinementWithProxy(appState, optRegion, step, me
 
     const run = await runOnProxy(appState, optRegion, triggerEncodeFn, (proxyRegion) =>
         runManualRefinement(appState, proxyRegion, step, metric, currentOffset, lockedSlots,
-            updateOptProgress, triggerEncodeFn, renderUIPalette, slotOrder));
+            updateOptProgress, triggerEncodeFn, renderUIPalette, slotOrder),
+        PROXY_MAX_SIDE);
 
     const { log, pw, ph, totalMs } = run;
     updateOptProgress(`Palette wird auf ${W}x${H} angewendet...`, 0, 1);

@@ -32,6 +32,9 @@ const rgba = loadBgra('testbilder/real-full.bgra', W, H);
 const intensity = process.argv[2] || 'sehr_schnell';
 const useProxy = process.argv[3] === undefined ? true : process.argv[3] === 'true';
 const repeats = Math.max(1, parseInt(process.argv[4] || '1', 10));
+// Proxy-Kantenlänge: bestimmt die Verkleinerung (Standard 320). Höher = genauer,
+// aber die Kosten wachsen mit der Pixelzahl des Proxys.
+const proxyMaxSide = parseInt(process.argv[5] || '320', 10);
 
 const appState = {
     originalImageData: { width: W, height: H, data: rgba },
@@ -87,7 +90,8 @@ for (let run = 1; run <= repeats; run++) {
         triggerEncode,
         () => {},
         intensity,
-        useProxy
+        useProxy,
+        proxyMaxSide
     );
     const dur = (Date.now() - t0) / 1000;
 
