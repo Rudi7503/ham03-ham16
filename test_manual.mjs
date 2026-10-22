@@ -50,8 +50,17 @@ async function triggerEncode() {
     appState.decodedImageData = { width: w, height: h, data: decodePaletted(enc.commands, w, h, step, appState.globalPaletteRAM, offset) };
 }
 
-// Startpalette: die gespeicherte, proxy-optimierte 256er-Palette
-const pal = new Uint8Array(fs.readFileSync('testbilder/real-256-palette.bin'));
+// Startpalette: die lokal erzeugte, proxy-optimierte 256er-Palette; fehlt sie
+// (frischer Clone), die versionierte Referenz aus testbilder/palettes/.
+function loadFixed256Palette() {
+    const kandidaten = ['testbilder/real-256-palette.bin', 'testbilder/palettes/real-256-langsam.bin'];
+    for (const p of kandidaten) {
+        try { return new Uint8Array(fs.readFileSync(p)); } catch { /* nächster */ }
+    }
+    throw new Error(`Keine feste 256er-Palette gefunden (${kandidaten.join(' oder ')}). `
+        + `Bitte zuerst "node make_palettes.mjs" laufen lassen.`);
+}
+const pal = loadFixed256Palette();
 appState.globalPaletteRAM.set(pal);
 await triggerEncode();
 const fullEncodeMs = lastEncodeMs;

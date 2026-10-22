@@ -59,7 +59,17 @@ async function measure(size, intensity) {
 
     if (intensity === 'full') {
         // Nur: Qualität der optimierten Palette auf VOLLER Auflösung zeigen
-        const pal = new Uint8Array(fs.readFileSync('testbilder/real-256-palette.bin'));
+        // Die 256er-Palette ist lokal erzeugt und laut .gitignore nicht
+        // versioniert; in einem frischen Clone greift die Referenzpalette.
+        const kandidaten = ['testbilder/real-256-palette.bin', 'testbilder/palettes/real-256-langsam.bin'];
+        let pal = null;
+        for (const p of kandidaten) {
+            try { pal = new Uint8Array(fs.readFileSync(p)); break; } catch { /* nächster */ }
+        }
+        if (!pal) {
+            throw new Error(`Keine feste 256er-Palette gefunden (${kandidaten.join(' oder ')}). `
+                + `Bitte zuerst "node make_palettes.mjs" laufen lassen.`);
+        }
         appState.globalPaletteRAM.set(pal);
         const t1 = Date.now();
         await triggerEncode();

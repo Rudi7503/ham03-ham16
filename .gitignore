@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Scratch-Paletten: werden bei jedem Messlauf neu geschrieben.
+# Die versionierten Referenzpaletten liegen in testbilder/palettes/.
+testbilder/real-*-palette.bin
