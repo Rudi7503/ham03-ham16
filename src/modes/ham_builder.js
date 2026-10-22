@@ -841,7 +841,8 @@ export function initHamBuilderMode(appState, containerEl) {
         let u8 = new Uint8Array(buffer);
         
         u8.set([72, 65, 77, 33], 0); 
-        view.setUint8(4, 3);
+        // Version 4: Modusbit 0 = Anker, 1 = Delta (vorher umgekehrt)
+        view.setUint8(4, 4);
         view.setUint8(5, 0);
         view.setUint16(6, appState.currentImgW, true);
         view.setUint16(8, appState.currentImgH, true);

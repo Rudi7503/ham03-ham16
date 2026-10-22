@@ -1,4 +1,4 @@
-# HAM06 — Format-Spezifikation (Version 3 des `.ham`-Containers)
+# HAM06 — Format-Spezifikation (Version 4 des `.ham`-Containers)
 
 Zweck: Diese Datei beschreibt das Format so vollständig, dass daraus **ohne Zugriff
 auf den Quellcode** ein Decoder gebaut werden kann. Alle Angaben sind aus der
@@ -15,7 +15,7 @@ Referenzimplementierung abgeleitet:
 
 Amiga-HAM6 ist 6 Bitplanes mit **2 Steuerbits + 4 Indexbits** (16 Grundfarben).
 **Dieses** `HAM06` ist etwas anderes: 6 Bit pro Pixel, aufgeteilt in
-**1 Anker-Bit + 5 Indexbits** (32 Palettenplätze) bzw. bei Deltas
+**1 Modusbit + 5 Indexbits** (32 Palettenplätze) bzw. bei Deltas
 **1 Turbo-Bit + 4 Richtungsbits**.
 
 Wer „HAM06" liest und Amiga-Wissen anwendet, baut den falschen Decoder.
@@ -29,7 +29,14 @@ dekodiert also **einen gemischten 32-Bit-Strom**, und HAM06 ist eine seiner Phas
 
 ---
 
-## 1. Dateiformat `.ham` (Container, Version 3)
+## 1. Dateiformat `.ham` (Container, Version 4)
+
+> **Version 4 ≠ Version 3.** Ab Version 4 gilt: **Modusbit `0` = Anker,
+> `1` = Delta** (bis Version 3 war es umgekehrt). Die Bedeutung der Bits hat sich
+> damit geändert, nicht nur die Verpackung — eine Datei mit Version 3 dekodiert
+> unter dieser Spezifikation **falsch** (Anker und Deltas wären vertauscht).
+> Das Programm schreibt Version 4 und weist ältere Dateien beim Laden ab, statt
+> sie still falsch zu dekodieren.
 
 Alle Mehrbyte-Felder des **Kopfes** sind Little-Endian (das Flag in Byte 5 sagt es;
 in der Referenz ist es immer 0 = LE). **Die Pixelwörter danach sind immer
@@ -38,7 +45,7 @@ Big-Endian** — das Flag gilt *nicht* für sie (siehe §2).
 | Offset | Größe | Inhalt |
 |---|---|---|
 | 0 | 4 | Magic: ASCII `HAM!` = Bytes `72, 65, 77, 33` |
-| 4 | 1 | Version = **3** |
+| 4 | 1 | Version = **4** |
 | 5 | 1 | Endianness-Flag: `0` = Little-Endian (Referenz schreibt immer 0) |
 | 6 | 2 | Breite in Pixeln, uint16 |
 | 8 | 2 | Höhe in Pixeln, uint16 |
@@ -50,8 +57,9 @@ Big-Endian** — das Flag gilt *nicht* für sie (siehe §2).
 | 783+fLen | Rest | Gepackte Pixelwörter (§2). Länge = `ceil(W*H / pixelsPerWord) * 4` |
 
 Hinweise:
-- Der Referenz-Loader **prüft Magic und Version nicht** und setzt nach dem Laden
-  `Palette[0] = (0,0,0)`. Ein Decoder sollte Magic/Version prüfen.
+- Die Referenz prüft beim Laden **nur die Version** (alles außer 4 wird mit Meldung
+  abgewiesen) und setzt nach dem Laden `Palette[0] = (0,0,0)`. Ein Decoder sollte
+  zusätzlich das Magic prüfen.
 - `step` und `offset` stehen in der Datei — ohne sie ist die Datei nicht dekodierbar.
   (Der Encoder schreibt die zum Encode-Zeitpunkt gültigen Werte.)
 - Die Palette wird als 256 Tripel gespeichert, obwohl je nach Format nur die ersten
@@ -87,9 +95,9 @@ Der Decoder hält einen **Akkumulator** `(r,g,b)` — die zuletzt ausgegebene Fa
 2. Für jedes Pixel `i` von 0 bis `W*H-1`:
    - Sub-Format `fmt = sequence[i % sequence.length]`
    - Code `v` aus dem Bitstrom lesen, `bits(fmt)` Bits (§4)
-   - **Anker** (falls das Anker-Bit gesetzt ist):
+   - **Anker** (falls das Modusbit `0` ist):
      `(r,g,b) = Palette[(offset + anchorIdx) mod 256]`
-   - **Delta** (sonst):
+   - **Delta** (falls das Modusbit `1` ist):
      `r = clamp(r + D[fmt].r[rIndex], 0, 255)`, analog g und b, mit
      `D[fmt].c[k] = CHANNEL_DEFS[fmt].c[k] * step.c * (isTurbo ? 4 : 1)`
    - Ausgabe: `(r, g, b, 255)` als RGBA, Alpha immer **255**.
@@ -116,14 +124,19 @@ die Plätze `0 … slotsPerBank-1` ihrer Bank erreichen.
 
 „Turbo" verdoppelt nichts, sondern **vervierfacht** die Schrittweite
 (Multiplikator `m = 4` statt `1`). `slotsPerBank = 0` bedeutet: dieses Format hat
-**keine** Anker (es gibt nur Deltas); das Anker-Bit existiert dann nicht.
+**keine** Anker (es gibt nur Deltas); ein Modusbit existiert dann nicht.
 
 ### Bit-Layouts (Bit 0 = niederstwertigstes Bit des Codes)
 
+**Modusbit-Konvention (ab Version 4): `0` = Anker, `1` = Delta.**
+Das Modusbit ist jeweils das höchstwertige Bit des Codes. Beim Anker ist die
+Nutzlast der Slotindex, beim Delta Turbo- und Richtungsbits. HAM01/HAM02 haben
+keine Anker und damit kein Modusbit.
+
 **HAM06** (das Kernstück):
 ```
-Anker:  Bit5 = 1                        → anchorIdx = v & 31      (v = 32 … 63)
-Delta:  Bit5 = 0
+Anker:  Bit5 = 0                        → anchorIdx = v & 31      (v = 0 … 31)
+Delta:  Bit5 = 1
         Bit4 = Turbo (0/1)
         Bit3 = rIndex  (1 Bit)
         Bit2..1 = gIndex (2 Bit)
@@ -131,23 +144,23 @@ Delta:  Bit5 = 0
 ```
 Deltawerte: `r = ±1 * step.r * m`, `g ∈ {-2,-1,+1,+2}[gIndex] * step.g * m`,
 `b = ±1 * step.b * m`, mit `m = Turbo ? 4 : 1`.
-Anker-Codes: `32 | anchorIdx`; Delta-Codes: `0 … 31`.
+Anker-Codes: `0 … 31`; Delta-Codes: `32 | payload` = `32 … 63`.
 
 **HAM05:**
 ```
-Anker: Bit4 = 1 → anchorIdx = v & 15      Delta: Bit4=0
+Anker: Bit4 = 0 → anchorIdx = v & 15      Delta: Bit4 = 1
        Bit3 = Turbo, Bit2 = rIndex, Bit1 = gIndex, Bit0 = bIndex   (je 1 Bit)
 ```
 
 **HAM04:**
 ```
-Anker: Bit3 = 1 → anchorIdx = v & 7       Delta: Bit3=0
+Anker: Bit3 = 0 → anchorIdx = v & 7       Delta: Bit3 = 1
        Bit2 = rIndex, Bit1 = gIndex, Bit0 = bIndex
 ```
 
 **HAM03:**
 ```
-Anker: Bit2 = 1 → anchorIdx = v & 3       Delta: Bit2=0
+Anker: Bit2 = 0 → anchorIdx = v & 3       Delta: Bit2 = 1
        Bit1 = rIndex, Bit0 = gIndex, bIndex = rIndex   ← b ist an r GEKOPPELT
 ```
 
@@ -163,9 +176,12 @@ Bit0 = Index für alle drei Kanäle (r = g = b, reine Helligkeitsänderung)
 
 **HAM08:**
 ```
-Anker: Bit7 = 1 → anchorIdx = v & 127     Delta: Bit7=0
+Anker: Bit7 = 0 → anchorIdx = v & 127     Delta: Bit7 = 1
        Bit6 = Turbo, Bit5..4 = rIndex, Bit3..2 = gIndex, Bit1..0 = bIndex (je 2 Bit)
 ```
+
+**HAM12 / HAM16** (eigene Module, gleiches Prinzip): Das Modusbit ist bei HAM16
+Bit15, bei HAM12 Bit11 — ebenfalls `0` = Anker, `1` = Delta.
 
 ---
 
@@ -221,14 +237,31 @@ const CH = {
   HAM08: { r:[-2,-1,1,2],         g:[-2,-1,1,2],         b:[-2,-1,1,2] }
 };
 
+// Phasenfolge je Formatname (§5) — ohne diese Tabelle ist der Decoder nicht lauffähig
+const FORMATS = {
+  HAM_32BIT_44444444: ['HAM04','HAM04','HAM04','HAM04','HAM04','HAM04','HAM04','HAM04'],
+  HAM_32BIT_53535353: ['HAM05','HAM03','HAM05','HAM03','HAM05','HAM03','HAM05','HAM03'],
+  HAM_32BIT_63436343: ['HAM06','HAM03','HAM04','HAM03','HAM06','HAM03','HAM04','HAM03'],
+  HAM_32BIT_6446444:  ['HAM06','HAM04','HAM04','HAM06','HAM04','HAM04','HAM04'],
+  HAM_32BIT_5454545:  ['HAM05','HAM04','HAM05','HAM04','HAM05','HAM04','HAM05'],
+  HAM_32BIT_6454544:  ['HAM06','HAM04','HAM05','HAM04','HAM05','HAM04','HAM04'],
+  HAM_32BIT_655655:   ['HAM06','HAM05','HAM05','HAM06','HAM05','HAM05'],
+  HAM_32BIT_844844:   ['HAM08','HAM04','HAM04','HAM08','HAM04','HAM04'],
+  HAM_32BIT_846554:   ['HAM08','HAM04','HAM06','HAM05','HAM05','HAM04'],
+  HAM_32BIT_646565:   ['HAM06','HAM04','HAM06','HAM05','HAM06','HAM05'],
+  HAM_32BIT_86666:    ['HAM08','HAM06','HAM06','HAM06','HAM06'],
+  HAM_32BIT_85865:    ['HAM08','HAM05','HAM08','HAM06','HAM05'],
+  HAM_32BIT_8888:     ['HAM08','HAM08','HAM08','HAM08']
+};
+
 const clamp = (v) => v < 0 ? 0 : (v > 255 ? 255 : v);
 
-// Ein Code -> Kommando {anchor|delta}
+// Ein Code -> Kommando {anchor|delta}.  Modusbit 0 = Anker, 1 = Delta.
 function parseCode(v, fmt) {
   const slots = SLOTS[fmt];
   if (slots > 0) {
-    const anchorBit = slots;           // 4,8,16,32 bzw. 128 = genau das Anker-Bit
-    if (v & anchorBit) return { anchor: true, idx: v & (slots - 1) };
+    const anchorBit = slots;           // 4,8,16,32 bzw. 128 = genau das Modusbit
+    if ((v & anchorBit) === 0) return { anchor: true, idx: v & (slots - 1) };
   }
   switch (fmt) {
     case 'HAM01': return { anchor:false, turbo:false, r:v&1, g:v&1, b:v&1 };
@@ -247,7 +280,7 @@ function decodeHam(bytes) {
   const u8 = new Uint8Array(bytes);
   const dv = new DataView(bytes);
   if (!(u8[0]===72 && u8[1]===65 && u8[2]===77 && u8[3]===33)) throw new Error('kein HAM!-Magic');
-  if (u8[4] !== 3) throw new Error('unbekannte Version ' + u8[4]);
+  if (u8[4] !== 4) throw new Error('unbekannte Version ' + u8[4]);
   const le = u8[5] === 0;
   const W = dv.getUint16(6, le), H = dv.getUint16(8, le);
   const fLen = u8[10];
@@ -293,44 +326,53 @@ function decodeHam(bytes) {
 }
 ```
 
-`FORMATS` ist die Tabelle aus §5 (Sequenz je Formatname). Achtung: der Anker-Test
-`v & slots` funktioniert, weil `slots` (4/8/16/32/128) genau das jeweilige Anker-Bit
-ist; für Formate **ohne** Slots (HAM01/02) gibt es kein Anker-Bit.
+`FORMATS` ist die Tabelle aus §5 (Sequenz je Formatname) und oben mit abgedruckt,
+damit der Code ohne Nachschlagen läuft. Der Anker-Test `(v & slots) === 0`
+funktioniert, weil `slots` (4/8/16/32/128) genau das jeweilige Modusbit ist — und
+das Modusbit ist 0, wenn ein Anker vorliegt. Für Formate **ohne** Slots (HAM01/02)
+gibt es kein Modusbit.
 
 ---
 
-## 7. Handgerechneter Testvektor (bitte im Decoder nachrechnen)
+## 7. Testvektor (maschinell bestätigt)
 
-Bewusst klein und vollständig von Hand aus der Spezifikation gerechnet — **nicht**
-maschinell erzeugt (siehe §8).
+Klein und vollständig nachvollziehbar. Die Pixelwerte sind aus der Spezifikation
+hergeleitet; der Vektor ist inzwischen **maschinell geprüft** (siehe §8).
 
 - Format `HAM_32BIT_63436343`, `W = 8`, `H = 1`, `step = (4,4,4)`, `offset = 0`
 - Palette: Slot 0 = (0,0,0), Slot 1 = (255,0,0), Rest hier irrelevant
 
-Codes je Phase (Sequenz HAM06, HAM03, HAM04, HAM03, HAM06, HAM03, HAM04, HAM03):
+Codes je Phase (Sequenz HAM06, HAM03, HAM04, HAM03, HAM06, HAM03, HAM04, HAM03).
+Modusbit: **0 = Anker**, 1 = Delta:
 
 | Phase | Format | Code `v` | Bedeutung | Akkumulator danach |
 |---|---|---|---|---|
-| 0 | HAM06 | 33 | Anker (32\|1) → Slot 1 | (255, 0, 0) |
-| 1 | HAM03 | 0 | r=g=b Index 0 = −2 → −8 | (247, 0, 0) |
-| 2 | HAM04 | 7 | r=g=b Index 1 = +2 → +8 | (255, 8, 8) |
-| 3 | HAM03 | 3 | r=g=b Index 1 = +2 → +8 | (255, 16, 16) |
-| 4 | HAM06 | 16 | Turbo, Index 0 → r −16, g −32, b −16 | (239, 0, 0) |
-| 5 | HAM03 | 0 | −8 | (231, 0, 0) |
-| 6 | HAM04 | 0 | −8 | (223, 0, 0) |
-| 7 | HAM03 | 0 | −8 | (215, 0, 0) |
+| 0 | HAM06 | 1 | Anker (Bit5 = 0) → Slot 1 | (255, 0, 0) |
+| 1 | HAM03 | 4 | Delta (Bit2 = 1), r=g=b Index 0 = −2 → −8 | (247, 0, 0) |
+| 2 | HAM04 | 15 | Delta (Bit3 = 1), r=g=b Index 1 = +2 → +8 | (255, 8, 8) |
+| 3 | HAM03 | 7 | Delta (Bit2 = 1), +8 | (255, 16, 16) |
+| 4 | HAM06 | 48 | Delta (Bit5 = 1), Turbo, Index 0 → r −16, g −32, b −16 | (239, 0, 0) |
+| 5 | HAM03 | 4 | −8 | (231, 0, 0) |
+| 6 | HAM04 | 8 | −8 | (223, 0, 0) |
+| 7 | HAM03 | 4 | −8 | (215, 0, 0) |
 
 Bitstrom MSB-first, Breiten 6,3,4,3,6,3,4,3:
-`100001 000 0111 011 010000 000 0000 000`
-= `1000 0100 0011 1011 0100 0000 0000 0000` = **0x843B4000**
-→ Bytes im Container: `0x84, 0x3B, 0x40, 0x00`
+`000001 100 1111 111 110000 100 1000 100`
+= `0000 0110 0111 1111 1100 0010 0100 0100` = **0x067FC244**
+→ Bytes im Container: `0x06, 0x7F, 0xC2, 0x44`
 
 Erwartete Ausgabe (RGBA):
 `(255,0,0) (247,0,0) (255,8,8) (255,16,16) (239,0,0) (231,0,0) (223,0,0) (215,0,0)`
 
 Prüfpunkte: Klemmung auf 0…255 (Phase 3: 263 → 255; Phase 4: −16 → 0),
-Turbo ×4 statt ×2 (Phase 4), R/B-Kopplung in HAM03 (Phase 1, 3, 5, 7) und die
-Tatsache, dass HAM06-Grün **vier** Stufen hat (`[-2,-1,1,2]`).
+Turbo ×4 statt ×2 (Phase 4), R/B-Kopplung in HAM03 (Phase 1, 3, 5, 7), die
+Tatsache, dass HAM06-Grün **vier** Stufen hat (`[-2,-1,1,2]`) und dass der Anker
+das Modusbit **nicht** setzt (Phase 0: `v = 1`, nicht `v = 33`).
+
+> Beim Umdrehen des Modusbits am 2026-10-22 hat sich nur die Zuordnung Code →
+> Bedeutung geändert, nicht die Bildbedeutung. Deshalb sind die erwarteten Pixel
+> identisch geblieben, der Bitstrom aber nicht: vorher `0x843B4000`. Wer diesen
+> Vektor in einer alten Fassung der Spezifikation findet, hat Version 3 vor sich.
 
 ---
 
@@ -343,17 +385,31 @@ Faktor 4 (`buildFormatDeltaCache`), Akkumulator-Start (127,127,127), durchgehend
 Akkumulator ohne Zeilenreset, Alpha 255 (`decodePaletted`), Phasenzuordnung über den
 absoluten Pixelindex (`phaseFormatAt`).
 
+**Maschinell geprüft (2026-10-22):**
+- Der Referenz-Decoder aus §6 ist eine wörtliche Abschrift aus dieser Datei und
+  liefert auf einem synthetischen 128×96-Bild für **alle 13 gemischten Formate**
+  Pixel für Pixel dasselbe Ergebnis wie `decodePaletted`. Prüfskript:
+  `test_spec_decode.mjs`.
+- Der Testvektor aus §7 (`0x067FC244` → die acht angegebenen Pixel) wird
+  maschinell nachgerechnet; vorher war er nur von Hand gerechnet.
+- Die Modusbit-Konvention ist auf drei Ebenen geprüft (`test_modebit.mjs`):
+  rohe Codes im Bitstrom (Anker ⇒ Modusbit 0, Delta ⇒ 1), Befehlsobjekte nach
+  `unpackPaletted`, und die dekodierten Pixel. Abgedeckt: 13 gemischte Formate ×
+  die Strategien `greedy`/`delta_only`/`anchor_only` (1664 Anker, 832 Deltas)
+  sowie HAM12/HAM16. Der Anlass für die Strategien: mit `greedy` allein wählte der
+  Encoder auf dem Testbild nur Anker, der Deltapfad blieb ungeprüft.
+
 **Nicht verifiziert:**
-- Der Testvektor in §7 ist **von Hand** gerechnet. Ein Probelauf war nicht möglich,
-  weil in der Arbeitsumgebung die Shell blockiert war. Er sollte gegen die echte
-  Implementierung geprüft werden.
 - Ob `step`/`offset` beim Speichern immer den Werten entsprechen, mit denen encodiert
   wurde, hängt von der Anwendung ab; die Datei trägt sie mit, ein Decoder muss ihnen
   vertrauen.
 - Die Anwendung schreibt in Byte 5 immer 0. Ob eine Variante mit Big-Endian-Kopf
   existiert, ist nicht belegt; ein Decoder sollte das Flag trotzdem auswerten.
-- `HAM12`/`HAM16`/`DXT1` sind **andere** Container-Inhalte (eigene Module) und hier
-  nicht beschrieben.
+- `HAM12`/`HAM16`/`DXT1` sind **andere** Container-Inhalte (eigene Module). Für
+  HAM12/HAM16 ist nur das Packen/Entpacken und das Modusbit geprüft, das
+  Bildformat selbst ist hier nicht beschrieben.
+- Dateien mit Version 3 sind **absichtlich nicht** mehr lesbar; eine
+  Abwärtskompatibilität gibt es nicht.
 
 **Empfohlener Abnahmetest:** Round-Trip mit der Referenz: Bild → `encodePaletted` →
 `packPaletted` → Datei schreiben → mit dem eigenen Decoder lesen → Pixelvergleich

@@ -126,6 +126,15 @@ fileBin.addEventListener('change', (e) => {
     reader.onload = function(ev) {
         let u8 = new Uint8Array(ev.target.result);
         let view = new DataView(ev.target.result);
+        // Version 4 hat das Modusbit umgedreht (0 = Anker, 1 = Delta). Ältere
+        // Dateien würden still falsch dekodieren, deshalb klar abweisen.
+        let version = u8[4];
+        if (version !== 4) {
+            alert(`Diese .ham-Datei hat Formatversion ${version}, das Programm erwartet Version 4.\n`
+                + `Seit Version 4 bedeutet das Modusbit 0 = Anker und 1 = Delta (vorher umgekehrt); `
+                + `ältere Dateien sind daher nicht mehr lesbar. Bitte die Quelle neu encodieren und speichern.`);
+            return;
+        }
         let isLE = view.getUint8(5) === 0;
         
         appState.currentImgW = view.getUint16(6, isLE);

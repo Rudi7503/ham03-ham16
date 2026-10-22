@@ -135,11 +135,11 @@ export function packHam12_16(commands, format) {
     for (let i = 0; i < commands.length; i++) {
         let cmd = commands[i], w = 0;
         if (format === "HAM16") {
-            if (cmd.isAnchor) w = 0x8000 | ((cmd.r5 & 31) << 10) | ((cmd.g5 & 31) << 5) | (cmd.b5 & 31);
-            else w = ((cmd.isTurbo ? 1 : 0) << 14) | ((cmd.dr & 15) << 10) | ((cmd.dg & 31) << 5) | (cmd.db & 31);
+            if (cmd.isAnchor) w = ((cmd.r5 & 31) << 10) | ((cmd.g5 & 31) << 5) | (cmd.b5 & 31);
+            else w = 0x8000 | ((cmd.isTurbo ? 1 : 0) << 14) | ((cmd.dr & 15) << 10) | ((cmd.dg & 31) << 5) | (cmd.db & 31);
         } else {
-            if (cmd.isAnchor) w = 0x800 | ((cmd.b10 & 1) << 10) | ((cmd.r3 & 7) << 7) | ((cmd.g4 & 15) << 3) | (cmd.b3 & 7);
-            else w = ((cmd.isTurbo ? 1 : 0) << 10) | ((cmd.dr & 7) << 7) | ((cmd.dg & 15) << 3) | (cmd.db & 7);
+            if (cmd.isAnchor) w = ((cmd.b10 & 1) << 10) | ((cmd.r3 & 7) << 7) | ((cmd.g4 & 15) << 3) | (cmd.b3 & 7);
+            else w = 0x800 | ((cmd.isTurbo ? 1 : 0) << 10) | ((cmd.dr & 7) << 7) | ((cmd.dg & 15) << 3) | (cmd.db & 7);
         }
         out[i * 2] = (w >> 8) & 255;
         out[i * 2 + 1] = w & 255;
@@ -155,7 +155,7 @@ export function unpackHam12_16(packedData, format, totalPixels) {
         let w = (b0 << 8) | b1;
         
         if (format === "HAM16") {
-            if (w & 0x8000) {
+            if ((w & 0x8000) === 0) {
                 let r5 = (w >> 10) & 31, g5 = (w >> 5) & 31, b5 = w & 31;
                 commands[i] = { isAnchor: true, format, r5, g5, b5, r: r5 << 3, g: g5 << 3, b: b5 << 3 };
             } else {
@@ -165,7 +165,7 @@ export function unpackHam12_16(packedData, format, totalPixels) {
                 commands[i] = { isAnchor: false, format, isTurbo: ((w >> 14) & 1) === 1, dr, dg, db };
             }
         } else {
-            if (w & 0x800) {
+            if ((w & 0x800) === 0) {
                 let b10 = (w >> 10) & 1, r3 = (w >> 7) & 7, g4 = (w >> 3) & 15, b3 = w & 7;
                 commands[i] = { isAnchor: true, format, b10, r3, g4, b3, r: ((r3<<1)|b10)<<4, g: g4<<4, b: ((b3<<1)|b10)<<4 };
             } else {

@@ -276,6 +276,14 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
     return { commands };
 }
 
+// Modusbit-Konvention (ab Formatversion 4):
+//   Modusbit = 0  →  ANKER  (Palettenmodus), Nutzlast = Slotindex
+//   Modusbit = 1  →  DELTA  (Nutzlast = Turbo + Kanalrichtungen)
+// Das Modusbit ist jeweils das höchstwertige Bit des Codes: HAM03 Bit2 (4),
+// HAM04 Bit3 (8), HAM05 Bit4 (16), HAM06 Bit5 (32), HAM08 Bit7 (128).
+// HAM01/HAM02 haben keine Anker und damit kein Modusbit.
+// Bis Version 3 war es umgekehrt (1 = Anker); solche Dateien sind nicht mehr
+// lesbar und werden beim Laden abgewiesen.
 function getCmdVal(cmd) {
     let v = 0, bits = 4;
     let fmt = cmd.format;
@@ -286,24 +294,24 @@ function getCmdVal(cmd) {
         bits = 2; v = ((cmd.rIndex & 1) << 1) | (cmd.gIndex & 1);
     } else if (fmt === "HAM03") {
         bits = 3;
-        if (cmd.isAnchor) v = 4 | (cmd.anchorIdx & 3);
-        else v = (((cmd.rIndex||0) & 1) << 1) | ((cmd.gIndex||0) & 1);
+        if (cmd.isAnchor) v = (cmd.anchorIdx & 3);
+        else v = 4 | (((cmd.rIndex||0) & 1) << 1) | ((cmd.gIndex||0) & 1);
     } else if (fmt === "HAM04") {
         bits = 4;
-        if (cmd.isAnchor) v = 8 | (cmd.anchorIdx & 7);
-        else v = (((cmd.rIndex||0)>0?1:0)<<2) | (((cmd.gIndex||0)>0?1:0)<<1) | ((cmd.bIndex||0)>0?1:0);
+        if (cmd.isAnchor) v = (cmd.anchorIdx & 7);
+        else v = 8 | (((cmd.rIndex||0)>0?1:0)<<2) | (((cmd.gIndex||0)>0?1:0)<<1) | ((cmd.bIndex||0)>0?1:0);
     } else if (fmt === "HAM05") {
         bits = 5;
-        if (cmd.isAnchor) v = 16 | (cmd.anchorIdx & 15);
-        else v = (((cmd.isTurbo?1:0)<<3) | ((cmd.rIndex||0)<<2) | ((cmd.gIndex||0)<<1) | (cmd.bIndex||0));
+        if (cmd.isAnchor) v = (cmd.anchorIdx & 15);
+        else v = 16 | (((cmd.isTurbo?1:0)<<3) | ((cmd.rIndex||0)<<2) | ((cmd.gIndex||0)<<1) | (cmd.bIndex||0));
     } else if (fmt === "HAM06") {
         bits = 6;
-        if (cmd.isAnchor) v = 32 | (cmd.anchorIdx & 31);
-        else v = (((cmd.isTurbo?1:0)<<4) | ((cmd.rIndex||0)<<3) | ((cmd.gIndex||0)<<1) | (cmd.bIndex||0));
+        if (cmd.isAnchor) v = (cmd.anchorIdx & 31);
+        else v = 32 | (((cmd.isTurbo?1:0)<<4) | ((cmd.rIndex||0)<<3) | ((cmd.gIndex||0)<<1) | (cmd.bIndex||0));
     } else if (fmt === "HAM08") {
         bits = 8;
-        if (cmd.isAnchor) v = 128 | (cmd.anchorIdx & 127);
-        else v = (((cmd.isTurbo?1:0)<<6) | ((cmd.rIndex||0)<<4) | ((cmd.gIndex||0)<<2) | (cmd.bIndex||0));
+        if (cmd.isAnchor) v = (cmd.anchorIdx & 127);
+        else v = 128 | (((cmd.isTurbo?1:0)<<6) | ((cmd.rIndex||0)<<4) | ((cmd.gIndex||0)<<2) | (cmd.bIndex||0));
     }
     return { v, bits };
 }
@@ -332,26 +340,27 @@ export function unpackPaletted(packedData, format, totalPixels) {
     let pixelsPerWord = config.sequence.length;
     let pIdx = 0;
 
+    // Modusbit = 0 → Anker, = 1 → Delta (siehe getCmdVal)
     function parseVal(v, fmt) {
         if (fmt === "HAM01") {
             let dir = v & 1; return { isAnchor: false, format: fmt, rIndex: dir, gIndex: dir, bIndex: dir };
         } else if (fmt === "HAM02") {
             let rbDir = (v >> 1) & 1, gDir = v & 1; return { isAnchor: false, format: fmt, rIndex: rbDir, gIndex: gDir, bIndex: rbDir };
         } else if (fmt === "HAM03") {
-            if (v & 4) return { isAnchor: true, format: fmt, anchorIdx: v & 3 };
+            if ((v & 4) === 0) return { isAnchor: true, format: fmt, anchorIdx: v & 3 };
             let rbDir = (v >> 1) & 1;
             return { isAnchor: false, format: fmt, isTurbo: false, rIndex: rbDir, gIndex: v & 1, bIndex: rbDir };
         } else if (fmt === "HAM04") {
-            if (v & 8) return { isAnchor: true, format: fmt, anchorIdx: v & 7 };
+            if ((v & 8) === 0) return { isAnchor: true, format: fmt, anchorIdx: v & 7 };
             return { isAnchor: false, format: fmt, isTurbo: false, rIndex: (v >> 2) & 1, gIndex: (v >> 1) & 1, bIndex: v & 1 };
         } else if (fmt === "HAM05") {
-            if (v & 16) return { isAnchor: true, format: fmt, anchorIdx: v & 15 };
+            if ((v & 16) === 0) return { isAnchor: true, format: fmt, anchorIdx: v & 15 };
             return { isAnchor: false, format: fmt, isTurbo: ((v >> 3) & 1) === 1, rIndex: (v >> 2) & 1, gIndex: (v >> 1) & 1, bIndex: v & 1 };
         } else if (fmt === "HAM06") {
-            if (v & 32) return { isAnchor: true, format: fmt, anchorIdx: v & 31 };
+            if ((v & 32) === 0) return { isAnchor: true, format: fmt, anchorIdx: v & 31 };
             return { isAnchor: false, format: fmt, isTurbo: ((v >> 4) & 1) === 1, rIndex: (v >> 3) & 1, gIndex: (v >> 1) & 3, bIndex: v & 1 };
         } else if (fmt === "HAM08") {
-            if (v & 128) return { isAnchor: true, format: fmt, anchorIdx: v & 127 };
+            if ((v & 128) === 0) return { isAnchor: true, format: fmt, anchorIdx: v & 127 };
             return { isAnchor: false, format: fmt, isTurbo: ((v >> 6) & 1) === 1, rIndex: (v >> 4) & 3, gIndex: (v >> 2) & 3, bIndex: v & 3 };
         }
         return { isAnchor: true, format: fmt, anchorIdx: 0 };
