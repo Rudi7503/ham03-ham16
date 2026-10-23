@@ -7,6 +7,7 @@ import {
 } from './src/core/module_paletted.js';
 import { packHam12_16, unpackHam12_16, decodeHam12_16 } from './src/core/module_ham12_16.js';
 import { encodeDXT1, decodeDXT1 } from './src/core/module_dxt1.js';
+import { readFileSync } from 'node:fs';
 
 let fehler = 0;
 const check = (name, cond, detail) => {
@@ -134,6 +135,60 @@ const px = (buf, i) => [buf[i * 4], buf[i * 4 + 1], buf[i * 4 + 2]];
     }
     check('§2 HAM16 Nutzlast = W*H*2', 128 * 128 * 2 === 32768);
     check('§2 DXT1 Nutzlast = ceil(W/4)*ceil(H/4)*8', Math.ceil(128 / 4) * Math.ceil(128 / 4) * 8 === 8192);
+}
+
+// ===== §6.5 HAM04: alle 16 Codes und eine komplette Datei =====
+{
+    // Codetabelle: 0…7 Anker, 8…15 Delta mit r/g/b-Bits
+    let ok = true, detail = '';
+    for (let v = 0; v < 16; v++) {
+        const c = unpackPaletted(new Uint8Array([v << 4, 0, 0, 0]), 'HAM04', 1)[0];
+        if (v < 8) {
+            if (!c.isAnchor || c.anchorIdx !== v) { ok = false; detail += ` v=${v}: ${JSON.stringify(c)};`; }
+        } else {
+            const r = (v >> 2) & 1, g = (v >> 1) & 1, b = v & 1;
+            if (c.isAnchor || c.rIndex !== r || c.gIndex !== g || c.bIndex !== b || c.isTurbo) {
+                ok = false; detail += ` v=${v}: ${JSON.stringify(c)};`;
+            }
+        }
+    }
+    check('§6.5 HAM04 Codetabelle: 0–7 Anker, 8–15 Delta (kein Turbo)', ok, detail);
+
+    // Komplette Datei über den Container-Kopf lesen
+    const raw = new Uint8Array(readFileSync('testbilder/ham04-beispiel.ham'));
+    const v = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+    const le = raw[5] === 0;
+    const w = v.getUint16(6, le), h = v.getUint16(8, le);
+    const fLen = raw[10];
+    let q = 11;
+    const fmt = new TextDecoder().decode(raw.slice(q, q + fLen)); q += fLen;
+    const step = { r: raw[q++], g: raw[q++], b: raw[q++] };
+    const off = raw[q++];
+    const pal = raw.slice(q, q + 768); q += 768;
+    const rest = raw.slice(q);
+
+    check('§6.5 Kopfdaten der Beispieldatei',
+        raw.length === 792 && w === 8 && h === 1 && fmt === 'HAM04'
+        && step.r === 4 && step.g === 4 && step.b === 4 && off === 0
+        && Array.from(rest).join() === [0x3D, 0x0A, 0xF8, 0x5E].join(),
+        `${raw.length} B, ${w}x${h}, "${fmt}"`);
+
+    const out = decodePaletted(unpackPaletted(rest, fmt, w * h), w, h, step, pal, off);
+    const erwartet = [
+        [200, 100, 50], [208, 92, 58], [0, 0, 0], [0, 8, 0],
+        [8, 16, 8], [0, 8, 0], [10, 20, 30], [18, 28, 22]
+    ];
+    let pxOk = true; detail = '';
+    for (let i = 0; i < 8; i++) {
+        const got = px(out, i);
+        if (!eq(got, erwartet[i])) { pxOk = false; detail += ` px${i}: ${got} statt ${erwartet[i]};`; }
+    }
+    check('§6.5 Beispieldatei → 8 erwartete Pixel', pxOk, detail);
+
+    // Reines HAM04 und 44444444 müssen dieselbe Nutzlast ergeben
+    const cmds = unpackPaletted(rest, 'HAM04', 8);
+    check('§6.5 HAM04 und HAM_32BIT_44444444 packen identisch',
+        eq(Array.from(packPaletted(cmds, 'HAM04')), Array.from(packPaletted(cmds, 'HAM_32BIT_44444444'))));
 }
 
 console.log(fehler === 0 ? '\nDATEIFORMAT-SPEZIFIKATION STIMMT MIT DER IMPLEMENTIERUNG UEBEREIN' : `\n${fehler} FEHLER`);

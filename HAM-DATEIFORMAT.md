@@ -299,6 +299,67 @@ Nutzlast (8 Byte): `0x00 0xF8 0xE0 0x07 0x50 0x50 0x50 0x50`
 
 Ergebnis der ersten Zeile: (255,0,0) (255,0,0) (0,255,0) (0,255,0)
 
+### 6.5 Familie A konkret — HAM04 (reines Format)
+
+HAM04 belegt **4 Bit je Pixel**, also 8 Pixel je 32-Bit-Wort → `W*H/2` Byte
+(bei nicht durch 8 teilbarer Pixelzahl: `ceil(W*H*4/32)*4`). Modusbit ist **Bit3**;
+Turbo gibt es nicht.
+
+| Code | Bedeutung |
+|---|---|
+| 0–7 | **Anker**, `anchorIdx = v` → `Palette[(offset + v) mod 256]` |
+| 8 | Delta r−, g−, b− |
+| 9 | Delta r−, g−, b+ |
+| 10 | Delta r−, g+, b− |
+| 11 | Delta r−, g+, b+ |
+| 12 | Delta r+, g−, b− |
+| 13 | Delta r+, g−, b+ |
+| 14 | Delta r+, g+, b− |
+| 15 | Delta r+, g+, b+ |
+
+Deltabits: `1 r g b` (Bit3 = 1, Bit2 = rIndex, Bit1 = gIndex, Bit0 = bIndex).
+Index `1` heißt **+2**, Index `0` heißt **−2**, jeweils × `step.kanal`.
+Die drei Kanäle sind **unabhängig** (bei HAM03 wären r und b gekoppelt).
+
+> Achtung: der Code `0` ist ein **Anker** auf Palettenplatz `offset`, kein
+> „nichts". Eine Nutzlast aus lauter Nullen ergibt eine Fläche in einer Farbe.
+
+Ein Wort mit den Codes 3, 13, 0, 10, 15, 8, 5, 14:
+
+```
+Bit   31..28 27..24 23..20 19..16 15..12 11..8  7..4  3..0
+Code     3     13      0     10     15     8     5    14
+Bin    0011   1101   0000   1010   1111  1000  0101  1110
+```
+
+= `0x3D0AF85E` → Bytes im Container `3D 0A F8 5E` (Big-Endian).
+
+Vollständige Beispieldatei im Repo: **`testbilder/ham04-beispiel.ham`** (792 Byte,
+8×1, `step` 4/4/4, `offset` 0). Aufbau:
+
+```
+48 41 4D 21              "HAM!"
+04                       Version 4
+00                       Little-Endian
+08 00                    Breite 8
+01 00                    Höhe 1
+05                       Formatname 5 Byte
+48 41 4D 30 34           "HAM04"
+04 04 04                 step r/g/b
+00                       offset
+<768 Byte>               Palette
+3D 0A F8 5E              Nutzlast (1 Wort, 8 Pixel)
+```
+
+Mit Palette Slot 0 = (0,0,0), Slot 3 = (200,100,50), Slot 5 = (10,20,30) liefert die
+Datei diese acht Pixel:
+
+`(200,100,50) (208,92,58) (0,0,0) (0,8,0) (8,16,8) (0,8,0) (10,20,30) (18,28,22)`
+
+Hinweis: reines `HAM04` und `HAM_32BIT_44444444` erzeugen **byte-identische**
+Nutzlast (4 Bit/Pixel, dieselbe Wortbelegung); sie unterscheiden sich nur im
+Formatnamen.
+
 ---
 
 ## 7. Prüfliste für Decoder-Implementierungen
