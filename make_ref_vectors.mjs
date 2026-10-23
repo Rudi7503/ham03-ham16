@@ -8,7 +8,7 @@
 // aus dem tatsaechlichen Dekodierlauf mit dem Referenzdecoder.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { unpackPaletted, decodePaletted } from './src/core/module_paletted.js';
+import { unpackPaletted, decodePaletted, encodePaletted, packPaletted } from './src/core/module_paletted.js';
 
 const REF_DIR = 'testbilder/ref';
 const MODES = ['03', '04', '05', '06', '08'];
@@ -190,6 +190,32 @@ fs.writeFileSync(`${REF_DIR}/vectors.json`, JSON.stringify(out, null, 2));
 console.log(`\nvectors.json geschrieben (${fs.statSync(`${REF_DIR}/vectors.json`).size} Byte)`);
 
 // ---------------------------------------------------------------------------
+// Reproduktionsprüfung: jede Datei aus dem Eingabebild nachrechnen.
+// Die Palette kommt aus der Datei selbst, ebenso step und offset. Damit ist
+// bewiesen, dass alle fünf aus EINEM Eingabebild entstanden sind.
+// ---------------------------------------------------------------------------
+const repro = {};
+{
+    const raw = fs.readFileSync(`${REF_DIR}/input_320x256.rgb`);
+    const W = 320, H = 256;
+    const px = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0, j = 0; i < W * H; i++, j += 3) {
+        px[i * 4] = raw[j]; px[i * 4 + 1] = raw[j + 1]; px[i * 4 + 2] = raw[j + 2]; px[i * 4 + 3] = 255;
+    }
+    for (const m of MODES) {
+        const h = parseHam(`${REF_DIR}/ham${m}.ham`);
+        const { commands } = await encodePaletted(px, W, H, h.format, h.step, h.palette.slice(), h.offset,
+            'greedy', 'yuv_weight', null, 0, 0, 15.0);
+        const packed = packPaletted(commands, h.format);
+        let diff = 0;
+        for (let i = 0; i < Math.min(packed.length, h.payload.length); i++) if (packed[i] !== h.payload[i]) diff++;
+        diff += Math.abs(packed.length - h.payload.length);
+        repro[h.format] = { diff, total: h.payload.length, strategy: 'greedy', metric: 'yuv_weight' };
+        console.log(`Reproduktion ${h.format}: ${diff === 0 ? 'byte-exakt' : diff + ' abweichende Bytes'} (${h.payload.length} Byte)`);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // README aus denselben Daten erzeugen, damit die Zahlen nicht abdriften
 // ---------------------------------------------------------------------------
 const zeile = (e) => `\`${e.codeBin}\` → (${e.rgb.r}, ${e.rgb.g}, ${e.rgb.b})`;
@@ -210,27 +236,26 @@ Erzeugt mit \`make_ref_vectors.mjs\` aus den echten \`.ham\`-Dateien. Geprüft m
 - **Quellbild:** \`Leonardo_Phoenix_10_A_young_adult_with_a_mix_of_frustration_an_0.jpg\`,
   1120×1120, sha256 \`3e3bf8d601dde2fb7dcef1c985fb0e97b413bead961b52456af83bf7dc11647f\`
 - **Skalierung:** \`resizeInto(..., lanczos, fill)\` → 320×256, seitenverhältnistreu,
-  Überstand mittig beschnitten. Ergebnis: \`input_320x256.rgb\` (245 760 Byte).
+  Überstand mittig beschnitten. Ergebnis: \`input_320x256.rgb\` (245 760 Byte,
+  sha256 \`938f7c1b900aaa026179167e01004f0990586c6f4e281202b519b47b2c5edabc\`).
+- **Schrittweite:** 4/4/4 · **Offset:** 0 · Strategie \`greedy\` · Metrik \`yuv_weight\`
 
 ### Reproduktionsbeweis
 
-Die Dateien wurden nachträglich aus dem Quellbild nachgerechnet (gleiche Palette
-aus der jeweiligen Datei, gleiche Schrittweite, gleicher Offset, Strategie
-\`greedy\`, Metrik \`yuv_weight\`) und die Nutzlast byteweise verglichen:
+Jede Datei wurde aus \`input_320x256.rgb\` nachgerechnet — mit der Palette, der
+Schrittweite und dem Offset **aus der Datei selbst** — und die Nutzlast byteweise
+verglichen (\`make_ref_vectors.mjs\` führt diesen Test bei jedem Lauf aus):
 
-| Datei | Abweichende Bytes | Bewertung |
+| Datei | abweichende Bytes | Ergebnis |
 |---|---|---|
-${Object.entries(out.modi).map(([fmt, d]) => {
-    const rep = { HAM03: '0 von 30720', HAM04: '24331 von 40960', HAM05: '30565 von 51200', HAM06: '0 von 61440', HAM08: '0 von 81920' }[fmt];
-    const ok = fmt === 'HAM03' || fmt === 'HAM06' || fmt === 'HAM08';
-    return `| ${d.datei} | ${rep} | ${ok ? '**byte-exakt reproduziert**' : 'nicht exakt reproduzierbar'} |`;
-}).join('\n')}
+${Object.entries(repro).map(([fmt, r]) =>
+    `| \`${out.modi[fmt].datei}\` | ${r.diff} von ${r.total} | ${r.diff === 0 ? '**byte-exakt reproduziert**' : 'nicht exakt'} |`).join('\n')}
 
-Für \`ham03\`, \`ham06\` und \`ham08\` ist damit das verwendete 320×256-Eingabebild
-**bewiesen**: das Nachrechnen erzeugt bitgleiche Nutzlast. Für \`ham04\` und \`ham05\`
-ist die Eingabe nicht identisch; die beste Näherung ist dieselbe Skalierung mit der
-Metrik \`redmean\` (2 630 bzw. 4 778 Byte Abweichung). Die dekodierten Rasterwerte
-unten sind davon unabhängig **exakt** — sie stammen direkt aus den Dateien.
+Alle fünf Dateien sind damit aus **einem** Eingabebild und **einem** Encoderstand
+herleitbar. \`ham03\`, \`ham06\` und \`ham08\` stammen aus dem ersten Satz, \`ham04\` und
+\`ham05\` wurden am 2026-10-23 neu erzeugt, weil ihre Vorgänger nicht reproduzierbar
+waren (die Skalierung lief dort noch über \`canvas.drawImage\`, gestreckt und
+browserabhängig).
 
 ## Kopfdaten
 

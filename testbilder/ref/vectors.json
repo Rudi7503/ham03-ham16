@@ -1111,7 +1111,7 @@
     "HAM04": {
       "datei": "ham04.ham",
       "dateiBytes": 41748,
-      "dateiSha256": "3c6dc5b4c1a5f02f231b937f8299271c009bfbf3998ff69c12c2d7991a084229",
+      "dateiSha256": "8fb819fbec600d1c31226ba3b4cacc2cfaf11a0962159a9fe69e6c324540d535",
       "kopf": {
         "version": 4,
         "magic": [
@@ -1134,40 +1134,40 @@
         "nutzlastBytes": 40960,
         "nutzlastBytesErwartet": 40960
       },
-      "paletteSha256": "f818a46d6ec27b79b835c0b5690a41c3ac2c32ef2c1e898558e20088b6110e7c",
+      "paletteSha256": "792096de06dc2c106ff626049278b2c9d63a430b91b0df78e87dbbe4efdee6e8",
       "paletteErsteEintraege": [
         0,
         0,
         0,
-        90,
-        85,
-        75,
-        224,
-        225,
-        223,
-        196,
-        196,
-        192,
-        52,
-        47,
-        41,
-        128,
+        89,
+        78,
+        72,
+        188,
+        182,
+        173,
+        218,
+        213,
+        212,
+        46,
+        45,
         40,
-        25
+        127,
+        33,
+        20
       ],
       "raster": {
         "datei": "ham04_decoded.rgb",
         "bytes": 245760,
-        "sha256": "8c14da886cb24650fbc7da99cb906e02b3a3da024147defbb5eec622d6675eff",
+        "sha256": "f4ebcbaf552ec32bf17009288048d5385e77e36fbcfd5834e7a506f09c90c794",
         "aufbau": "RGB, 3 Byte je Pixel, zeilenweise oben->unten, links->rechts, ohne Kopf"
       },
       "statistik": {
         "pixel": 81920,
-        "anker": 24508,
-        "deltas": 57412,
+        "anker": 21279,
+        "deltas": 60641,
         "turbo": 0,
-        "klemmung0": 66,
-        "klemmung255": 58
+        "klemmung0": 132,
+        "klemmung255": 65
       },
       "vektoren": {
         "frameStart": [
@@ -1185,58 +1185,42 @@
               "b": 127
             },
             "akkuNach": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "ungeklemmt": null,
             "geklemmt": null,
             "rgb": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           },
           {
             "index": 1,
             "x": 1,
             "y": 0,
-            "kind": "delta",
+            "kind": "anchor",
+            "code": 4,
             "bits": 4,
-            "rIndex": 0,
-            "gIndex": 0,
-            "bIndex": 0,
-            "turbo": false,
-            "code": 8,
-            "bitOffset": 4,
-            "byteOffset": 0,
-            "codeBin": "1000",
+            "codeBin": "0100",
             "akkuVor": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
-            "ungeklemmt": {
-              "r": 44,
-              "g": 39,
-              "b": 33
-            },
+            "ungeklemmt": null,
             "geklemmt": null,
-            "delta": {
-              "dr": -8,
-              "dg": -8,
-              "db": -8
-            },
-            "turboFaktor": 1,
             "rgb": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           },
           {
@@ -1248,63 +1232,47 @@
             "bits": 4,
             "codeBin": "0100",
             "akkuVor": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "ungeklemmt": null,
             "geklemmt": null,
             "rgb": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           },
           {
             "index": 3,
             "x": 3,
             "y": 0,
-            "kind": "delta",
+            "kind": "anchor",
+            "code": 4,
             "bits": 4,
-            "rIndex": 0,
-            "gIndex": 0,
-            "bIndex": 0,
-            "turbo": false,
-            "code": 8,
-            "bitOffset": 12,
-            "byteOffset": 1,
-            "codeBin": "1000",
+            "codeBin": "0100",
             "akkuVor": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
-            "ungeklemmt": {
-              "r": 44,
-              "g": 39,
-              "b": 33
-            },
+            "ungeklemmt": null,
             "geklemmt": null,
-            "delta": {
-              "dr": -8,
-              "dg": -8,
-              "db": -8
-            },
-            "turboFaktor": 1,
             "rgb": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           },
           {
@@ -1316,63 +1284,47 @@
             "bits": 4,
             "codeBin": "0100",
             "akkuVor": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "ungeklemmt": null,
             "geklemmt": null,
             "rgb": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           },
           {
             "index": 5,
             "x": 5,
             "y": 0,
-            "kind": "delta",
+            "kind": "anchor",
+            "code": 4,
             "bits": 4,
-            "rIndex": 0,
-            "gIndex": 0,
-            "bIndex": 0,
-            "turbo": false,
-            "code": 8,
-            "bitOffset": 20,
-            "byteOffset": 2,
-            "codeBin": "1000",
+            "codeBin": "0100",
             "akkuVor": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
-            "ungeklemmt": {
-              "r": 44,
-              "g": 39,
-              "b": 33
-            },
+            "ungeklemmt": null,
             "geklemmt": null,
-            "delta": {
-              "dr": -8,
-              "dg": -8,
-              "db": -8
-            },
-            "turboFaktor": 1,
             "rgb": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           },
           {
@@ -1384,180 +1336,122 @@
             "bits": 4,
             "codeBin": "0100",
             "akkuVor": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "ungeklemmt": null,
             "geklemmt": null,
             "rgb": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           },
           {
             "index": 7,
             "x": 7,
             "y": 0,
-            "kind": "delta",
+            "kind": "anchor",
+            "code": 4,
             "bits": 4,
-            "rIndex": 0,
-            "gIndex": 0,
-            "bIndex": 0,
-            "turbo": false,
-            "code": 8,
-            "bitOffset": 28,
-            "byteOffset": 3,
-            "codeBin": "1000",
+            "codeBin": "0100",
             "akkuVor": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
-            "ungeklemmt": {
-              "r": 44,
-              "g": 39,
-              "b": 33
-            },
+            "ungeklemmt": null,
             "geklemmt": null,
-            "delta": {
-              "dr": -8,
-              "dg": -8,
-              "db": -8
-            },
-            "turboFaktor": 1,
             "rgb": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           }
         ],
         "ankerUndDeltas": [
           {
-            "index": 37,
-            "x": 37,
+            "index": 17,
+            "x": 17,
             "y": 0,
             "kind": "anchor",
             "code": 4,
             "bits": 4,
             "codeBin": "0100",
             "akkuVor": {
-              "r": 60,
-              "g": 55,
-              "b": 49
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "ungeklemmt": null,
             "geklemmt": null,
             "rgb": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           },
           {
-            "index": 38,
-            "x": 38,
+            "index": 18,
+            "x": 18,
             "y": 0,
             "kind": "delta",
             "bits": 4,
             "rIndex": 1,
             "gIndex": 1,
-            "bIndex": 1,
+            "bIndex": 0,
             "turbo": false,
-            "code": 15,
-            "bitOffset": 152,
-            "byteOffset": 19,
-            "codeBin": "1111",
+            "code": 14,
+            "bitOffset": 72,
+            "byteOffset": 9,
+            "codeBin": "1110",
             "akkuVor": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 60,
-              "g": 55,
-              "b": 49
+              "r": 54,
+              "g": 53,
+              "b": 32
             },
             "ungeklemmt": {
-              "r": 60,
-              "g": 55,
-              "b": 49
+              "r": 54,
+              "g": 53,
+              "b": 32
             },
             "geklemmt": null,
             "delta": {
               "dr": 8,
               "dg": 8,
-              "db": 8
-            },
-            "turboFaktor": 1,
-            "rgb": {
-              "r": 60,
-              "g": 55,
-              "b": 49
-            }
-          },
-          {
-            "index": 39,
-            "x": 39,
-            "y": 0,
-            "kind": "delta",
-            "bits": 4,
-            "rIndex": 0,
-            "gIndex": 1,
-            "bIndex": 0,
-            "turbo": false,
-            "code": 10,
-            "bitOffset": 156,
-            "byteOffset": 19,
-            "codeBin": "1010",
-            "akkuVor": {
-              "r": 60,
-              "g": 55,
-              "b": 49
-            },
-            "akkuNach": {
-              "r": 52,
-              "g": 63,
-              "b": 41
-            },
-            "ungeklemmt": {
-              "r": 52,
-              "g": 63,
-              "b": 41
-            },
-            "geklemmt": null,
-            "delta": {
-              "dr": -8,
-              "dg": 8,
               "db": -8
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 52,
-              "g": 63,
-              "b": 41
+              "r": 54,
+              "g": 53,
+              "b": 32
             }
           },
           {
-            "index": 40,
-            "x": 40,
+            "index": 19,
+            "x": 19,
             "y": 0,
             "kind": "delta",
             "bits": 4,
@@ -1566,23 +1460,23 @@
             "bIndex": 1,
             "turbo": false,
             "code": 13,
-            "bitOffset": 160,
-            "byteOffset": 20,
+            "bitOffset": 76,
+            "byteOffset": 9,
             "codeBin": "1101",
             "akkuVor": {
-              "r": 52,
-              "g": 63,
-              "b": 41
+              "r": 54,
+              "g": 53,
+              "b": 32
             },
             "akkuNach": {
-              "r": 60,
-              "g": 55,
-              "b": 49
+              "r": 62,
+              "g": 45,
+              "b": 40
             },
             "ungeklemmt": {
-              "r": 60,
-              "g": 55,
-              "b": 49
+              "r": 62,
+              "g": 45,
+              "b": 40
             },
             "geklemmt": null,
             "delta": {
@@ -1592,140 +1486,198 @@
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 60,
-              "g": 55,
-              "b": 49
+              "r": 62,
+              "g": 45,
+              "b": 40
             }
           },
           {
-            "index": 41,
-            "x": 41,
+            "index": 20,
+            "x": 20,
             "y": 0,
             "kind": "delta",
             "bits": 4,
-            "rIndex": 1,
+            "rIndex": 0,
             "gIndex": 1,
             "bIndex": 0,
             "turbo": false,
-            "code": 14,
-            "bitOffset": 164,
-            "byteOffset": 20,
-            "codeBin": "1110",
+            "code": 10,
+            "bitOffset": 80,
+            "byteOffset": 10,
+            "codeBin": "1010",
             "akkuVor": {
-              "r": 60,
-              "g": 55,
-              "b": 49
+              "r": 62,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 68,
-              "g": 63,
-              "b": 41
+              "r": 54,
+              "g": 53,
+              "b": 32
             },
             "ungeklemmt": {
-              "r": 68,
-              "g": 63,
-              "b": 41
+              "r": 54,
+              "g": 53,
+              "b": 32
             },
             "geklemmt": null,
             "delta": {
-              "dr": 8,
+              "dr": -8,
               "dg": 8,
               "db": -8
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 68,
-              "g": 63,
-              "b": 41
+              "r": 54,
+              "g": 53,
+              "b": 32
             }
           },
           {
-            "index": 42,
-            "x": 42,
+            "index": 21,
+            "x": 21,
             "y": 0,
             "kind": "delta",
             "bits": 4,
-            "rIndex": 0,
+            "rIndex": 1,
             "gIndex": 0,
             "bIndex": 1,
             "turbo": false,
-            "code": 9,
-            "bitOffset": 168,
-            "byteOffset": 21,
-            "codeBin": "1001",
+            "code": 13,
+            "bitOffset": 84,
+            "byteOffset": 10,
+            "codeBin": "1101",
             "akkuVor": {
-              "r": 68,
-              "g": 63,
-              "b": 41
+              "r": 54,
+              "g": 53,
+              "b": 32
             },
             "akkuNach": {
-              "r": 60,
-              "g": 55,
-              "b": 49
+              "r": 62,
+              "g": 45,
+              "b": 40
             },
             "ungeklemmt": {
-              "r": 60,
-              "g": 55,
-              "b": 49
+              "r": 62,
+              "g": 45,
+              "b": 40
             },
             "geklemmt": null,
             "delta": {
-              "dr": -8,
+              "dr": 8,
               "dg": -8,
               "db": 8
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 60,
-              "g": 55,
-              "b": 49
+              "r": 62,
+              "g": 45,
+              "b": 40
+            }
+          },
+          {
+            "index": 22,
+            "x": 22,
+            "y": 0,
+            "kind": "delta",
+            "bits": 4,
+            "rIndex": 0,
+            "gIndex": 1,
+            "bIndex": 1,
+            "turbo": false,
+            "code": 11,
+            "bitOffset": 88,
+            "byteOffset": 11,
+            "codeBin": "1011",
+            "akkuVor": {
+              "r": 62,
+              "g": 45,
+              "b": 40
+            },
+            "akkuNach": {
+              "r": 54,
+              "g": 53,
+              "b": 48
+            },
+            "ungeklemmt": {
+              "r": 54,
+              "g": 53,
+              "b": 48
+            },
+            "geklemmt": null,
+            "delta": {
+              "dr": -8,
+              "dg": 8,
+              "db": 8
+            },
+            "turboFaktor": 1,
+            "rgb": {
+              "r": 54,
+              "g": 53,
+              "b": 48
             }
           }
         ],
         "turbo": null,
         "klemmungUnten": [
           {
-            "index": 6800,
-            "x": 80,
+            "index": 6802,
+            "x": 82,
             "y": 21,
-            "kind": "anchor",
-            "code": 0,
+            "kind": "delta",
             "bits": 4,
-            "codeBin": "0000",
+            "rIndex": 1,
+            "gIndex": 0,
+            "bIndex": 0,
+            "turbo": false,
+            "code": 12,
+            "bitOffset": 27208,
+            "byteOffset": 3401,
+            "codeBin": "1100",
             "akkuVor": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 8,
+              "g": 8,
+              "b": 8
             },
             "akkuNach": {
-              "r": 0,
+              "r": 16,
               "g": 0,
               "b": 0
             },
-            "ungeklemmt": null,
+            "ungeklemmt": {
+              "r": 16,
+              "g": 0,
+              "b": 0
+            },
             "geklemmt": null,
+            "delta": {
+              "dr": 8,
+              "dg": -8,
+              "db": -8
+            },
+            "turboFaktor": 1,
             "rgb": {
-              "r": 0,
+              "r": 16,
               "g": 0,
               "b": 0
             }
           },
           {
-            "index": 6801,
-            "x": 81,
+            "index": 6803,
+            "x": 83,
             "y": 21,
             "kind": "delta",
             "bits": 4,
-            "rIndex": 1,
+            "rIndex": 0,
             "gIndex": 1,
             "bIndex": 0,
             "turbo": false,
-            "code": 14,
-            "bitOffset": 27204,
-            "byteOffset": 3400,
-            "codeBin": "1110",
+            "code": 10,
+            "bitOffset": 27212,
+            "byteOffset": 3401,
+            "codeBin": "1010",
             "akkuVor": {
-              "r": 0,
+              "r": 16,
               "g": 0,
               "b": 0
             },
@@ -1741,7 +1693,7 @@
             },
             "geklemmt": "low",
             "delta": {
-              "dr": 8,
+              "dr": -8,
               "dg": 8,
               "db": -8
             },
@@ -1753,8 +1705,8 @@
             }
           },
           {
-            "index": 6802,
-            "x": 82,
+            "index": 6804,
+            "x": 84,
             "y": 21,
             "kind": "delta",
             "bits": 4,
@@ -1763,8 +1715,8 @@
             "bIndex": 0,
             "turbo": false,
             "code": 12,
-            "bitOffset": 27208,
-            "byteOffset": 3401,
+            "bitOffset": 27216,
+            "byteOffset": 3402,
             "codeBin": "1100",
             "akkuVor": {
               "r": 8,
@@ -1811,19 +1763,19 @@
             "byteOffset": 4946,
             "codeBin": "1111",
             "akkuVor": {
-              "r": 240,
-              "g": 241,
-              "b": 239
+              "r": 242,
+              "g": 237,
+              "b": 236
             },
             "akkuNach": {
-              "r": 248,
-              "g": 249,
-              "b": 247
+              "r": 250,
+              "g": 245,
+              "b": 244
             },
             "ungeklemmt": {
-              "r": 248,
-              "g": 249,
-              "b": 247
+              "r": 250,
+              "g": 245,
+              "b": 244
             },
             "geklemmt": null,
             "delta": {
@@ -1833,9 +1785,9 @@
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 248,
-              "g": 249,
-              "b": 247
+              "r": 250,
+              "g": 245,
+              "b": 244
             }
           },
           {
@@ -1853,19 +1805,19 @@
             "byteOffset": 4947,
             "codeBin": "1111",
             "akkuVor": {
-              "r": 248,
-              "g": 249,
-              "b": 247
+              "r": 250,
+              "g": 245,
+              "b": 244
             },
             "akkuNach": {
               "r": 255,
-              "g": 255,
-              "b": 255
+              "g": 253,
+              "b": 252
             },
             "ungeklemmt": {
-              "r": 256,
-              "g": 257,
-              "b": 255
+              "r": 258,
+              "g": 253,
+              "b": 252
             },
             "geklemmt": "high",
             "delta": {
@@ -1876,8 +1828,8 @@
             "turboFaktor": 1,
             "rgb": {
               "r": 255,
-              "g": 255,
-              "b": 255
+              "g": 253,
+              "b": 252
             }
           },
           {
@@ -1885,25 +1837,25 @@
             "x": 295,
             "y": 30,
             "kind": "anchor",
-            "code": 7,
+            "code": 2,
             "bits": 4,
-            "codeBin": "0111",
+            "codeBin": "0010",
             "akkuVor": {
               "r": 255,
-              "g": 255,
-              "b": 255
+              "g": 253,
+              "b": 252
             },
             "akkuNach": {
-              "r": 174,
-              "g": 159,
-              "b": 147
+              "r": 188,
+              "g": 182,
+              "b": 173
             },
             "ungeklemmt": null,
             "geklemmt": null,
             "rgb": {
-              "r": 174,
-              "g": 159,
-              "b": 147
+              "r": 188,
+              "g": 182,
+              "b": 173
             }
           }
         ],
@@ -1914,70 +1866,28 @@
             "y": 0,
             "kind": "delta",
             "bits": 4,
-            "rIndex": 0,
-            "gIndex": 0,
-            "bIndex": 1,
-            "turbo": false,
-            "code": 9,
-            "bitOffset": 1272,
-            "byteOffset": 159,
-            "codeBin": "1001",
-            "akkuVor": {
-              "r": 52,
-              "g": 47,
-              "b": 25
-            },
-            "akkuNach": {
-              "r": 44,
-              "g": 39,
-              "b": 33
-            },
-            "ungeklemmt": {
-              "r": 44,
-              "g": 39,
-              "b": 33
-            },
-            "geklemmt": null,
-            "delta": {
-              "dr": -8,
-              "dg": -8,
-              "db": 8
-            },
-            "turboFaktor": 1,
-            "rgb": {
-              "r": 44,
-              "g": 39,
-              "b": 33
-            }
-          },
-          {
-            "index": 319,
-            "x": 319,
-            "y": 0,
-            "kind": "delta",
-            "bits": 4,
             "rIndex": 1,
             "gIndex": 0,
             "bIndex": 0,
             "turbo": false,
             "code": 12,
-            "bitOffset": 1276,
+            "bitOffset": 1272,
             "byteOffset": 159,
             "codeBin": "1100",
             "akkuVor": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 52,
-              "g": 31,
-              "b": 25
+              "r": 54,
+              "g": 37,
+              "b": 32
             },
             "ungeklemmt": {
-              "r": 52,
-              "g": 31,
-              "b": 25
+              "r": 54,
+              "g": 37,
+              "b": 32
             },
             "geklemmt": null,
             "delta": {
@@ -1987,51 +1897,77 @@
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 52,
-              "g": 31,
-              "b": 25
+              "r": 54,
+              "g": 37,
+              "b": 32
+            }
+          },
+          {
+            "index": 319,
+            "x": 319,
+            "y": 0,
+            "kind": "delta",
+            "bits": 4,
+            "rIndex": 0,
+            "gIndex": 1,
+            "bIndex": 0,
+            "turbo": false,
+            "code": 10,
+            "bitOffset": 1276,
+            "byteOffset": 159,
+            "codeBin": "1010",
+            "akkuVor": {
+              "r": 54,
+              "g": 37,
+              "b": 32
+            },
+            "akkuNach": {
+              "r": 46,
+              "g": 45,
+              "b": 24
+            },
+            "ungeklemmt": {
+              "r": 46,
+              "g": 45,
+              "b": 24
+            },
+            "geklemmt": null,
+            "delta": {
+              "dr": -8,
+              "dg": 8,
+              "db": -8
+            },
+            "turboFaktor": 1,
+            "rgb": {
+              "r": 46,
+              "g": 45,
+              "b": 24
             }
           },
           {
             "index": 320,
             "x": 0,
             "y": 1,
-            "kind": "delta",
+            "kind": "anchor",
+            "code": 4,
             "bits": 4,
-            "rIndex": 0,
-            "gIndex": 1,
-            "bIndex": 1,
-            "turbo": false,
-            "code": 11,
-            "bitOffset": 1280,
-            "byteOffset": 160,
-            "codeBin": "1011",
+            "codeBin": "0100",
             "akkuVor": {
-              "r": 52,
-              "g": 31,
-              "b": 25
+              "r": 46,
+              "g": 45,
+              "b": 24
             },
             "akkuNach": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
-            "ungeklemmt": {
-              "r": 44,
-              "g": 39,
-              "b": 33
-            },
+            "ungeklemmt": null,
             "geklemmt": null,
-            "delta": {
-              "dr": -8,
-              "dg": 8,
-              "db": 8
-            },
-            "turboFaktor": 1,
             "rgb": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           },
           {
@@ -2043,63 +1979,47 @@
             "bits": 4,
             "codeBin": "0100",
             "akkuVor": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "ungeklemmt": null,
             "geklemmt": null,
             "rgb": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           },
           {
             "index": 322,
             "x": 2,
             "y": 1,
-            "kind": "delta",
+            "kind": "anchor",
+            "code": 4,
             "bits": 4,
-            "rIndex": 0,
-            "gIndex": 0,
-            "bIndex": 0,
-            "turbo": false,
-            "code": 8,
-            "bitOffset": 1288,
-            "byteOffset": 161,
-            "codeBin": "1000",
+            "codeBin": "0100",
             "akkuVor": {
-              "r": 52,
-              "g": 47,
-              "b": 41
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
             "akkuNach": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             },
-            "ungeklemmt": {
-              "r": 44,
-              "g": 39,
-              "b": 33
-            },
+            "ungeklemmt": null,
             "geklemmt": null,
-            "delta": {
-              "dr": -8,
-              "dg": -8,
-              "db": -8
-            },
-            "turboFaktor": 1,
             "rgb": {
-              "r": 44,
-              "g": 39,
-              "b": 33
+              "r": 46,
+              "g": 45,
+              "b": 40
             }
           }
         ]
@@ -2108,7 +2028,7 @@
     "HAM05": {
       "datei": "ham05.ham",
       "dateiBytes": 51988,
-      "dateiSha256": "5151487ca358cbe12dca446309e194f633ac48deae50ce1c27f60a8364edcac0",
+      "dateiSha256": "e3e865201d213601958552e3b3efb6eca53d791ffa4226b80304a629ee447beb",
       "kopf": {
         "version": 4,
         "magic": [
@@ -2131,40 +2051,40 @@
         "nutzlastBytes": 51200,
         "nutzlastBytesErwartet": 51200
       },
-      "paletteSha256": "fce6cb3cf21ed4e122672ec78e718469385e09776e2eed9bc69f130669cc47d1",
+      "paletteSha256": "f6f773d14f4b270e32c45ffab4f2733c1dffe1bf9e662f44165f8f76d6655d89",
       "paletteErsteEintraege": [
         0,
         0,
         0,
-        64,
-        56,
-        46,
-        72,
-        65,
+        71,
+        63,
         54,
-        87,
-        82,
-        73,
-        229,
-        230,
-        228,
-        207,
-        207,
-        204
+        83,
+        80,
+        72,
+        119,
+        119,
+        112,
+        194,
+        191,
+        185,
+        54,
+        51,
+        44
       ],
       "raster": {
         "datei": "ham05_decoded.rgb",
         "bytes": 245760,
-        "sha256": "ec266ae2529d4dc46421a83c0a67f7694d811bf6500beec455ed01ef98a5c418",
+        "sha256": "960eaf1fc47e6a1e13c3114575d8da5ae718eec7508968c3b27a84cffebdd119",
         "aufbau": "RGB, 3 Byte je Pixel, zeilenweise oben->unten, links->rechts, ohne Kopf"
       },
       "statistik": {
         "pixel": 81920,
-        "anker": 22567,
-        "deltas": 59353,
-        "turbo": 5702,
-        "klemmung0": 108,
-        "klemmung255": 39
+        "anker": 18020,
+        "deltas": 63900,
+        "turbo": 5299,
+        "klemmung0": 109,
+        "klemmung255": 46
       },
       "vektoren": {
         "frameStart": [
@@ -2173,25 +2093,25 @@
             "x": 0,
             "y": 0,
             "kind": "anchor",
-            "code": 6,
+            "code": 5,
             "bits": 5,
-            "codeBin": "00110",
+            "codeBin": "00101",
             "akkuVor": {
               "r": 127,
               "g": 127,
               "b": 127
             },
             "akkuNach": {
-              "r": 36,
-              "g": 35,
-              "b": 31
+              "r": 54,
+              "g": 51,
+              "b": 44
             },
             "ungeklemmt": null,
             "geklemmt": null,
             "rgb": {
-              "r": 36,
-              "g": 35,
-              "b": 31
+              "r": 54,
+              "g": 51,
+              "b": 44
             }
           },
           {
@@ -2200,40 +2120,40 @@
             "y": 0,
             "kind": "delta",
             "bits": 5,
-            "rIndex": 1,
-            "gIndex": 1,
-            "bIndex": 1,
+            "rIndex": 0,
+            "gIndex": 0,
+            "bIndex": 0,
             "turbo": false,
-            "code": 23,
+            "code": 16,
             "bitOffset": 5,
             "byteOffset": 0,
-            "codeBin": "10111",
+            "codeBin": "10000",
             "akkuVor": {
-              "r": 36,
-              "g": 35,
-              "b": 31
+              "r": 54,
+              "g": 51,
+              "b": 44
             },
             "akkuNach": {
-              "r": 40,
-              "g": 39,
-              "b": 35
+              "r": 50,
+              "g": 47,
+              "b": 40
             },
             "ungeklemmt": {
-              "r": 40,
-              "g": 39,
-              "b": 35
+              "r": 50,
+              "g": 47,
+              "b": 40
             },
             "geklemmt": null,
             "delta": {
-              "dr": 4,
-              "dg": 4,
-              "db": 4
+              "dr": -4,
+              "dg": -4,
+              "db": -4
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 40,
-              "g": 39,
-              "b": 35
+              "r": 50,
+              "g": 47,
+              "b": 40
             }
           },
           {
@@ -2242,40 +2162,40 @@
             "y": 0,
             "kind": "delta",
             "bits": 5,
-            "rIndex": 1,
-            "gIndex": 1,
+            "rIndex": 0,
+            "gIndex": 0,
             "bIndex": 0,
             "turbo": false,
-            "code": 22,
+            "code": 16,
             "bitOffset": 10,
             "byteOffset": 1,
-            "codeBin": "10110",
+            "codeBin": "10000",
             "akkuVor": {
-              "r": 40,
-              "g": 39,
-              "b": 35
+              "r": 50,
+              "g": 47,
+              "b": 40
             },
             "akkuNach": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 31
+              "b": 36
             },
             "ungeklemmt": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 31
+              "b": 36
             },
             "geklemmt": null,
             "delta": {
-              "dr": 4,
-              "dg": 4,
+              "dr": -4,
+              "dg": -4,
               "db": -4
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 31
+              "b": 36
             }
           },
           {
@@ -2284,28 +2204,70 @@
             "y": 0,
             "kind": "delta",
             "bits": 5,
+            "rIndex": 0,
+            "gIndex": 1,
+            "bIndex": 0,
+            "turbo": false,
+            "code": 18,
+            "bitOffset": 15,
+            "byteOffset": 1,
+            "codeBin": "10010",
+            "akkuVor": {
+              "r": 46,
+              "g": 43,
+              "b": 36
+            },
+            "akkuNach": {
+              "r": 42,
+              "g": 47,
+              "b": 32
+            },
+            "ungeklemmt": {
+              "r": 42,
+              "g": 47,
+              "b": 32
+            },
+            "geklemmt": null,
+            "delta": {
+              "dr": -4,
+              "dg": 4,
+              "db": -4
+            },
+            "turboFaktor": 1,
+            "rgb": {
+              "r": 42,
+              "g": 47,
+              "b": 32
+            }
+          },
+          {
+            "index": 4,
+            "x": 4,
+            "y": 0,
+            "kind": "delta",
+            "bits": 5,
             "rIndex": 1,
             "gIndex": 0,
             "bIndex": 1,
             "turbo": false,
             "code": 21,
-            "bitOffset": 15,
-            "byteOffset": 1,
+            "bitOffset": 20,
+            "byteOffset": 2,
             "codeBin": "10101",
             "akkuVor": {
-              "r": 44,
-              "g": 43,
-              "b": 31
+              "r": 42,
+              "g": 47,
+              "b": 32
             },
             "akkuNach": {
-              "r": 48,
-              "g": 39,
-              "b": 35
+              "r": 46,
+              "g": 43,
+              "b": 36
             },
             "ungeklemmt": {
-              "r": 48,
-              "g": 39,
-              "b": 35
+              "r": 46,
+              "g": 43,
+              "b": 36
             },
             "geklemmt": null,
             "delta": {
@@ -2315,51 +2277,9 @@
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 48,
-              "g": 39,
-              "b": 35
-            }
-          },
-          {
-            "index": 4,
-            "x": 4,
-            "y": 0,
-            "kind": "delta",
-            "bits": 5,
-            "rIndex": 0,
-            "gIndex": 1,
-            "bIndex": 1,
-            "turbo": false,
-            "code": 19,
-            "bitOffset": 20,
-            "byteOffset": 2,
-            "codeBin": "10011",
-            "akkuVor": {
-              "r": 48,
-              "g": 39,
-              "b": 35
-            },
-            "akkuNach": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 39
-            },
-            "ungeklemmt": {
-              "r": 44,
-              "g": 43,
-              "b": 39
-            },
-            "geklemmt": null,
-            "delta": {
-              "dr": -4,
-              "dg": 4,
-              "db": 4
-            },
-            "turboFaktor": 1,
-            "rgb": {
-              "r": 44,
-              "g": 43,
-              "b": 39
+              "b": 36
             }
           },
           {
@@ -2370,38 +2290,38 @@
             "bits": 5,
             "rIndex": 1,
             "gIndex": 0,
-            "bIndex": 0,
+            "bIndex": 1,
             "turbo": false,
-            "code": 20,
+            "code": 21,
             "bitOffset": 25,
             "byteOffset": 3,
-            "codeBin": "10100",
+            "codeBin": "10101",
             "akkuVor": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 39
+              "b": 36
             },
             "akkuNach": {
-              "r": 48,
+              "r": 50,
               "g": 39,
-              "b": 35
+              "b": 40
             },
             "ungeklemmt": {
-              "r": 48,
+              "r": 50,
               "g": 39,
-              "b": 35
+              "b": 40
             },
             "geklemmt": null,
             "delta": {
               "dr": 4,
               "dg": -4,
-              "db": -4
+              "db": 4
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 48,
+              "r": 50,
               "g": 39,
-              "b": 35
+              "b": 40
             }
           },
           {
@@ -2419,19 +2339,19 @@
             "byteOffset": 3,
             "codeBin": "10010",
             "akkuVor": {
-              "r": 48,
+              "r": 50,
               "g": 39,
-              "b": 35
+              "b": 40
             },
             "akkuNach": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 31
+              "b": 36
             },
             "ungeklemmt": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 31
+              "b": 36
             },
             "geklemmt": null,
             "delta": {
@@ -2441,9 +2361,9 @@
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 31
+              "b": 36
             }
           },
           {
@@ -2452,40 +2372,40 @@
             "y": 0,
             "kind": "delta",
             "bits": 5,
-            "rIndex": 1,
-            "gIndex": 0,
-            "bIndex": 1,
+            "rIndex": 0,
+            "gIndex": 1,
+            "bIndex": 0,
             "turbo": false,
-            "code": 21,
+            "code": 18,
             "bitOffset": 35,
             "byteOffset": 4,
-            "codeBin": "10101",
+            "codeBin": "10010",
             "akkuVor": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 31
+              "b": 36
             },
             "akkuNach": {
-              "r": 48,
-              "g": 39,
-              "b": 35
+              "r": 42,
+              "g": 47,
+              "b": 32
             },
             "ungeklemmt": {
-              "r": 48,
-              "g": 39,
-              "b": 35
+              "r": 42,
+              "g": 47,
+              "b": 32
             },
             "geklemmt": null,
             "delta": {
-              "dr": 4,
-              "dg": -4,
-              "db": 4
+              "dr": -4,
+              "dg": 4,
+              "db": -4
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 48,
-              "g": 39,
-              "b": 35
+              "r": 42,
+              "g": 47,
+              "b": 32
             }
           }
         ],
@@ -2495,25 +2415,25 @@
             "x": 0,
             "y": 0,
             "kind": "anchor",
-            "code": 6,
+            "code": 5,
             "bits": 5,
-            "codeBin": "00110",
+            "codeBin": "00101",
             "akkuVor": {
               "r": 127,
               "g": 127,
               "b": 127
             },
             "akkuNach": {
-              "r": 36,
-              "g": 35,
-              "b": 31
+              "r": 54,
+              "g": 51,
+              "b": 44
             },
             "ungeklemmt": null,
             "geklemmt": null,
             "rgb": {
-              "r": 36,
-              "g": 35,
-              "b": 31
+              "r": 54,
+              "g": 51,
+              "b": 44
             }
           },
           {
@@ -2522,40 +2442,40 @@
             "y": 0,
             "kind": "delta",
             "bits": 5,
-            "rIndex": 1,
-            "gIndex": 1,
-            "bIndex": 1,
+            "rIndex": 0,
+            "gIndex": 0,
+            "bIndex": 0,
             "turbo": false,
-            "code": 23,
+            "code": 16,
             "bitOffset": 5,
             "byteOffset": 0,
-            "codeBin": "10111",
+            "codeBin": "10000",
             "akkuVor": {
-              "r": 36,
-              "g": 35,
-              "b": 31
+              "r": 54,
+              "g": 51,
+              "b": 44
             },
             "akkuNach": {
-              "r": 40,
-              "g": 39,
-              "b": 35
+              "r": 50,
+              "g": 47,
+              "b": 40
             },
             "ungeklemmt": {
-              "r": 40,
-              "g": 39,
-              "b": 35
+              "r": 50,
+              "g": 47,
+              "b": 40
             },
             "geklemmt": null,
             "delta": {
-              "dr": 4,
-              "dg": 4,
-              "db": 4
+              "dr": -4,
+              "dg": -4,
+              "db": -4
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 40,
-              "g": 39,
-              "b": 35
+              "r": 50,
+              "g": 47,
+              "b": 40
             }
           },
           {
@@ -2564,40 +2484,40 @@
             "y": 0,
             "kind": "delta",
             "bits": 5,
-            "rIndex": 1,
-            "gIndex": 1,
+            "rIndex": 0,
+            "gIndex": 0,
             "bIndex": 0,
             "turbo": false,
-            "code": 22,
+            "code": 16,
             "bitOffset": 10,
             "byteOffset": 1,
-            "codeBin": "10110",
+            "codeBin": "10000",
             "akkuVor": {
-              "r": 40,
-              "g": 39,
-              "b": 35
+              "r": 50,
+              "g": 47,
+              "b": 40
             },
             "akkuNach": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 31
+              "b": 36
             },
             "ungeklemmt": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 31
+              "b": 36
             },
             "geklemmt": null,
             "delta": {
-              "dr": 4,
-              "dg": 4,
+              "dr": -4,
+              "dg": -4,
               "db": -4
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 31
+              "b": 36
             }
           },
           {
@@ -2606,28 +2526,70 @@
             "y": 0,
             "kind": "delta",
             "bits": 5,
+            "rIndex": 0,
+            "gIndex": 1,
+            "bIndex": 0,
+            "turbo": false,
+            "code": 18,
+            "bitOffset": 15,
+            "byteOffset": 1,
+            "codeBin": "10010",
+            "akkuVor": {
+              "r": 46,
+              "g": 43,
+              "b": 36
+            },
+            "akkuNach": {
+              "r": 42,
+              "g": 47,
+              "b": 32
+            },
+            "ungeklemmt": {
+              "r": 42,
+              "g": 47,
+              "b": 32
+            },
+            "geklemmt": null,
+            "delta": {
+              "dr": -4,
+              "dg": 4,
+              "db": -4
+            },
+            "turboFaktor": 1,
+            "rgb": {
+              "r": 42,
+              "g": 47,
+              "b": 32
+            }
+          },
+          {
+            "index": 4,
+            "x": 4,
+            "y": 0,
+            "kind": "delta",
+            "bits": 5,
             "rIndex": 1,
             "gIndex": 0,
             "bIndex": 1,
             "turbo": false,
             "code": 21,
-            "bitOffset": 15,
-            "byteOffset": 1,
+            "bitOffset": 20,
+            "byteOffset": 2,
             "codeBin": "10101",
             "akkuVor": {
-              "r": 44,
-              "g": 43,
-              "b": 31
+              "r": 42,
+              "g": 47,
+              "b": 32
             },
             "akkuNach": {
-              "r": 48,
-              "g": 39,
-              "b": 35
+              "r": 46,
+              "g": 43,
+              "b": 36
             },
             "ungeklemmt": {
-              "r": 48,
-              "g": 39,
-              "b": 35
+              "r": 46,
+              "g": 43,
+              "b": 36
             },
             "geklemmt": null,
             "delta": {
@@ -2637,51 +2599,9 @@
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 48,
-              "g": 39,
-              "b": 35
-            }
-          },
-          {
-            "index": 4,
-            "x": 4,
-            "y": 0,
-            "kind": "delta",
-            "bits": 5,
-            "rIndex": 0,
-            "gIndex": 1,
-            "bIndex": 1,
-            "turbo": false,
-            "code": 19,
-            "bitOffset": 20,
-            "byteOffset": 2,
-            "codeBin": "10011",
-            "akkuVor": {
-              "r": 48,
-              "g": 39,
-              "b": 35
-            },
-            "akkuNach": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 39
-            },
-            "ungeklemmt": {
-              "r": 44,
-              "g": 43,
-              "b": 39
-            },
-            "geklemmt": null,
-            "delta": {
-              "dr": -4,
-              "dg": 4,
-              "db": 4
-            },
-            "turboFaktor": 1,
-            "rgb": {
-              "r": 44,
-              "g": 43,
-              "b": 39
+              "b": 36
             }
           },
           {
@@ -2692,38 +2612,38 @@
             "bits": 5,
             "rIndex": 1,
             "gIndex": 0,
-            "bIndex": 0,
+            "bIndex": 1,
             "turbo": false,
-            "code": 20,
+            "code": 21,
             "bitOffset": 25,
             "byteOffset": 3,
-            "codeBin": "10100",
+            "codeBin": "10101",
             "akkuVor": {
-              "r": 44,
+              "r": 46,
               "g": 43,
-              "b": 39
+              "b": 36
             },
             "akkuNach": {
-              "r": 48,
+              "r": 50,
               "g": 39,
-              "b": 35
+              "b": 40
             },
             "ungeklemmt": {
-              "r": 48,
+              "r": 50,
               "g": 39,
-              "b": 35
+              "b": 40
             },
             "geklemmt": null,
             "delta": {
               "dr": 4,
               "dg": -4,
-              "db": -4
+              "db": 4
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 48,
+              "r": 50,
               "g": 39,
-              "b": 35
+              "b": 40
             }
           }
         ],
@@ -2732,42 +2652,26 @@
             "index": 209,
             "x": 209,
             "y": 0,
-            "kind": "delta",
+            "kind": "anchor",
+            "code": 7,
             "bits": 5,
-            "rIndex": 0,
-            "gIndex": 0,
-            "bIndex": 0,
-            "turbo": false,
-            "code": 16,
-            "bitOffset": 1045,
-            "byteOffset": 130,
-            "codeBin": "10000",
+            "codeBin": "00111",
             "akkuVor": {
-              "r": 107,
-              "g": 99,
-              "b": 93
+              "r": 108,
+              "g": 98,
+              "b": 91
             },
             "akkuNach": {
-              "r": 103,
-              "g": 95,
-              "b": 89
+              "r": 96,
+              "g": 94,
+              "b": 87
             },
-            "ungeklemmt": {
-              "r": 103,
-              "g": 95,
-              "b": 89
-            },
+            "ungeklemmt": null,
             "geklemmt": null,
-            "delta": {
-              "dr": -4,
-              "dg": -4,
-              "db": -4
-            },
-            "turboFaktor": 1,
             "rgb": {
-              "r": 103,
-              "g": 95,
-              "b": 89
+              "r": 96,
+              "g": 94,
+              "b": 87
             }
           },
           {
@@ -2775,25 +2679,25 @@
             "x": 210,
             "y": 0,
             "kind": "anchor",
-            "code": 8,
+            "code": 4,
             "bits": 5,
-            "codeBin": "01000",
+            "codeBin": "00100",
             "akkuVor": {
-              "r": 103,
-              "g": 95,
-              "b": 89
+              "r": 96,
+              "g": 94,
+              "b": 87
             },
             "akkuNach": {
-              "r": 177,
-              "g": 164,
-              "b": 153
+              "r": 194,
+              "g": 191,
+              "b": 185
             },
             "ungeklemmt": null,
             "geklemmt": null,
             "rgb": {
-              "r": 177,
-              "g": 164,
-              "b": 153
+              "r": 194,
+              "g": 191,
+              "b": 185
             }
           },
           {
@@ -2811,19 +2715,19 @@
             "byteOffset": 131,
             "codeBin": "11110",
             "akkuVor": {
-              "r": 177,
-              "g": 164,
-              "b": 153
+              "r": 194,
+              "g": 191,
+              "b": 185
             },
             "akkuNach": {
-              "r": 193,
-              "g": 180,
-              "b": 137
+              "r": 210,
+              "g": 207,
+              "b": 169
             },
             "ungeklemmt": {
-              "r": 193,
-              "g": 180,
-              "b": 137
+              "r": 210,
+              "g": 207,
+              "b": 169
             },
             "geklemmt": null,
             "delta": {
@@ -2833,9 +2737,9 @@
             },
             "turboFaktor": 4,
             "rgb": {
-              "r": 193,
-              "g": 180,
-              "b": 137
+              "r": 210,
+              "g": 207,
+              "b": 169
             }
           },
           {
@@ -2853,19 +2757,19 @@
             "byteOffset": 132,
             "codeBin": "11100",
             "akkuVor": {
-              "r": 193,
-              "g": 180,
-              "b": 137
+              "r": 210,
+              "g": 207,
+              "b": 169
             },
             "akkuNach": {
-              "r": 209,
-              "g": 164,
-              "b": 121
+              "r": 226,
+              "g": 191,
+              "b": 153
             },
             "ungeklemmt": {
-              "r": 209,
-              "g": 164,
-              "b": 121
+              "r": 226,
+              "g": 191,
+              "b": 153
             },
             "geklemmt": null,
             "delta": {
@@ -2875,9 +2779,9 @@
             },
             "turboFaktor": 4,
             "rgb": {
-              "r": 209,
-              "g": 164,
-              "b": 121
+              "r": 226,
+              "g": 191,
+              "b": 153
             }
           },
           {
@@ -2886,74 +2790,90 @@
             "y": 0,
             "kind": "delta",
             "bits": 5,
-            "rIndex": 1,
+            "rIndex": 0,
             "gIndex": 0,
             "bIndex": 0,
             "turbo": true,
-            "code": 28,
+            "code": 24,
             "bitOffset": 1065,
             "byteOffset": 133,
-            "codeBin": "11100",
+            "codeBin": "11000",
             "akkuVor": {
-              "r": 209,
-              "g": 164,
-              "b": 121
+              "r": 226,
+              "g": 191,
+              "b": 153
             },
             "akkuNach": {
-              "r": 225,
-              "g": 148,
-              "b": 105
+              "r": 210,
+              "g": 175,
+              "b": 137
             },
             "ungeklemmt": {
-              "r": 225,
-              "g": 148,
-              "b": 105
+              "r": 210,
+              "g": 175,
+              "b": 137
             },
             "geklemmt": null,
             "delta": {
-              "dr": 16,
+              "dr": -16,
               "dg": -16,
               "db": -16
             },
             "turboFaktor": 4,
             "rgb": {
-              "r": 225,
-              "g": 148,
-              "b": 105
+              "r": 210,
+              "g": 175,
+              "b": 137
             }
           }
         ],
         "klemmungUnten": [
           {
-            "index": 6158,
-            "x": 78,
-            "y": 19,
-            "kind": "anchor",
-            "code": 0,
+            "index": 5839,
+            "x": 79,
+            "y": 18,
+            "kind": "delta",
             "bits": 5,
-            "codeBin": "00000",
+            "rIndex": 0,
+            "gIndex": 0,
+            "bIndex": 0,
+            "turbo": true,
+            "code": 24,
+            "bitOffset": 29195,
+            "byteOffset": 3649,
+            "codeBin": "11000",
             "akkuVor": {
-              "r": 107,
-              "g": 78,
-              "b": 61
+              "r": 32,
+              "g": 30,
+              "b": 28
             },
             "akkuNach": {
-              "r": 0,
-              "g": 0,
-              "b": 0
+              "r": 16,
+              "g": 14,
+              "b": 12
             },
-            "ungeklemmt": null,
+            "ungeklemmt": {
+              "r": 16,
+              "g": 14,
+              "b": 12
+            },
             "geklemmt": null,
+            "delta": {
+              "dr": -16,
+              "dg": -16,
+              "db": -16
+            },
+            "turboFaktor": 4,
             "rgb": {
-              "r": 0,
-              "g": 0,
-              "b": 0
+              "r": 16,
+              "g": 14,
+              "b": 12
             }
           },
           {
-            "index": 6159,
-            "x": 79,
-            "y": 19,
+            "index": 5840,
+            "x": 80,
+            "y": 18,
             "kind": "delta",
             "bits": 5,
             "rIndex": 1,
@@ -2961,23 +2881,23 @@
             "bIndex": 0,
             "turbo": true,
             "code": 30,
-            "bitOffset": 30795,
-            "byteOffset": 3849,
+            "bitOffset": 29200,
+            "byteOffset": 3650,
             "codeBin": "11110",
             "akkuVor": {
-              "r": 0,
-              "g": 0,
-              "b": 0
+              "r": 16,
+              "g": 14,
+              "b": 12
             },
             "akkuNach": {
-              "r": 16,
-              "g": 16,
+              "r": 32,
+              "g": 30,
               "b": 0
             },
             "ungeklemmt": {
-              "r": 16,
-              "g": 16,
-              "b": -16
+              "r": 32,
+              "g": 30,
+              "b": -4
             },
             "geklemmt": "low",
             "delta": {
@@ -2987,101 +2907,43 @@
             },
             "turboFaktor": 4,
             "rgb": {
-              "r": 16,
-              "g": 16,
+              "r": 32,
+              "g": 30,
               "b": 0
             }
           },
           {
-            "index": 6160,
-            "x": 80,
-            "y": 19,
-            "kind": "delta",
+            "index": 5841,
+            "x": 81,
+            "y": 18,
+            "kind": "anchor",
+            "code": 8,
             "bits": 5,
-            "rIndex": 1,
-            "gIndex": 0,
-            "bIndex": 1,
-            "turbo": false,
-            "code": 21,
-            "bitOffset": 30800,
-            "byteOffset": 3850,
-            "codeBin": "10101",
+            "codeBin": "01000",
             "akkuVor": {
-              "r": 16,
-              "g": 16,
+              "r": 32,
+              "g": 30,
               "b": 0
             },
             "akkuNach": {
-              "r": 20,
-              "g": 12,
-              "b": 4
+              "r": 32,
+              "g": 30,
+              "b": 28
             },
-            "ungeklemmt": {
-              "r": 20,
-              "g": 12,
-              "b": 4
-            },
+            "ungeklemmt": null,
             "geklemmt": null,
-            "delta": {
-              "dr": 4,
-              "dg": -4,
-              "db": 4
-            },
-            "turboFaktor": 1,
             "rgb": {
-              "r": 20,
-              "g": 12,
-              "b": 4
+              "r": 32,
+              "g": 30,
+              "b": 28
             }
           }
         ],
         "klemmungOben": [
           {
-            "index": 1813,
+            "index": 1173,
             "x": 213,
-            "y": 5,
-            "kind": "delta",
-            "bits": 5,
-            "rIndex": 1,
-            "gIndex": 1,
-            "bIndex": 0,
-            "turbo": true,
-            "code": 30,
-            "bitOffset": 9065,
-            "byteOffset": 1133,
-            "codeBin": "11110",
-            "akkuVor": {
-              "r": 224,
-              "g": 186,
-              "b": 148
-            },
-            "akkuNach": {
-              "r": 240,
-              "g": 202,
-              "b": 132
-            },
-            "ungeklemmt": {
-              "r": 240,
-              "g": 202,
-              "b": 132
-            },
-            "geklemmt": null,
-            "delta": {
-              "dr": 16,
-              "dg": 16,
-              "db": -16
-            },
-            "turboFaktor": 4,
-            "rgb": {
-              "r": 240,
-              "g": 202,
-              "b": 132
-            }
-          },
-          {
-            "index": 1814,
-            "x": 214,
-            "y": 5,
+            "y": 3,
             "kind": "delta",
             "bits": 5,
             "rIndex": 1,
@@ -3089,25 +2951,25 @@
             "bIndex": 0,
             "turbo": true,
             "code": 28,
-            "bitOffset": 9070,
-            "byteOffset": 1133,
+            "bitOffset": 5865,
+            "byteOffset": 733,
             "codeBin": "11100",
             "akkuVor": {
-              "r": 240,
-              "g": 202,
-              "b": 132
+              "r": 226,
+              "g": 191,
+              "b": 153
             },
             "akkuNach": {
-              "r": 255,
-              "g": 186,
-              "b": 116
+              "r": 242,
+              "g": 175,
+              "b": 137
             },
             "ungeklemmt": {
-              "r": 256,
-              "g": 186,
-              "b": 116
+              "r": 242,
+              "g": 175,
+              "b": 137
             },
-            "geklemmt": "high",
+            "geklemmt": null,
             "delta": {
               "dr": 16,
               "dg": -16,
@@ -3115,35 +2977,77 @@
             },
             "turboFaktor": 4,
             "rgb": {
-              "r": 255,
-              "g": 186,
-              "b": 116
+              "r": 242,
+              "g": 175,
+              "b": 137
             }
           },
           {
-            "index": 1815,
-            "x": 215,
-            "y": 5,
-            "kind": "anchor",
-            "code": 12,
+            "index": 1174,
+            "x": 214,
+            "y": 3,
+            "kind": "delta",
             "bits": 5,
-            "codeBin": "01100",
+            "rIndex": 1,
+            "gIndex": 1,
+            "bIndex": 0,
+            "turbo": true,
+            "code": 30,
+            "bitOffset": 5870,
+            "byteOffset": 733,
+            "codeBin": "11110",
+            "akkuVor": {
+              "r": 242,
+              "g": 175,
+              "b": 137
+            },
+            "akkuNach": {
+              "r": 255,
+              "g": 191,
+              "b": 121
+            },
+            "ungeklemmt": {
+              "r": 258,
+              "g": 191,
+              "b": 121
+            },
+            "geklemmt": "high",
+            "delta": {
+              "dr": 16,
+              "dg": 16,
+              "db": -16
+            },
+            "turboFaktor": 4,
+            "rgb": {
+              "r": 255,
+              "g": 191,
+              "b": 121
+            }
+          },
+          {
+            "index": 1175,
+            "x": 215,
+            "y": 3,
+            "kind": "anchor",
+            "code": 9,
+            "bits": 5,
+            "codeBin": "01001",
             "akkuVor": {
               "r": 255,
-              "g": 186,
-              "b": 116
+              "g": 191,
+              "b": 121
             },
             "akkuNach": {
               "r": 157,
-              "g": 109,
-              "b": 93
+              "g": 140,
+              "b": 131
             },
             "ungeklemmt": null,
             "geklemmt": null,
             "rgb": {
               "r": 157,
-              "g": 109,
-              "b": 93
+              "g": 140,
+              "b": 131
             }
           }
         ],
@@ -3155,39 +3059,39 @@
             "kind": "delta",
             "bits": 5,
             "rIndex": 0,
-            "gIndex": 0,
-            "bIndex": 1,
+            "gIndex": 1,
+            "bIndex": 0,
             "turbo": false,
-            "code": 17,
+            "code": 18,
             "bitOffset": 1590,
             "byteOffset": 198,
-            "codeBin": "10001",
+            "codeBin": "10010",
             "akkuVor": {
-              "r": 48,
-              "g": 40,
-              "b": 30
+              "r": 50,
+              "g": 39,
+              "b": 32
             },
             "akkuNach": {
-              "r": 44,
-              "g": 36,
-              "b": 34
+              "r": 46,
+              "g": 43,
+              "b": 28
             },
             "ungeklemmt": {
-              "r": 44,
-              "g": 36,
-              "b": 34
+              "r": 46,
+              "g": 43,
+              "b": 28
             },
             "geklemmt": null,
             "delta": {
               "dr": -4,
-              "dg": -4,
-              "db": 4
+              "dg": 4,
+              "db": -4
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 44,
-              "g": 36,
-              "b": 34
+              "r": 46,
+              "g": 43,
+              "b": 28
             }
           },
           {
@@ -3197,39 +3101,39 @@
             "kind": "delta",
             "bits": 5,
             "rIndex": 1,
-            "gIndex": 1,
-            "bIndex": 0,
+            "gIndex": 0,
+            "bIndex": 1,
             "turbo": false,
-            "code": 22,
+            "code": 21,
             "bitOffset": 1595,
             "byteOffset": 199,
-            "codeBin": "10110",
+            "codeBin": "10101",
             "akkuVor": {
-              "r": 44,
-              "g": 36,
-              "b": 34
+              "r": 46,
+              "g": 43,
+              "b": 28
             },
             "akkuNach": {
-              "r": 48,
-              "g": 40,
-              "b": 30
+              "r": 50,
+              "g": 39,
+              "b": 32
             },
             "ungeklemmt": {
-              "r": 48,
-              "g": 40,
-              "b": 30
+              "r": 50,
+              "g": 39,
+              "b": 32
             },
             "geklemmt": null,
             "delta": {
               "dr": 4,
-              "dg": 4,
-              "db": -4
+              "dg": -4,
+              "db": 4
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 48,
-              "g": 40,
-              "b": 30
+              "r": 50,
+              "g": 39,
+              "b": 32
             }
           },
           {
@@ -3247,19 +3151,19 @@
             "byteOffset": 200,
             "codeBin": "10011",
             "akkuVor": {
-              "r": 48,
-              "g": 40,
-              "b": 30
+              "r": 50,
+              "g": 39,
+              "b": 32
             },
             "akkuNach": {
-              "r": 44,
-              "g": 44,
-              "b": 34
+              "r": 46,
+              "g": 43,
+              "b": 36
             },
             "ungeklemmt": {
-              "r": 44,
-              "g": 44,
-              "b": 34
+              "r": 46,
+              "g": 43,
+              "b": 36
             },
             "geklemmt": null,
             "delta": {
@@ -3269,9 +3173,9 @@
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 44,
-              "g": 44,
-              "b": 34
+              "r": 46,
+              "g": 43,
+              "b": 36
             }
           },
           {
@@ -3289,19 +3193,19 @@
             "byteOffset": 200,
             "codeBin": "10101",
             "akkuVor": {
-              "r": 44,
-              "g": 44,
-              "b": 34
+              "r": 46,
+              "g": 43,
+              "b": 36
             },
             "akkuNach": {
-              "r": 48,
-              "g": 40,
-              "b": 38
+              "r": 50,
+              "g": 39,
+              "b": 40
             },
             "ungeklemmt": {
-              "r": 48,
-              "g": 40,
-              "b": 38
+              "r": 50,
+              "g": 39,
+              "b": 40
             },
             "geklemmt": null,
             "delta": {
@@ -3311,9 +3215,9 @@
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 48,
-              "g": 40,
-              "b": 38
+              "r": 50,
+              "g": 39,
+              "b": 40
             }
           },
           {
@@ -3331,19 +3235,19 @@
             "byteOffset": 201,
             "codeBin": "10010",
             "akkuVor": {
-              "r": 48,
-              "g": 40,
-              "b": 38
+              "r": 50,
+              "g": 39,
+              "b": 40
             },
             "akkuNach": {
-              "r": 44,
-              "g": 44,
-              "b": 34
+              "r": 46,
+              "g": 43,
+              "b": 36
             },
             "ungeklemmt": {
-              "r": 44,
-              "g": 44,
-              "b": 34
+              "r": 46,
+              "g": 43,
+              "b": 36
             },
             "geklemmt": null,
             "delta": {
@@ -3353,9 +3257,9 @@
             },
             "turboFaktor": 1,
             "rgb": {
-              "r": 44,
-              "g": 44,
-              "b": 34
+              "r": 46,
+              "g": 43,
+              "b": 36
             }
           }
         ]
