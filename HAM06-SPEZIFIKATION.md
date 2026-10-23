@@ -66,6 +66,30 @@ Hinweise:
 - Die Palette wird als 256 Tripel gespeichert, obwohl je nach Format nur die ersten
   `slotsPerBank` Einträge erreichbar sind.
 
+### 1b. Drei Payload-Familien
+
+Der Kopf ist für alle Formate gleich; **was danach kommt, hängt vom Formatnamen** ab.
+Ein Leser muss zuerst den Namen auslesen und dann den passenden Weg wählen.
+
+| Familie | Formatnamen | Payload | Größe für `W*H` Pixel |
+|---|---|---|---|
+| **Paletten-Bitstrom** | alle `HAM_32BIT_*` sowie rein `HAM03`,`HAM04`,`HAM05`,`HAM06`,`HAM08` | kontinuierlicher Bitstrom in 32-Bit-Wörtern (§2) | `ceil(W*H * bits_mittel / 32) * 4` |
+| **HAM12/HAM16** | `HAM12`, `HAM16` | ein 16-Bit-Wort **je Pixel**, Big-Endian | `W*H*2` |
+| **DXT1 (BC1)** | `DXT1` | 8 Byte je 4×4-Block | `ceil(W/4) * ceil(H/4) * 8` |
+
+Die Palette (768 Byte) ist bei allen Familien im Kopf; **nur** die Paletten-Familie
+benutzt sie zum Dekodieren. `step` und `offset` werden ebenfalls nur dort gebraucht.
+
+**HAM12/HAM16** (eigenes Modul): Modusbit ist bei HAM16 Bit15, bei HAM12 Bit11 —
+`0` = Anker, `1` = Delta, wie in §4. Beim Anker stehen die Farbbits direkt im Wort
+(HAM16: 5+5+5 Bit; HAM12: 3+4+3 Bit plus ein gemeinsames niederes Bit), beim Delta
+ein Turbo-Bit und drei vorzeichenbehaftete kleine Deltas.
+
+**DXT1**: Standard-BC1, little-endian — `color0` (RGB565, 2 Byte), `color1` (2 Byte),
+dann 32 Bit Index (2 Bit je Pixel, Zeile für Zeile von oben links). Bei `color0 >
+color1` vier Farben (mit 1/3- und 2/3-Mischung), sonst drei Farben plus transparentes
+Schwarz. Kantenblöcke werden im Encoder durch Randwiederholung gefüllt.
+
 ---
 
 ## 2. Pixelstrom: Bitstrom und Phasenzuordnung
