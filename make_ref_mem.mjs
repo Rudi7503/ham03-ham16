@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { unpackPaletted, decodePaletted } from './src/core/module_paletted.js';
 
-const REF_DIR = 'testbilder/ref';
+const REF_DIR = process.argv[2] || 'testbilder/ref';   // Verzeichnis der .ham-Dateien
 const OUT_DIR = `${REF_DIR}/mem`;
 const MODES = ['03', '04', '05', '06', '08'];
 
