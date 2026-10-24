@@ -1,14 +1,15 @@
 // Erzeugt den 640x256-Referenzsatz aus dem Quellbild — mit den Paletten aus dem
 // 320x256-Satz (Vorgabe von Rudi: "verwende die paletten vom letzten mal").
 //
-// Pipeline identisch zum 320x256-Satz: resizeInto(..., lanczos, fill), dann
-// encodePaletted(greedy, yuv_weight), step 4/4/4, offset 0.
+// Skalierung: x und y UNABHAENGIG (anisotrop), also das ganze Bild auf 640x256
+// ohne Beschneidung und ohne Raender. Der Resampler skaliert die Achsen getrennt,
+// die Faktoren sind hier 640/1120 = 0,5714 und 256/1120 = 0,2286.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { resizeInto } from './src/core/resample.js';
+import { resizeImage } from './src/core/resample.js';
 import { encodePaletted, packPaletted, unpackPaletted, decodePaletted } from './src/core/module_paletted.js';
 
-const SRC_RAW = 'testbilder/ref640/_src.raw';
+const SRC_RAW = 'testbilder/ref640/_src.raw.tmp';
 const OUT = 'testbilder/ref640';
 const PAL_SRC = 'testbilder/ref';           // dort liegen die 320x256-Dateien mit den Paletten
 const SRC_W = 1120, SRC_H = 1120;
@@ -56,20 +57,20 @@ const src = new Uint8ClampedArray(SRC_W * SRC_H * 4);
 for (let i = 0, j = 0; i < SRC_W * SRC_H; i++, j += 3) {
     src[i * 4] = raw[j]; src[i * 4 + 1] = raw[j + 1]; src[i * 4 + 2] = raw[j + 2]; src[i * 4 + 3] = 255;
 }
-const scaled = resizeInto(src, SRC_W, SRC_H, W, H, 'lanczos', 'fill');
+const pixels = resizeImage(src, SRC_W, SRC_H, W, H, 'lanczos');
 fs.writeFileSync(`${OUT}/input_640x256.rgb`, (() => {
     const rgb = new Uint8Array(TOTAL * 3);
-    for (let i = 0; i < TOTAL; i++) { rgb[i * 3] = scaled.pixels[i * 4]; rgb[i * 3 + 1] = scaled.pixels[i * 4 + 1]; rgb[i * 3 + 2] = scaled.pixels[i * 4 + 2]; }
+    for (let i = 0; i < TOTAL; i++) { rgb[i * 3] = pixels[i * 4]; rgb[i * 3 + 1] = pixels[i * 4 + 1]; rgb[i * 3 + 2] = pixels[i * 4 + 2]; }
     return rgb;
 })());
-console.log(`Eingabe: 1120x1120 -> ${W}x${H} (inneres Bild ${scaled.innerW}x${scaled.innerH}, Offset ${scaled.offsetX},${scaled.offsetY})`);
+console.log(`Eingabe: ${SRC_W}x${SRC_H} -> ${W}x${H}, x- und y-Achse getrennt skaliert (Faktoren ${(W / SRC_W).toFixed(4)} / ${(H / SRC_H).toFixed(4)}), kein Beschnitt`);
 
 const zeilen = [];
 for (const m of MODES) {
     const pal320 = readHam(`${PAL_SRC}/ham${m}.ham`);
     const format = pal320.format;
 
-    const { commands } = await encodePaletted(scaled.pixels, W, H, format, STEP, pal320.palette.slice(), OFFSET,
+    const { commands } = await encodePaletted(pixels, W, H, format, STEP, pal320.palette.slice(), OFFSET,
         'greedy', 'yuv_weight', null, 0, 0, 15.0);
     const payload = packPaletted(commands, format);
 
@@ -89,7 +90,7 @@ for (const m of MODES) {
     fs.writeFileSync(`${OUT}/ham${m}_decoded.rgb`, rgb);
 
     // Reproduktion: nochmal encoden, Nutzlast vergleichen
-    const again = packPaletted((await encodePaletted(scaled.pixels, W, H, format, STEP, pal320.palette.slice(), OFFSET,
+    const again = packPaletted((await encodePaletted(pixels, W, H, format, STEP, pal320.palette.slice(), OFFSET,
         'greedy', 'yuv_weight', null, 0, 0, 15.0)).commands, format);
     let reproDiff = 0;
     for (let i = 0; i < again.length; i++) if (again[i] !== payload[i]) reproDiff++;
@@ -115,10 +116,10 @@ Erzeugt mit \`make_ref_640.mjs\`. Geprüft mit \`test_ref_640.mjs\`.
 - **Encoder:** Code ab Commit \`48890d1\` (unverändert bis HEAD).
 - **Quellbild:** dieselbe 1120×1120-JPEG wie beim 320×256-Satz
   (sha256 \`3e3bf8d601dde2fb7dcef1c985fb0e97b413bead961b52456af83bf7dc11647f\`).
-- **Skalierung:** \`resizeInto(..., lanczos, fill)\` → inneres Bild ${scaled.innerW}×${scaled.innerH},
-  Ausschnitt bei Offset (${scaled.offsetX}, ${scaled.offsetY}) → **${W}×${H}**.
-  Das Zielformat ist 2,5:1; aus einem quadratischen Bild bleibt deshalb nur der
-  mittlere Ausschnitt. \`input_640x256.rgb\` ist das tatsächliche Encoder-Eingabebild
+- **Skalierung:** \`resizeImage\` (Lanczos) mit **unabhängigen Faktoren je Achse**:
+  x = 640/1120 = 0,5714, y = 256/1120 = 0,2286. Das ganze Bild wird auf 640×256
+  abgebildet — **kein Beschnitt, keine Ränder**, dafür anisotrop (Seitenverhältnis
+  verändert). \`input_640x256.rgb\` ist das tatsächliche Encoder-Eingabebild
   (${inputRgb.length} Byte, sha256 \`${sha(inputRgb)}\`).
 - **Paletten:** unverändert aus dem 320×256-Satz übernommen (\`../ham0X.ham\`), also
   **nicht** auf 640×256 optimiert — so vorgegeben, um die Auflösung isoliert zu

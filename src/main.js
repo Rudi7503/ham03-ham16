@@ -245,14 +245,22 @@ function scaleOriginalImage(targetW, targetH) {
 
     const method = scaleMethod ? scaleMethod.value : 'lanczos';
     const mode = scaleMode ? scaleMode.value : 'fill';
-    const res = resizeInto(src.data, src.width, src.height, targetW, targetH, method, mode);
+
+    let pixels, hinweis;
+    if (mode === 'stretch') {
+        // x und y unabhaengig: das ganze Bild auf die Zielgroesse, kein Beschnitt
+        pixels = resizeImage(src.data, src.width, src.height, targetW, targetH, method);
+        hinweis = `x/y getrennt skaliert (${(targetW / src.width).toFixed(3)} / ${(targetH / src.height).toFixed(3)}), kein Beschnitt`;
+    } else {
+        const res = resizeInto(src.data, src.width, src.height, targetW, targetH, method, mode);
+        pixels = res.pixels;
+        hinweis = mode === 'fit'
+            ? `Bild ${res.innerW}x${res.innerH} mittig, Ränder schwarz`
+            : `Bild ${res.innerW}x${res.innerH} mittig, Überstand beschnitten`;
+    }
 
     const from = `${src.width}x${src.height}`;
-    const hinweis = mode === 'fit'
-        ? `Bild ${res.innerW}x${res.innerH} mittig, Ränder schwarz`
-        : `Bild ${res.innerW}x${res.innerH} mittig, Überstand beschnitten`;
-
-    applyLoadedImage(new ImageData(res.pixels, targetW, targetH), appState.currentImgFileName);
+    applyLoadedImage(new ImageData(pixels, targetW, targetH), appState.currentImgFileName);
     loadCurrentMode();
     console.log(`Bild skaliert (${method}, ${mode}): ${from} -> ${targetW}x${targetH} | ${hinweis}`);
 }
