@@ -6,9 +6,9 @@
 //   modus:     03|04|05|06|08 (optional, sonst alle)
 import fs from 'node:fs';
 import { encodePaletted, packPaletted, unpackPaletted, decodePaletted } from './src/core/module_paletted.js';
-import { runHybridOptimization } from './src/core/palette_optimizer.js';
+import { runHybridOptimization, runManualRefinement } from './src/core/palette_optimizer.js';
 import { computeAvgYuvScore } from './src/core/analysis.js';
-import { resizeInto } from './src/core/resample.js';
+import { resizeImage } from './src/core/resample.js';
 
 // Stubs, die der Optimierer für den Browser erwartet
 globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
@@ -62,7 +62,7 @@ const src = new Uint8ClampedArray(1120 * 1120 * 4);
         src[i * 4] = raw[j]; src[i * 4 + 1] = raw[j + 1]; src[i * 4 + 2] = raw[j + 2]; src[i * 4 + 3] = 255;
     }
 }
-const scaled = resizeInto(src, 1120, 1120, W, H, 'lanczos', 'fill');
+const scaled = { pixels: resizeImage(src, 1120, 1120, W, H, 'lanczos') };
 const rgba = scaled.pixels;
 // Gegenprobe: muss byte-identisch zum gespeicherten Eingabebild sein
 {
@@ -100,8 +100,8 @@ for (const m of modi) {
     const mseVorher = computeAvgYuvScore(rgba, appState.decodedImageData.data, W, H, METRIC, optRegion);
 
     const t0 = Date.now();
-    const log = await runHybridOptimization(appState, optRegion, STEP, METRIC, OFFSET, new Set(),
-        () => {}, triggerEncode, () => {}, intensity);
+    const log = await runManualRefinement(appState, optRegion, STEP, METRIC, OFFSET, new Set(),
+        () => {}, triggerEncode, () => {}, 'usage');
     const dauer = Date.now() - t0;
 
     await triggerEncode();

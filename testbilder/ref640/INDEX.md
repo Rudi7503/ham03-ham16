@@ -12,9 +12,23 @@ Erzeugt mit `make_ref_640.mjs`. Geprüft mit `test_ref_640.mjs`.
   abgebildet — **kein Beschnitt, keine Ränder**, dafür anisotrop (Seitenverhältnis
   verändert). `input_640x256.rgb` ist das tatsächliche Encoder-Eingabebild
   (491520 Byte, sha256 `4c1368dfaf4e7ac92609d5635fb17e4cfa38b37815f96c2c1dabe5b2d9aca882`).
-- **Paletten:** unverändert aus dem 320×256-Satz übernommen (`../ham0X.ham`), also
-  **nicht** auf 640×256 optimiert — so vorgegeben, um die Auflösung isoliert zu
-  vergleichen.
+- **Paletten:** Startpunkt waren die Paletten aus dem 320×256-Satz (`../ham0X.ham`),
+  danach **Nachoptimierung** mit `runManualRefinement` (Slot für Slot, ausgehend von
+  der vorhandenen Palette, Slot-Reihenfolge `usage`) auf 640×256. Ergebnis
+  (Metrik `yuv_weight`, MSE gegen das Eingabebild):
+
+  | Modus | vorher | nachher | besser |
+  |---|---|---|---|
+  | HAM03 | 32,67 | 32,52 | 0,5 % |
+  | HAM04 | 14,44 | 14,40 | 0,3 % |
+  | HAM05 | 5,13 | 5,10 | 0,5 % |
+  | HAM06 | 3,34 | 3,29 | 1,4 % |
+  | HAM08 | — | — | nicht nachoptimiert (128 Slots, Laufzeit) — Palette aus dem 320er Satz |
+
+  Die Gewinne sind klein, weil die 320er Paletten schon gut passen. Der
+  Hybrid-Optimierer (`runHybridOptimization`) eignet sich dafür **nicht**: er führt die
+  vorhandene Palette nicht als Kandidat und verschlechterte HAM06 im Test von 3,57
+  auf 5,24.
 - **Schrittweite** 4/4/4 · **Offset** 0 · Strategie `greedy` · Metrik `yuv_weight`
 
 ## Dateien
