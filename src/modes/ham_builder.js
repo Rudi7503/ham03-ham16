@@ -235,6 +235,11 @@ export function initHamBuilderMode(appState, containerEl) {
                     </div>
                 </div>
 
+                <div class="control-group">
+                    <label for="row-anchors" style="cursor:pointer;" title="Erzwingt einen Anker am Anfang JEDER Zeile. Dann ist jede Zeile unabhängig dekodierbar — nötig, wenn die Hardware Zeilen überspringen soll (Interlace) und keinen Zeilen-/Bildpuffer hat. Kostet KEINE Bytes (feste Bitrate), aber Bildqualität an den Zeilenanfängen: gemessen bei 640×512 HAM03 +22,7 %, HAM04 +0,6 %, HAM05 +0,4 %, HAM06 +0,08 %, HAM08 +0,04 % (MSE). Ohne Haken erbt jede Zeile den Farbzustand der Vorderzeile.">Zeilenanker:</label>
+                    <input type="checkbox" id="row-anchors" title="Anker am Anfang jeder Zeile erzwingen (für Zeilensprung/Interlace ohne Puffer)">
+                </div>
+
                 <div id="palette-box">
                     <label title="Startindex im 256er RAM (0-255)">Offset:</label>
                     <input type="number" id="pal-offset-input" min="0" max="255" value="0" style="width:40px;">
@@ -664,7 +669,9 @@ export function initHamBuilderMode(appState, containerEl) {
             appState.latestPackedData = packHam12_16(appState.latestCommandArray, format);
             decodedPixels = decodeHam12_16(appState.latestCommandArray, appState.currentImgW, appState.currentImgH, step);
         } else {
-            let encodeRes = await encodePaletted(sourceData, appState.currentImgW, appState.currentImgH, format, step, appState.globalPaletteRAM, offset, strategy, metric, updateProgress, 0, 0, 15.0);
+            // Zeilenanker: Option fuer Zeilensprung/Interlace ohne Puffer
+            const forceRowAnchors = !!document.getElementById('row-anchors')?.checked;
+            let encodeRes = await encodePaletted(sourceData, appState.currentImgW, appState.currentImgH, format, step, appState.globalPaletteRAM, offset, strategy, metric, updateProgress, 0, 0, 15.0, 6, forceRowAnchors);
             appState.latestCommandArray = encodeRes.commands;
             appState.latestPackedData = packPaletted(appState.latestCommandArray, format);
             decodedPixels = decodePaletted(appState.latestCommandArray, appState.currentImgW, appState.currentImgH, step, appState.globalPaletteRAM, offset);
