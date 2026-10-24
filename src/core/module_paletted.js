@@ -70,7 +70,7 @@ export function phaseFormatAt(format, imgW, pxIndex) {
     return format;
 }
 
-export async function encodePaletted(origData, imgW, imgH, format, stepVal, paletteRAM, offset, strategy="greedy", metric="yuv_weight", progressCallback=null, startOverride=0, endOverride=0, errorThreshold = 15.0, beamWidth = 6) {
+export async function encodePaletted(origData, imgW, imgH, format, stepVal, paletteRAM, offset, strategy="greedy", metric="yuv_weight", progressCallback=null, startOverride=0, endOverride=0, errorThreshold = 15.0, beamWidth = 6, forceRowAnchors = false) {
     let totalPixels = imgW * imgH;
     let commands = new Array(totalPixels);
     let config = HAM_CONFIGS[format];
@@ -106,7 +106,13 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         const cmds = [];
         const rs = [], gs = [], bs = [];
 
-        if (strategy !== 'delta_only') {
+        // forceRowAnchors: Am Zeilenanfang ist NUR ein Anker erlaubt. Damit wird
+        // jede Zeile unabhaengig dekodierbar (kein Farbzustand aus der Vorderzeile
+        // noetig) — Voraussetzung fuer Zeilensprung im Betrieb, z. B. Interlace.
+        // Kostet keine Bytes (feste Bitrate), nur Farbfreiheit an diesem Pixel.
+        const rowStart = forceRowAnchors && (pxIdx % imgW) === 0;
+
+        if (rowStart || strategy !== 'delta_only') {
             const anchors = anchorInfo[effFormat];
             for (let s = 0; s < anchors.length; s++) {
                 const a = anchors[s];
@@ -117,7 +123,7 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
             }
         }
 
-        if (strategy !== 'anchor_only') {
+        if (!rowStart && strategy !== 'anchor_only') {
             const cachedDeltas = deltaCache[effFormat];
             for (let i = 0; i < cachedDeltas.length; i++) {
                 const d = cachedDeltas[i];
