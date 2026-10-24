@@ -26,3 +26,9 @@ dist-ssr
 # Scratch-Paletten: werden bei jedem Messlauf neu geschrieben.
 # Die versionierten Referenzpaletten liegen in testbilder/palettes/.
 testbilder/real-*-palette.bin
+
+# Temporäre Arbeitsdateien der Referenz-Erzeugung (nicht versionieren)
+testbilder/ref640/_src.raw.tmp
+testbilder/ref640/_variant_*
+testbilder/ref640/_optimize_result.json
+testbilder/ref640/_preview_*
