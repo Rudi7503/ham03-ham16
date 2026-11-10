@@ -173,6 +173,16 @@ export function initHamBuilderMode(appState, containerEl) {
                         <option value="HAM06">HAM06  6 Bit · 32 Slots · Turbo</option>
                         <option value="HAM08">HAM08  8 Bit · 128 Slots · Turbo</option>
                         </optgroup>
+                        <optgroup label="Reine HAM-Delta-Modi (Neu / Palettenlos)">
+                        <option value="HAM05_DELTA">HAM05_DELTA  5 Bit · reines Delta (4x/16x Turbo) · 2-Bit Grün</option>
+                        <option value="HAM06_DELTA">HAM06_DELTA  6 Bit · 4-Stufen Turboturbo (1x/4x/8x/16x) · 2-Bit Grün</option>
+                        <option value="HAM08_DELTA">HAM08_DELTA  8 Bit · 4-Stufen Turboturbo (1x/4x/8x/16x) · 2-Bit RGB</option>
+                        <option value="HAM_32BIT_HAM08_DELTA">HAM 32-Bit HAM08_DELTA (8d/8d/8d/8d) 8.0 Bit/pixel</option>
+                        <option value="HAM_32BIT_12_5555_DELTA">HAM 32-Bit 12_5555_DELTA (12/5d/5d/5d/5d) 6.4 Bit/pixel</option>
+                        <option value="HAM_32BIT_12_686_DELTA">HAM 32-Bit 12_686_DELTA (12/6d/8d/6d) 8.0 Bit/pixel</option>
+                        <option value="HAM_32BIT_12_5555">HAM 32-Bit 12_5555 (12/5/5/5/5) 6.4 Bit/pixel</option>
+                        <option value="HAM_32BIT_12_686">HAM 32-Bit 12_686 (12/6/8/6) 8.0 Bit/pixel</option>
+                        </optgroup>
                         <optgroup label="Andere Codecs">
                         <option value="HAM12">HAM12</option>
                         <option value="HAM16">HAM16</option>

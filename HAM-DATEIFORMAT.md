@@ -119,6 +119,30 @@ HAM01  kein Modusbit: Bit0 = Index für alle drei Kanäle (r = g = b)
 HAM08  Anker: Bit7 = 0 → anchorIdx = v & 127
        Delta: Bit7 = 1, Bit6 = Turbo, Bit5..4 = rIndex,
               Bit3..2 = gIndex, Bit1..0 = bIndex (je 2 Bit)
+
+--- Neue reine HAM-Delta-Modi (ohne Anker-Bit) ---
+HAM05_DELTA  (5 Bit, kein Ankerbit):
+             Bit4 = Turbo (0 = 4x, 1 = 16x)
+             Bit3 = rIndex (0 = -1, 1 = +1)
+             Bit2..1 = gIndex (2 Bit: 00=-2, 01=-1, 10=+1, 11=+2)
+             Bit0 = bIndex (0 = -1, 1 = +1)
+
+HAM06_DELTA  (6 Bit, kein Ankerbit):
+             Bit5..4 = Turboturbo 2-Bit (00=1x, 01=4x, 10=8x, 11=16x)
+             Bit3 = rIndex (0 = -1, 1 = +1)
+             Bit2..1 = gIndex (2 Bit: 00=-2, 01=-1, 10=+1, 11=+2)
+             Bit0 = bIndex (0 = -1, 1 = +1)
+
+HAM08_DELTA  (8 Bit, kein Ankerbit):
+             Bit7..6 = Turboturbo 2-Bit (00=1x, 01=4x, 10=8x, 11=16x)
+             Bit5..4 = rIndex (2 Bit: -2/-1/+1/+2)
+             Bit3..2 = gIndex (2 Bit: -2/-1/+1/+2)
+             Bit1..0 = bIndex (2 Bit: -2/-1/+1/+2)
+
+HAM12_ANCHOR (12 Bit Direct TrueColor RGB444):
+             Bit10 = b10 (gemeinsames LSB für R und B)
+             Bit9..7 = r3, Bit6..3 = g4, Bit2..0 = b3
+             R = ((r3<<1) | b10) << 4, G = g4 << 4, B = ((b3<<1) | b10) << 4
 ```
 
 ### 3.5 Gemischte Formate
@@ -141,6 +165,11 @@ auf 32 (genau ein Wort).
 | `HAM_32BIT_86666` | HAM08,HAM06,HAM06,HAM06,HAM06 | 8,6,6,6,6 = 32 |
 | `HAM_32BIT_85865` | HAM08,HAM05,HAM08,HAM06,HAM05 | 8,5,8,6,5 = 32 |
 | `HAM_32BIT_8888` | HAM08 ×4 | 8×4 = 32 |
+| `HAM_32BIT_HAM08_DELTA` | HAM08_DELTA ×4 | 8×4 = 32 |
+| `HAM_32BIT_12_5555_DELTA` | HAM12_ANCHOR, HAM05_DELTA ×4 | 12 + 5×4 = 32 |
+| `HAM_32BIT_12_686_DELTA` | HAM12_ANCHOR, HAM06_DELTA, HAM08_DELTA, HAM06_DELTA | 12 + 6+8+6 = 32 |
+| `HAM_32BIT_12_5555` | HAM12_ANCHOR, HAM05 ×4 | 12 + 5×4 = 32 |
+| `HAM_32BIT_12_686` | HAM12_ANCHOR, HAM06, HAM08, HAM06 | 12 + 6+8+6 = 32 |
 
 Beispiel `HAM_32BIT_63436343`: 4,0 Bit/Pixel → `W*H/2` Byte.
 

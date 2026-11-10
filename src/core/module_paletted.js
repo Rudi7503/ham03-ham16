@@ -8,7 +8,10 @@ export const CHANNEL_DEFS = {
     "HAM04": { r: [-2, 2], g: [-2, 2], b: [-2, 2] },
     "HAM05": { r: [-1, 1], g: [-1, 1], b: [-1, 1] },
     "HAM06": { r: [-1, 1], g: [-2, -1, 1, 2], b: [-1, 1] },
-    "HAM08": { r: [-2, -1, 1, 2], g: [-2, -1, 1, 2], b: [-2, -1, 1, 2] }
+    "HAM08": { r: [-2, -1, 1, 2], g: [-2, -1, 1, 2], b: [-2, -1, 1, 2] },
+    "HAM05_DELTA": { r: [-1, 1], g: [-2, -1, 1, 2], b: [-1, 1] },
+    "HAM06_DELTA": { r: [-1, 1], g: [-2, -1, 1, 2], b: [-1, 1] },
+    "HAM08_DELTA": { r: [-2, -1, 1, 2], g: [-2, -1, 1, 2], b: [-2, -1, 1, 2] }
 };
 
 // ---------------------------------------------------------------------------
@@ -20,13 +23,21 @@ export const CHANNEL_DEFS = {
 // Farbverschiebungen (Kanalwert × Schritt × Turbo-Multiplikator).
 function buildFormatDeltaCache(fmt, stepVal) {
     const effConfig = HAM_CONFIGS[fmt] || { slotsPerBank: 0, hasTurbo: false };
-    const multipliers = effConfig.hasTurbo ? [1, 4] : [1];
+    let multipliers;
+    if (fmt === "HAM05_DELTA") {
+        multipliers = [4, 16];
+    } else if (fmt === "HAM06_DELTA" || fmt === "HAM08_DELTA") {
+        multipliers = [1, 4, 8, 16];
+    } else {
+        multipliers = effConfig.hasTurbo ? [1, 4] : [1];
+    }
     const rChan = CHANNEL_DEFS[fmt]?.r || [-1, 1];
     const gChan = CHANNEL_DEFS[fmt]?.g || [-1, 1];
     const bChan = CHANNEL_DEFS[fmt]?.b || [-1, 1];
     const cache = [];
 
-    for (const m of multipliers) {
+    for (let mi = 0; mi < multipliers.length; mi++) {
+        const m = multipliers[mi];
         const sr = stepVal.r * m, sg = stepVal.g * m, sb = stepVal.b * m;
         for (let ri = 0; ri < rChan.length; ri++) {
             for (let gi = 0; gi < gChan.length; gi++) {
@@ -35,8 +46,24 @@ function buildFormatDeltaCache(fmt, stepVal) {
                     if (fmt === "HAM02" && (bi !== ri)) continue;
                     if (fmt === "HAM03" && (bi !== ri)) continue; // R+B gekoppelt
 
+                    const cmdObj = {
+                        isAnchor: false,
+                        format: fmt,
+                        rIndex: ri,
+                        gIndex: gi,
+                        bIndex: bi
+                    };
+                    if (fmt === "HAM05_DELTA") {
+                        cmdObj.isTurbo = (m === 16);
+                    } else if (fmt === "HAM06_DELTA" || fmt === "HAM08_DELTA") {
+                        cmdObj.turboIndex = mi;
+                        cmdObj.isTurbo = (mi > 0);
+                    } else {
+                        cmdObj.isTurbo = (m === 4);
+                    }
+
                     cache.push({
-                        cmd: { isAnchor: false, format: fmt, isTurbo: (m === 4), rIndex: ri, gIndex: gi, bIndex: bi },
+                        cmd: cmdObj,
                         dr: rChan[ri] * sr,
                         dg: gChan[gi] * sg,
                         db: bChan[bi] * sb
@@ -113,18 +140,29 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         const rowStart = forceRowAnchors && (pxIdx % imgW) === 0;
 
         if (rowStart || strategy !== 'delta_only') {
-            const anchors = anchorInfo[effFormat];
-            for (let s = 0; s < anchors.length; s++) {
-                const a = anchors[s];
-                cmds.push(a.cmd);
-                rs.push(paletteRAM[a.absSlot * 3]);
-                gs.push(paletteRAM[a.absSlot * 3 + 1]);
-                bs.push(paletteRAM[a.absSlot * 3 + 2]);
+            if (effFormat === "HAM12_ANCHOR") {
+                let tr = origData[pxIdx*4], tg = origData[pxIdx*4+1], tb = origData[pxIdx*4+2];
+                let r3 = tr >> 5, g4 = tg >> 4, b3 = tb >> 5;
+                for (let b10 of [0, 1]) {
+                    let r4 = (r3 << 1) | b10, b4 = (b3 << 1) | b10;
+                    let ar = r4 << 4, ag = g4 << 4, ab = b4 << 4;
+                    cmds.push({ isAnchor: true, isDirect: true, format: "HAM12_ANCHOR", r3, g4, b3, b10, r: ar, g: ag, b: ab });
+                    rs.push(ar); gs.push(ag); bs.push(ab);
+                }
+            } else {
+                const anchors = anchorInfo[effFormat] || [];
+                for (let s = 0; s < anchors.length; s++) {
+                    const a = anchors[s];
+                    cmds.push(a.cmd);
+                    rs.push(paletteRAM[a.absSlot * 3]);
+                    gs.push(paletteRAM[a.absSlot * 3 + 1]);
+                    bs.push(paletteRAM[a.absSlot * 3 + 2]);
+                }
             }
         }
 
         if (!rowStart && strategy !== 'anchor_only') {
-            const cachedDeltas = deltaCache[effFormat];
+            const cachedDeltas = deltaCache[effFormat] || [];
             for (let i = 0; i < cachedDeltas.length; i++) {
                 const d = cachedDeltas[i];
                 cmds.push(d.cmd);
@@ -135,8 +173,17 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         }
 
         if (cmds.length === 0) {
-            cmds.push({ isAnchor: true, format: effFormat, anchorIdx: 0 });
-            rs.push(c_acc.r); gs.push(c_acc.g); bs.push(c_acc.b);
+            if (effFormat === "HAM12_ANCHOR") {
+                let tr = origData[pxIdx*4], tg = origData[pxIdx*4+1], tb = origData[pxIdx*4+2];
+                let r3 = tr >> 5, g4 = tg >> 4, b3 = tb >> 5;
+                let b10 = 0;
+                let ar = (r3 << 1) << 4, ag = g4 << 4, ab = (b3 << 1) << 4;
+                cmds.push({ isAnchor: true, isDirect: true, format: "HAM12_ANCHOR", r3, g4, b3, b10, r: ar, g: ag, b: ab });
+                rs.push(ar); gs.push(ag); bs.push(ab);
+            } else {
+                cmds.push({ isAnchor: true, format: effFormat, anchorIdx: 0 });
+                rs.push(c_acc.r); gs.push(c_acc.g); bs.push(c_acc.b);
+            }
         }
         return { cmds, rs, gs, bs, len: cmds.length };
     }
@@ -318,13 +365,40 @@ function getCmdVal(cmd) {
         bits = 8;
         if (cmd.isAnchor) v = (cmd.anchorIdx & 127);
         else v = 128 | (((cmd.isTurbo?1:0)<<6) | ((cmd.rIndex||0)<<4) | ((cmd.gIndex||0)<<2) | (cmd.bIndex||0));
+    } else if (fmt === "HAM05_DELTA") {
+        bits = 5;
+        v = (((cmd.isTurbo ? 1 : 0) << 4) |
+             (((cmd.rIndex || 0) & 1) << 3) |
+             (((cmd.gIndex || 0) & 3) << 1) |
+             ((cmd.bIndex || 0) & 1));
+    } else if (fmt === "HAM06_DELTA") {
+        bits = 6;
+        const tIdx = cmd.turboIndex !== undefined ? cmd.turboIndex : (cmd.isTurbo ? 1 : 0);
+        v = (((tIdx & 3) << 4) |
+             (((cmd.rIndex || 0) & 1) << 3) |
+             (((cmd.gIndex || 0) & 3) << 1) |
+             ((cmd.bIndex || 0) & 1));
+    } else if (fmt === "HAM08_DELTA") {
+        bits = 8;
+        const tIdx = cmd.turboIndex !== undefined ? cmd.turboIndex : (cmd.isTurbo ? 1 : 0);
+        v = (((tIdx & 3) << 6) |
+             (((cmd.rIndex || 0) & 3) << 4) |
+             (((cmd.gIndex || 0) & 3) << 2) |
+             ((cmd.bIndex || 0) & 3));
+    } else if (fmt === "HAM12_ANCHOR") {
+        bits = 12;
+        v = ((cmd.b10 & 1) << 10) | ((cmd.r3 & 7) << 7) | ((cmd.g4 & 0xF) << 3) | (cmd.b3 & 7);
     }
     return { v, bits };
 }
 
 // Bitbreite je Sub-Format (nur hier geführt, damit Packen und Entpacken
 // dieselbe Quelle haben).
-const BITS_BY_FMT = { HAM01: 1, HAM02: 2, HAM03: 3, HAM04: 4, HAM05: 5, HAM06: 6, HAM08: 8 };
+const BITS_BY_FMT = {
+    HAM01: 1, HAM02: 2, HAM03: 3, HAM04: 4, HAM05: 5, HAM06: 6, HAM08: 8,
+    HAM05_DELTA: 5, HAM06_DELTA: 6, HAM08_DELTA: 8,
+    HAM12_ANCHOR: 12
+};
 
 // Packt die Befehlskette als kontinuierlichen Bitstrom (MSB-first) in
 // 32-Bit-Wörter.
@@ -385,6 +459,33 @@ export function unpackPaletted(packedData, format, totalPixels) {
         } else if (fmt === "HAM08") {
             if ((v & 128) === 0) return { isAnchor: true, format: fmt, anchorIdx: v & 127 };
             return { isAnchor: false, format: fmt, isTurbo: ((v >> 6) & 1) === 1, rIndex: (v >> 4) & 3, gIndex: (v >> 2) & 3, bIndex: v & 3 };
+        } else if (fmt === "HAM05_DELTA") {
+            let isTurbo = ((v >> 4) & 1) === 1;
+            let rDir = (v >> 3) & 1;
+            let gDir = (v >> 1) & 3;
+            let bDir = v & 1;
+            return { isAnchor: false, format: fmt, isTurbo, rIndex: rDir, gIndex: gDir, bIndex: bDir };
+        } else if (fmt === "HAM06_DELTA") {
+            let turboIndex = (v >> 4) & 3;
+            let rDir = (v >> 3) & 1;
+            let gDir = (v >> 1) & 3;
+            let bDir = v & 1;
+            return { isAnchor: false, format: fmt, turboIndex, isTurbo: turboIndex > 0, rIndex: rDir, gIndex: gDir, bIndex: bDir };
+        } else if (fmt === "HAM08_DELTA") {
+            let turboIndex = (v >> 6) & 3;
+            let rDir = (v >> 4) & 3;
+            let gDir = (v >> 2) & 3;
+            let bDir = v & 3;
+            return { isAnchor: false, format: fmt, turboIndex, isTurbo: turboIndex > 0, rIndex: rDir, gIndex: gDir, bIndex: bDir };
+        } else if (fmt === "HAM12_ANCHOR") {
+            let b10 = (v >> 10) & 1;
+            let r3 = (v >> 7) & 7;
+            let g4 = (v >> 3) & 0xF;
+            let b3 = v & 7;
+            let ar = ((r3 << 1) | b10) << 4;
+            let ag = g4 << 4;
+            let ab = ((b3 << 1) | b10) << 4;
+            return { isAnchor: true, isDirect: true, format: fmt, r3, g4, b3, b10, r: ar, g: ag, b: ab };
         }
         return { isAnchor: true, format: fmt, anchorIdx: 0 };
     }
@@ -417,7 +518,21 @@ function buildDecodeDeltaTables(stepVal) {
     });
     const tables = {};
     for (const fmt of Object.keys(CHANNEL_DEFS)) {
-        tables[fmt] = { normal: make(CHANNEL_DEFS[fmt], 1), turbo: make(CHANNEL_DEFS[fmt], 4) };
+        if (fmt === "HAM05_DELTA") {
+            tables[fmt] = {
+                normal: make(CHANNEL_DEFS[fmt], 4),
+                turbo: make(CHANNEL_DEFS[fmt], 16)
+            };
+        } else if (fmt === "HAM06_DELTA" || fmt === "HAM08_DELTA") {
+            tables[fmt] = {
+                t0: make(CHANNEL_DEFS[fmt], 1),
+                t1: make(CHANNEL_DEFS[fmt], 4),
+                t2: make(CHANNEL_DEFS[fmt], 8),
+                t3: make(CHANNEL_DEFS[fmt], 16)
+            };
+        } else {
+            tables[fmt] = { normal: make(CHANNEL_DEFS[fmt], 1), turbo: make(CHANNEL_DEFS[fmt], 4) };
+        }
     }
     // Fallback entspricht exakt dem früheren Verhalten für unbekannte Formate.
     tables.fallback = {
@@ -459,12 +574,22 @@ export function decodePaletted(commands, imgW, imgH, stepVal, paletteRAM, offset
 
     for (let i = 0; i < commands.length; i++) {
         const cmd = commands[i];
-        if (cmd.isAnchor && SLOT_COUNT_BY_FMT[cmd.format] > 0) {
-            const absIdx = ((offset + cmd.anchorIdx) % 256) * 3;
-            r = paletteRAM[absIdx]; g = paletteRAM[absIdx + 1]; b = paletteRAM[absIdx + 2];
+        if (cmd.isAnchor) {
+            if (cmd.isDirect) {
+                r = cmd.r; g = cmd.g; b = cmd.b;
+            } else if (SLOT_COUNT_BY_FMT[cmd.format] > 0) {
+                const absIdx = ((offset + cmd.anchorIdx) % 256) * 3;
+                r = paletteRAM[absIdx]; g = paletteRAM[absIdx + 1]; b = paletteRAM[absIdx + 2];
+            }
         } else {
             const table = deltaTables[cmd.format] || deltaTables.fallback;
-            const t = cmd.isTurbo ? table.turbo : table.normal;
+            let t;
+            if (table.t0) {
+                const idx = cmd.turboIndex !== undefined ? cmd.turboIndex : (cmd.isTurbo ? 1 : 0);
+                t = idx === 0 ? table.t0 : (idx === 1 ? table.t1 : (idx === 2 ? table.t2 : table.t3));
+            } else {
+                t = cmd.isTurbo ? table.turbo : table.normal;
+            }
             const ri = cmd.rIndex || 0, gi = cmd.gIndex || 0, bi = cmd.bIndex || 0;
             r = clamp(r + (t.r[ri] || 0), 0, 255);
             g = clamp(g + (t.g[gi] || 0), 0, 255);
@@ -491,7 +616,28 @@ export function describeCommand(cmd, step, offset = 0) {
         if (cmd.format === "HAM12" || cmd.format === "HAM16") {
             return `${fmt} anker`;
         }
+        if (cmd.format === "HAM12_ANCHOR") {
+            return `ham12 direct rgb(${cmd.r}, ${cmd.g}, ${cmd.b})`;
+        }
         return `${fmt} ankerslot ${cmd.anchorIdx} (abs ${(offset + cmd.anchorIdx) % 256})`;
+    }
+
+    if (cmd.format === "HAM05_DELTA") {
+        const m = cmd.isTurbo ? 16 : 4;
+        const dr = CHANNEL_DEFS[cmd.format].r[cmd.rIndex || 0] * step.r * m;
+        const dg = CHANNEL_DEFS[cmd.format].g[cmd.gIndex || 0] * step.g * m;
+        const db = CHANNEL_DEFS[cmd.format].b[cmd.bIndex || 0] * step.b * m;
+        const turbo = cmd.isTurbo ? " (turbo 16x)" : " (4x)";
+        return `ham5delta r ${signedDelta(dr)} g ${signedDelta(dg)} b ${signedDelta(db)}${turbo}`;
+    }
+    if (cmd.format === "HAM06_DELTA" || cmd.format === "HAM08_DELTA") {
+        const mults = [1, 4, 8, 16];
+        const m = mults[cmd.turboIndex || (cmd.isTurbo ? 1 : 0)];
+        const dr = CHANNEL_DEFS[cmd.format].r[cmd.rIndex || 0] * step.r * m;
+        const dg = CHANNEL_DEFS[cmd.format].g[cmd.gIndex || 0] * step.g * m;
+        const db = CHANNEL_DEFS[cmd.format].b[cmd.bIndex || 0] * step.b * m;
+        const turbo = ` (${m}x)`;
+        return `${cmd.format.toLowerCase()} r ${signedDelta(dr)} g ${signedDelta(dg)} b ${signedDelta(db)}${turbo}`;
     }
 
     if (cmd.format === "HAM12" || cmd.format === "HAM16") {

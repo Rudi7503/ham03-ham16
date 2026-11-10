@@ -50,6 +50,37 @@ export const HAM_CONFIGS = {
         bits: 8
     },
 
+    // --- Neue reine HAM-Delta Sub-Formate (ohne Anker-Bit) ---
+    "HAM05_DELTA": {
+        isPaletted: true,
+        isMixed: false,
+        slotsPerBank: 0,
+        hasTurbo: true,
+        bits: 5
+    },
+    "HAM06_DELTA": {
+        isPaletted: true,
+        isMixed: false,
+        slotsPerBank: 0,
+        hasTurbo: true,
+        bits: 6
+    },
+    "HAM08_DELTA": {
+        isPaletted: true,
+        isMixed: false,
+        slotsPerBank: 0,
+        hasTurbo: true,
+        bits: 8
+    },
+    "HAM12_ANCHOR": {
+        isPaletted: true,
+        isMixed: false,
+        isDirect: true,
+        slotsPerBank: 0,
+        hasTurbo: false,
+        bits: 12
+    },
+
     // --- Standard-Formate ---
     "HAM12": {
         isPaletted: false,
@@ -148,6 +179,38 @@ export const HAM_CONFIGS = {
         isMixed: true,
         slotsPerBank: 128,
         sequence: ["HAM08", "HAM08", "HAM08", "HAM08"]
+    },
+
+    // --- Neue reine HAM-Delta Mischmodi & Kombinationen ---
+    "HAM_32BIT_HAM08_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM08_DELTA", "HAM08_DELTA", "HAM08_DELTA", "HAM08_DELTA"]
+    },
+    "HAM_32BIT_12_5555_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12_ANCHOR", "HAM05_DELTA", "HAM05_DELTA", "HAM05_DELTA", "HAM05_DELTA"]
+    },
+    "HAM_32BIT_12_686_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12_ANCHOR", "HAM06_DELTA", "HAM08_DELTA", "HAM06_DELTA"]
+    },
+    "HAM_32BIT_12_686": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 32,
+        sequence: ["HAM12_ANCHOR", "HAM06", "HAM08", "HAM06"]
+    },
+    "HAM_32BIT_12_5555": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 16,
+        sequence: ["HAM12_ANCHOR", "HAM05", "HAM05", "HAM05", "HAM05"]
     },
 
     // ... andere Formate ...
