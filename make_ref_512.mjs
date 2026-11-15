@@ -54,13 +54,18 @@ if (fs.existsSync(INPUT)) {
         src[i * 4] = raw[j]; src[i * 4 + 1] = raw[j + 1]; src[i * 4 + 2] = raw[j + 2]; src[i * 4 + 3] = 255;
     }
     pixels = resizeImage(src, SRC_W, SRC_H, W, H, 'lanczos');
-    const inputRgb = new Uint8Array(TOTAL * 3);
-    for (let i = 0; i < TOTAL; i++) { inputRgb[i * 3] = pixels[i * 4]; inputRgb[i * 3 + 1] = pixels[i * 4 + 1]; inputRgb[i * 3 + 2] = pixels[i * 4 + 2]; }
-    fs.writeFileSync(INPUT, inputRgb);
     console.log(`${SRC_W}x${SRC_H} -> ${W}x${H}, x/y getrennt (${(W / SRC_W).toFixed(4)} / ${(H / SRC_H).toFixed(4)}), Zeilenanker aktiv`);
 } else {
     throw new Error(`Weder ${INPUT} noch ${SRC_RAW} vorhanden.`);
 }
+
+// Eingabebild als RGB (für Index/Prüfsumme); im Fallback-Zweig ist es neu
+// entstanden und wird geschrieben, sonst ist es die gelesene Datei.
+const inputRgb = new Uint8Array(TOTAL * 3);
+for (let i = 0; i < TOTAL; i++) {
+    inputRgb[i * 3] = pixels[i * 4]; inputRgb[i * 3 + 1] = pixels[i * 4 + 1]; inputRgb[i * 3 + 2] = pixels[i * 4 + 2];
+}
+if (!fs.existsSync(INPUT)) fs.writeFileSync(INPUT, inputRgb);
 
 const zeilen = [];
 for (const m of MODES) {
