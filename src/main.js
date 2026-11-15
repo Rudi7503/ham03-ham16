@@ -3,8 +3,7 @@
 import { initHamBuilderMode } from './modes/ham_builder.js';
 import { initSpriteStudioMode } from './modes/sprite_studio.js';
 import { initViewerMode } from './modes/viewer.js';
-import { unpackHam12_16, decodeHam12_16 } from './core/module_ham12_16.js';
-import { unpackPaletted, decodePaletted } from './core/module_paletted.js';
+import { parseHamHeader, decodeHamPayload } from './core/ham_file.js';
 import { resizeImage, resizeInto } from './core/resample.js';
 import { testImagePixels } from './testimages.js';
 import { closeErrorWindow } from './ui/error_window.js';
@@ -127,44 +126,43 @@ fileBin.addEventListener('change', (e) => {
     
     reader.onload = function(ev) {
         let u8 = new Uint8Array(ev.target.result);
-        let view = new DataView(ev.target.result);
-        // Version 4 hat das Modusbit umgedreht (0 = Anker, 1 = Delta). Ältere
-        // Dateien würden still falsch dekodieren, deshalb klar abweisen.
-        let version = u8[4];
-        if (version !== 4) {
-            alert(`Diese .ham-Datei hat Formatversion ${version}, das Programm erwartet Version 4.\n`
-                + `Seit Version 4 bedeutet das Modusbit 0 = Anker und 1 = Delta (vorher umgekehrt); `
-                + `ältere Dateien sind daher nicht mehr lesbar. Bitte die Quelle neu encodieren und speichern.`);
+
+        // Kopf und Dekodierung liegen in src/core/ham_file.js — dieselbe Quelle
+        // wie für die Referenz-Generatoren und die Tests, damit Laden und
+        // Erzeugen nicht auseinanderlaufen.
+        let kopf;
+        try {
+            kopf = parseHamHeader(u8);
+        } catch (e) {
+            alert(`Diese .ham-Datei lässt sich nicht lesen:\n${e.message}`);
             return;
         }
-        let isLE = view.getUint8(5) === 0;
-        
-        appState.currentImgW = view.getUint16(6, isLE);
-        appState.currentImgH = view.getUint16(8, isLE);
-        let fLen = view.getUint8(10);
-        
-        let p = 11;
-        appState.currentFormat = new TextDecoder().decode(u8.slice(p, p + fLen)); p += fLen;
-        
-        let step = { r: view.getUint8(p++), g: view.getUint8(p++), b: view.getUint8(p++) };
-        let offset = view.getUint8(p++);
-        
-        appState.globalPaletteRAM.set(u8.slice(p, p + 768)); p += 768;
+
+        appState.currentImgW = kopf.width;
+        appState.currentImgH = kopf.height;
+        appState.currentFormat = kopf.format;
+        const step = kopf.step;
+        const offset = kopf.offset;
+
+        appState.globalPaletteRAM.set(kopf.palette);
         appState.globalPaletteRAM[0] = 0; appState.globalPaletteRAM[1] = 0; appState.globalPaletteRAM[2] = 0; // Slot 0 = Schwarz
-        
-        let packedData = u8.slice(p);
-        let totalPixels = appState.currentImgW * appState.currentImgH;
-        
-        // Entpacken & Decodieren
-        if (appState.currentFormat === "HAM12" || appState.currentFormat === "HAM16") {
-            appState.latestCommandArray = unpackHam12_16(packedData, appState.currentFormat, totalPixels);
-            let pixels = decodeHam12_16(appState.latestCommandArray, appState.currentImgW, appState.currentImgH, step);
-            appState.decodedImageData = new ImageData(pixels, appState.currentImgW, appState.currentImgH);
-        } else {
-            appState.latestCommandArray = unpackPaletted(packedData, appState.currentFormat, totalPixels);
-            let pixels = decodePaletted(appState.latestCommandArray, appState.currentImgW, appState.currentImgH, step, appState.globalPaletteRAM, offset);
-            appState.decodedImageData = new ImageData(pixels, appState.currentImgW, appState.currentImgH);
+
+        let packedData = kopf.payload;
+
+        // Entpacken & Decodieren (DXT1 hat keine Befehlskette, siehe ham_file.js)
+        let dec;
+        try {
+            dec = decodeHamPayload(kopf);
+        } catch (e) {
+            alert(`Nutzlast nicht dekodierbar (${kopf.format}):\n${e.message}`);
+            return;
         }
+        appState.latestCommandArray = dec.commands;
+        appState.decodedImageData = new ImageData(dec.pixels, appState.currentImgW, appState.currentImgH);
+
+        // Gepackte Daten merken, damit "Speichern" direkt nach dem Laden
+        // funktioniert (vorher war latestPackedData leer und der Knopf tat nichts).
+        appState.latestPackedData = packedData;
         
         // Wenn kein Originalbild da ist, erzeuge einen Dummy, damit der Builder starten kann
         if (!appState.originalImageData) {
