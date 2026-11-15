@@ -3,6 +3,7 @@
 import { HAM_CONFIGS, slotsPerBankOf } from '../codecs/configs.js';
 import { rgbToHex, hexToRgb } from '../codecs/utils.js';
 import { encodePaletted, decodePaletted, packPaletted, describeCommand, formatSupportsRowAnchors, formatHasAnchors } from '../core/module_paletted.js';
+import { buildHamFile } from '../core/ham_file.js';
 import { encodeHam12_16, decodeHam12_16, packHam12_16 } from '../core/module_ham12_16.js';
 import { debugRoundtripHam12_16, debugRoundtripPaletted } from '../core/debugger.js';
 import { computeDetailedAnalysis, errorBins } from '../core/analysis.js';
@@ -909,28 +910,21 @@ export function initHamBuilderMode(appState, containerEl) {
         let customName = prompt("Bitte Dateinamen eingeben (ohne Endung):", `${appState.currentImgFileName}_${fmt.toLowerCase()}`);
         if (!customName) return;
 
-        let fmtBytes = new TextEncoder().encode(fmt);
         let step = appState.encodeStep || getBuilderStep();
         let offset = parseInt(document.getElementById('pal-offset-input')?.value || 0);
 
-        let buffer = new ArrayBuffer(11 + fmtBytes.length + 4 + 768 + appState.latestPackedData.length);
-        let view = new DataView(buffer);
-        let u8 = new Uint8Array(buffer);
-        
-        u8.set([72, 65, 77, 33], 0); 
-        // Version 4: Modusbit 0 = Anker, 1 = Delta (vorher umgekehrt)
-        view.setUint8(4, 4);
-        view.setUint8(5, 0);
-        view.setUint16(6, appState.currentImgW, true);
-        view.setUint16(8, appState.currentImgH, true);
-        view.setUint8(10, fmtBytes.length);
-        
-        let p = 11;
-        u8.set(fmtBytes, p); p += fmtBytes.length;
-        view.setUint8(p++, step.r); view.setUint8(p++, step.g); view.setUint8(p++, step.b); view.setUint8(p++, offset);
-        
-        u8.set(appState.globalPaletteRAM, p); p += 768;
-        u8.set(appState.latestPackedData, p);
+        // Kopf und Palette kommen aus dem gemeinsamen Datei-Modul — dieselbe
+        // Quelle, die beim Laden wieder parst. Vorher war der Kopf hier von Hand
+        // gebaut; Speichern und Laden konnten so auseinanderlaufen.
+        const buffer = buildHamFile({
+            width: appState.currentImgW,
+            height: appState.currentImgH,
+            format: fmt,
+            step,
+            offset,
+            palette: appState.globalPaletteRAM,
+            payload: appState.latestPackedData
+        });
 
         const url = URL.createObjectURL(new Blob([buffer]));
         const a = document.createElement('a');
