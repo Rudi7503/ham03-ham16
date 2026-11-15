@@ -619,8 +619,9 @@ export function initErrorWindow(appState, deps = {}) {
         render();
         renderValues();
         const resyncTxt = res.valueResync ? 'Resync über gleichen Pixelwert ✅' : (res.forced ? 'Resync am nächsten Anker ✅' : 'Resync ✅');
+        const ankerTxt = res.zeilenAnkerErzwungen ? ' | Zeilenanker am Zeilenanfang erzwungen (gewählte Farbe dort nicht übernommen)' : '';
         hint(`${label} | Fenster ${res.span} px ab Pixel ${res.startPx} | ${resyncTxt}`
-            + ` | Lookahead ${res.usedLookahead || 0} px`);
+            + ` | Lookahead ${res.usedLookahead || 0} px${ankerTxt}`);
         D.setStatus(`${label}: lokal nachcodiert über ${res.span} px (${resyncTxt})`);
     }
 

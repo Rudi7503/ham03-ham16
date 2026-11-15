@@ -851,6 +851,21 @@ export function encodeLocalSpan({ origData, imgW, format, stepVal, paletteRAM, o
     let acc = computeAccAtPixel(existingCommands, startPx, stepVal, paletteRAM, offset);
     const newCmds = [];
 
+    // Ist die vorhandene Datei zeilenverankert? Dann muss eine lokale Korrektur
+    // das erhalten, sonst verliert die betroffene Zeile ihre Unabhängigkeit und
+    // die Interlace-Zusage bricht still. Erkannt wird das aus den Befehlen selbst
+    // (jede Zeile beginnt mit einem Anker), nicht aus der Oberfläche — es zählt
+    // die Eigenschaft der Datei, nicht die aktuelle Einstellung.
+    const zeilenverankert = (() => {
+        if (!existingCommands || existingCommands.length < imgW) return false;
+        const zeilen = Math.floor(existingCommands.length / imgW);
+        for (let y = 0; y < zeilen; y++) {
+            const c = existingCommands[y * imgW];
+            if (!c || !c.isAnchor) return false;
+        }
+        return true;
+    })();
+
     const stop = (stopAtPx > startPx) ? Math.min(stopAtPx, startPx + maxPixels) : -1;
     const hardEnd = Math.min(existingCommands.length, startPx + maxPixels, stop > 0 ? stop : Infinity);
     const minResync = Math.max(startPx + 1, minEndPx);
@@ -862,17 +877,23 @@ export function encodeLocalSpan({ origData, imgW, format, stepVal, paletteRAM, o
     const branchesFor = (px, accNow) => {
         const t = tablesFor(phaseFormatAt(format, imgW, px));
         const out = [];
+        // Zeilenverankerte Datei: am Zeilenanfang darf nur ein Anker stehen.
+        // Hat das Format dort keine Anker, bleibt es bei den normalen Kandidaten
+        // (dann war die Datei faktisch nicht zeilenverankert).
+        const nurAnker = zeilenverankert && (px % imgW) === 0 && t.anchors.length > 0;
         for (const a of t.anchors) {
             const r = paletteRAM[a.absSlot * 3], g = paletteRAM[a.absSlot * 3 + 1], b = paletteRAM[a.absSlot * 3 + 2];
             out.push({ cmd: a.cmd, r, g, b });
         }
-        for (const d of t.deltas) {
-            out.push({
-                cmd: d.cmd,
-                r: clamp(accNow.r + d.dr, 0, 255),
-                g: clamp(accNow.g + d.dg, 0, 255),
-                b: clamp(accNow.b + d.db, 0, 255)
-            });
+        if (!nurAnker) {
+            for (const d of t.deltas) {
+                out.push({
+                    cmd: d.cmd,
+                    r: clamp(accNow.r + d.dr, 0, 255),
+                    g: clamp(accNow.g + d.dg, 0, 255),
+                    b: clamp(accNow.b + d.db, 0, 255)
+                });
+            }
         }
         return out;
     };
@@ -914,14 +935,32 @@ export function encodeLocalSpan({ origData, imgW, format, stepVal, paletteRAM, o
         return level[0] ? level[0].first : null;
     };
 
+    let zeilenAnkerErzwungen = false;
     let i = startPx;
     for (; i < hardEnd; i++) {
         let pick = null;
 
         if (i === startPx && forcedFirstCmd) {
-            // Gepinntes Kommando: exakt das gewählte Ergebnis
-            const col = commandResultColor(forcedFirstCmd, acc, tables, paletteRAM, offset);
-            pick = { cmd: forcedFirstCmd, r: col.r, g: col.g, b: col.b };
+            // Gepinntes Kommando: exakt das gewählte Ergebnis.
+            // Ausnahme: in einer zeilenverankerten Datei muss der Zeilenanfang ein
+            // Anker bleiben. Ein gepinnter Delta-Befehl würde die Zeile von der
+            // Vorderzeile abhängig machen (Interlace-Zusage kaputt) — dann wird
+            // stattdessen der nächstliegende Anker gewählt.
+            const istZeilenAnfang = zeilenverankert && (i % imgW) === 0;
+            const ankerHier = tablesFor(phaseFormatAt(format, imgW, i)).anchors;
+            if (istZeilenAnfang && !forcedFirstCmd.isAnchor && ankerHier.length > 0) {
+                let bestA = null, bestD = Infinity;
+                for (const a of ankerHier) {
+                    const ar = paletteRAM[a.absSlot * 3], ag = paletteRAM[a.absSlot * 3 + 1], ab = paletteRAM[a.absSlot * 3 + 2];
+                    const d = (ar - acc.r) ** 2 + (ag - acc.g) ** 2 + (ab - acc.b) ** 2;
+                    if (d < bestD) { bestD = d; bestA = { cmd: a.cmd, r: ar, g: ag, b: ab }; }
+                }
+                pick = bestA;
+                zeilenAnkerErzwungen = true;
+            } else {
+                const col = commandResultColor(forcedFirstCmd, acc, tables, paletteRAM, offset);
+                pick = { cmd: forcedFirstCmd, r: col.r, g: col.g, b: col.b };
+            }
         } else if (i < lookaheadEnd) {
             pick = chooseWithLookahead(i, acc, Math.min(lookaheadEnd, hardEnd));
             if (pick) usedLookahead++;
@@ -937,7 +976,7 @@ export function encodeLocalSpan({ origData, imgW, format, stepVal, paletteRAM, o
         if (resyncRef && i + 1 >= minResync) {
             const o = i * 4;
             if (acc.r === resyncRef[o] && acc.g === resyncRef[o + 1] && acc.b === resyncRef[o + 2]) {
-                return { commands: newCmds, startPx, endPx: i + 1, resynced: true, valueResync: true, usedLookahead };
+                return { commands: newCmds, startPx, endPx: i + 1, resynced: true, valueResync: true, usedLookahead, zeilenAnkerErzwungen };
             }
         }
     }
@@ -947,11 +986,11 @@ export function encodeLocalSpan({ origData, imgW, format, stepVal, paletteRAM, o
         const orig = existingCommands[stop];
         if (orig && orig.isAnchor) {
             newCmds.push(orig);
-            return { commands: newCmds, startPx, endPx: stop + 1, resynced: true, forced: true, usedLookahead };
+            return { commands: newCmds, startPx, endPx: stop + 1, resynced: true, forced: true, usedLookahead, zeilenAnkerErzwungen };
         }
     }
 
-    return { commands: newCmds, startPx, endPx: i, resynced: false, usedLookahead };
+    return { commands: newCmds, startPx, endPx: i, resynced: false, usedLookahead, zeilenAnkerErzwungen };
 }
 
 // Decodiert [startPx, endPx) neu in einen vorhandenen RGBA-Puffer.

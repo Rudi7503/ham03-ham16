@@ -76,6 +76,9 @@ export function performLocalEdit({
         forced: !!res.forced,
         valueResync: !!res.valueResync,
         usedLookahead: res.usedLookahead || 0,
+        // true, wenn am Zeilenanfang ein Anker stehen musste und dafür der
+        // gepinnte Befehl verworfen wurde (zeilenverankerte Datei)
+        zeilenAnkerErzwungen: !!res.zeilenAnkerErzwungen,
         stopAtPx,
         startPx: res.startPx,
         endPx: res.endPx,
