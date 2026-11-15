@@ -4,6 +4,11 @@
 // Skalierung: x und y UNABHAENGIG (anisotrop), also das ganze Bild auf 640x256
 // ohne Beschneidung und ohne Raender. Der Resampler skaliert die Achsen getrennt,
 // die Faktoren sind hier 640/1120 = 0,5714 und 256/1120 = 0,2286.
+//
+// ACHTUNG: Dieses Skript setzt die 320er-Paletten ein. Der ausgelieferte Satz
+// hat NACHOPTIMIERTE Paletten (optimize_ref_640.mjs, siehe INDEX.md). Wer dieses
+// Skript erneut laeuft, ueberschreibt sie — danach muss die Nachoptimierung
+// wiederholt werden, sonst aendern sich alle Pruefsummen im Index.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { parseHamHeader, buildHamFile } from './src/core/ham_file.js';
