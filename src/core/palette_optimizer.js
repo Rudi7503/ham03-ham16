@@ -970,6 +970,21 @@ const STAGE_WEIGHTS = {
 };
 
 export async function runHybridOptimization(appState, optRegion, step, metric, currentOffset, lockedSlots, updateOptProgress, triggerEncodeFn, renderUIPalette, intensity = 'langsam') {
+    // Bei ankerlosen Formaten (reine Delta-Modi) wird die Palette vom Encoder
+    // überhaupt nicht benutzt: leere und bunte Palette erzeugen byte-identische
+    // Nutzlast. Eine Optimierung wäre reine Rechenzeit ohne Wirkung.
+    const frueheBank = HAM_CONFIGS[appState.currentFormat];
+    if (!frueheBank || !(frueheBank.slotsPerBank > 0)) {
+        const fmtName = appState.currentFormat;
+        const slots = frueheBank ? (frueheBank.slotsPerBank || 0) : 0;
+        // Mischformate mit HAM12_ANCHOR haben slotsPerBank 0, nutzen aber den
+        // Direktfarbanker und brauchen ebenfalls keine Palette.
+        return [
+            `<div style="color:#ffc107; font-weight:bold;">Palette wird für ${fmtName} nicht benutzt</div>`,
+            `<div style="color:#ffc107;">Das Format hat ${slots} Ankerslots: der Encoder arbeitet ausschließlich mit Farbschritten. `
+            + `Eine Palettenoptimierung hätte keine Wirkung und wurde übersprungen.</div>`
+        ];
+    }
     const globalStart = performance.now();
     // Jeden Encode mitzählen: die Laufzeit der Pipeline ist (Anzahl Encodes) ×
     // (Zeit pro Encode). Die Anzahl hängt nur vom Verfahren ab, die Zeit pro
@@ -1693,6 +1708,15 @@ const REFINE_MIN_GAIN = 0.05;   // MSE-Gewinn, ab dem ein weiterer Durchgang loh
 export async function runManualRefinement(appState, optRegion, step, metric, currentOffset, lockedSlots, updateOptProgress, triggerEncodeFn, renderUIPalette, slotOrder = 'desc') {
     const tStart = performance.now();
     const config = HAM_CONFIGS[appState.currentFormat];
+    // Ankerlose Formate nutzen keine Palette — Nachoptimieren wäre wirkungslos.
+    // (Gemessen: leere und bunte Palette ergeben byte-identische Nutzlast.)
+    if (!config || !(config.slotsPerBank > 0)) {
+        return [
+            `<div style="color:#ffc107; font-weight:bold;">Nachoptimieren nicht nötig</div>`,
+            `<div style="color:#ffc107;">${appState.currentFormat} hat keine Ankerslots und benutzt die Palette nicht. `
+            + `Der Encoder arbeitet ausschließlich mit Farbschritten.</div>`
+        ];
+    }
     const { maxSlots } = resolveBankLayout(appState.currentFormat, config);
 
     // Ein evtl. noch gesetztes Abbruch-Flag verwerfen und auf Abbrüche hören:

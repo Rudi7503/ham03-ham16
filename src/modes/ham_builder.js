@@ -595,7 +595,11 @@ export function initHamBuilderMode(appState, containerEl) {
         refreshStatusText(appState);
 
         let paletteBox = document.getElementById('palette-box');
-        if (paletteBox) paletteBox.style.display = isPalFormat ? 'flex' : 'none';
+        // Palette nur zeigen, wenn das Format sie überhaupt benutzt: reine
+        // Delta-Formate und Mischformate ohne Ankerslots arbeiten ausschließlich
+        // mit Farbschritten (leere und bunte Palette ergeben identische Nutzlast).
+        const nutztPalette = isPalFormat && formatHasAnchors(appState.currentFormat);
+        if (paletteBox) paletteBox.style.display = nutztPalette ? 'flex' : 'none';
         
         let btnBuilder = document.getElementById('btn-builder');
         if (btnBuilder) btnBuilder.disabled = !isPalFormat || !appState.originalImageData;

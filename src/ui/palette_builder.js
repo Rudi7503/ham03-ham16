@@ -426,6 +426,16 @@ export function initPaletteBuilderUI(appState, deps) {
     btnAuto?.addEventListener('click', async () => {
         if (!appState.originalImageData || !appState.decodedImageData) return alert("Bitte zuerst das Bild codieren.");
         
+        // Ankerlose Formate (reine Delta-Modi) benutzen die Palette nicht — eine
+        // Optimierung hätte keine Wirkung. Belegt: leere und bunte Palette ergeben
+        // byte-identische Nutzlast. Deshalb hier früh und deutlich abbrechen.
+        const cfgAuto = HAM_CONFIGS[appState.currentFormat];
+        if (!cfgAuto || !(cfgAuto.slotsPerBank > 0)) {
+            return alert(`Das Format ${appState.currentFormat} hat keine Ankerslots.\n\n`
+                + `Es arbeitet ausschließlich mit Farbschritten, die Palette wird nicht benutzt — `
+                + `eine Optimierung hätte keine Wirkung.`);
+        }
+        
         // Abfrage: Intensität ('sehr_schnell'|'normal'|'langsam') + Proxy-Option
         let choice = await askAutoFillMode();
         if (!choice) return; // Abgebrochen
