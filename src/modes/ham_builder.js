@@ -164,6 +164,8 @@ export function initHamBuilderMode(appState, containerEl) {
                         <option value="HAM_32BIT_6454544">HAM 32-Bit 6454544  (6/4/5/4/5/4/4)    4.6 Bit/pixel</option>
                         <option value="HAM_32BIT_655655">HAM 32-Bit 655655   (6/5/5/6/5/5)      5.3 Bit/pixel</option>
                         <option value="HAM_32BIT_86666">HAM 32-Bit 86666    (8/6/6/6/6)        6.4 Bit/pixel</option>
+                        <option value="HAM_32BIT_12_5555">HAM 32-Bit 12_5555  (12/5/5/5/5)      6.4 Bit/pixel</option>
+                        <option value="HAM_32BIT_12_686">HAM 32-Bit 12_686   (12/6/8/6)        8.0 Bit/pixel</option>
                         <option value="HAM_32BIT_8888">HAM 32-Bit 8888     (8/8/8/8)          8.0 Bit/pixel</option>
                         </optgroup>
                         <optgroup label="Reine HAM-Modi (jeder Bildpunkt dasselbe Format)">
@@ -174,14 +176,20 @@ export function initHamBuilderMode(appState, containerEl) {
                         <option value="HAM08">HAM08  8 Bit · 128 Slots · Turbo</option>
                         </optgroup>
                         <optgroup label="Reine HAM-Delta-Modi (Neu / Palettenlos)">
+                        <option value="HAM04_DELTA">HAM04_DELTA  4 Bit · reines Delta (1x/4x Turbo)</option>
+                        <option value="HAM_32BIT_44444444_DELTA">HAM 32-Bit 44444444_DELTA (8×4d) 4.0 Bit/pixel</option>
+                        <option value="HAM_256BIT_12_61x4_DELTA">HAM 256-Bit 12_61x4_DELTA (12 + 61×4d) 4.13 Bit/pixel</option>
+                        <option value="HAM_256BIT_12_inter_5_4_DELTA">HAM 256-Bit 12_inter_5_4_DELTA (12 + 5d/4d Mix) 4.92 Bit/pixel</option>
                         <option value="HAM05_DELTA">HAM05_DELTA  5 Bit · reines Delta (4x/16x Turbo) · 2-Bit Grün</option>
+                        <option value="HAM_256BIT_12_48x5_4_DELTA">HAM 256-Bit 12_48x5_4_DELTA (12 + 48×5d + 4d) 5.12 Bit/pixel</option>
+                        <option value="HAM_256BIT_12_8_46x5_6_DELTA">HAM 256-Bit 12_8_46x5_6_DELTA (12 + 8d + 46×5d + 6d) 5.22 Bit/pixel</option>
+                        <option value="HAM_256BIT_12_14x5_29x6_DELTA">HAM 256-Bit 12_14x5_29x6_DELTA (12 + 14×5d + 29×6d) 5.82 Bit/pixel</option>
                         <option value="HAM06_DELTA">HAM06_DELTA  6 Bit · 4-Stufen Turboturbo (1x/4x/8x/16x) · 2-Bit Grün</option>
+                        <option value="HAM_256BIT_12_40x6_4_DELTA">HAM 256-Bit 12_40x6_4_DELTA (12 + 40×6d + 4d) 6.10 Bit/pixel</option>
+                        <option value="HAM_32BIT_12_5555_DELTA">HAM 32-Bit 12_5555_DELTA (12/5d/5d/5d/5d) 6.4 Bit/pixel</option>
                         <option value="HAM08_DELTA">HAM08_DELTA  8 Bit · 4-Stufen Turboturbo (1x/4x/8x/16x) · 2-Bit RGB</option>
                         <option value="HAM_32BIT_HAM08_DELTA">HAM 32-Bit HAM08_DELTA (8d/8d/8d/8d) 8.0 Bit/pixel</option>
-                        <option value="HAM_32BIT_12_5555_DELTA">HAM 32-Bit 12_5555_DELTA (12/5d/5d/5d/5d) 6.4 Bit/pixel</option>
                         <option value="HAM_32BIT_12_686_DELTA">HAM 32-Bit 12_686_DELTA (12/6d/8d/6d) 8.0 Bit/pixel</option>
-                        <option value="HAM_32BIT_12_5555">HAM 32-Bit 12_5555 (12/5/5/5/5) 6.4 Bit/pixel</option>
-                        <option value="HAM_32BIT_12_686">HAM 32-Bit 12_686 (12/6/8/6) 8.0 Bit/pixel</option>
                         </optgroup>
                         <optgroup label="Andere Codecs">
                         <option value="HAM12">HAM12</option>
@@ -234,15 +242,6 @@ export function initHamBuilderMode(appState, containerEl) {
                         <option value="rgb">RGB</option>
                         <option value="rgb_ABS">RGB (ABS)</option>
                     </select>
-                </div>
-
-                <div class="control-group" id="ham-step-group">
-                    <label>Schritt:</label>
-                    <div style="display:flex; gap:2px;">
-                        <input type="number" id="ham-step-r" min="1" max="128" value="4" style="width:35px; color:#ff6b6b; font-weight:bold;" title="Rot">
-                        <input type="number" id="ham-step-g" min="1" max="128" value="4" style="width:35px; color:#28a745; font-weight:bold;" title="Grün">
-                        <input type="number" id="ham-step-b" min="1" max="128" value="4" style="width:35px; color:#4dabf7; font-weight:bold;" title="Blau">
-                    </div>
                 </div>
 
                 <div class="control-group">
@@ -415,9 +414,9 @@ export function initHamBuilderMode(appState, containerEl) {
                 const cmd = appState.latestCommandArray && appState.latestCommandArray[px];
                 if (!cmd) return null;
                 const step = {
-                    r: parseInt(document.getElementById('ham-step-r')?.value) || 8,
-                    g: parseInt(document.getElementById('ham-step-g')?.value) || 8,
-                    b: parseInt(document.getElementById('ham-step-b')?.value) || 8
+                    r: 4,
+                    g: 4,
+                    b: 4
                 };
                 const offset = parseInt(document.getElementById('pal-offset-input')?.value) || 0;
                 return describeCommand(cmd, step, offset);
@@ -650,9 +649,9 @@ export function initHamBuilderMode(appState, containerEl) {
     async function triggerEncode() {
         let format = appState.currentFormat;
         let step = { 
-            r: parseInt(document.getElementById('ham-step-r').value) || 8,
-            g: parseInt(document.getElementById('ham-step-g').value) || 8,
-            b: parseInt(document.getElementById('ham-step-b').value) || 8 
+            r: 4,
+            g: 4,
+            b: 4 
         };
         let strategy = document.getElementById('encode-strategy').value;
         let metric = document.getElementById('encode-metric').value;
@@ -744,9 +743,9 @@ export function initHamBuilderMode(appState, containerEl) {
         let config = HAM_CONFIGS[format];
         if (!config || !config.isPaletted) return;
         let step = {
-            r: parseInt(document.getElementById('ham-step-r').value) || 8,
-            g: parseInt(document.getElementById('ham-step-g').value) || 8,
-            b: parseInt(document.getElementById('ham-step-b').value) || 8
+            r: 4,
+            g: 4,
+            b: 4
         };
         let metric = document.getElementById('encode-metric').value;
         let strategy = document.getElementById('encode-strategy').value;
@@ -861,7 +860,7 @@ export function initHamBuilderMode(appState, containerEl) {
         if (!customName) return;
 
         let fmtBytes = new TextEncoder().encode(fmt);
-        let step = { r: parseInt(document.getElementById('ham-step-r').value)||8, g: parseInt(document.getElementById('ham-step-g').value)||8, b: parseInt(document.getElementById('ham-step-b').value)||8 };
+        let step = { r: 4, g: 4, b: 4 };
         let offset = parseInt(document.getElementById('pal-offset-input')?.value || 0);
 
         let buffer = new ArrayBuffer(11 + fmtBytes.length + 4 + 768 + appState.latestPackedData.length);
@@ -897,7 +896,7 @@ export function initHamBuilderMode(appState, containerEl) {
             return;
         }
         let fmt = appState.currentFormat;
-        let step = { r: parseInt(document.getElementById('ham-step-r').value), g: parseInt(document.getElementById('ham-step-g').value), b: parseInt(document.getElementById('ham-step-b').value) };
+        let step = { r: 4, g: 4, b: 4 };
         let strat = document.getElementById('encode-strategy').value;
         let met = document.getElementById('encode-metric').value;
         let off = parseInt(document.getElementById('pal-offset-input')?.value || 0);
@@ -915,7 +914,7 @@ export function initHamBuilderMode(appState, containerEl) {
             if (appState.originalImageData.data.every(v => v === 0)) return alert("Die Fehleranalyse benötigt das echte Originalbild!");
 
             analysisModal.style.display = 'block'; 
-            let step = { r: parseInt(document.getElementById('ham-step-r').value)||8, g: parseInt(document.getElementById('ham-step-g').value)||8, b: parseInt(document.getElementById('ham-step-b').value)||8 };
+            let step = { r: 4, g: 4, b: 4 };
             let metric = document.getElementById('encode-metric').value;
             let config = HAM_CONFIGS[appState.currentFormat];
             let totalPixels = appState.currentImgW * appState.currentImgH;
@@ -1031,9 +1030,9 @@ export function initHamBuilderMode(appState, containerEl) {
         getOptRegion: () => optRegion,
         getLockedSlots: () => lockedSlots,
         getStep: () => ({ 
-            r: parseInt(document.getElementById('ham-step-r').value)||8, 
-            g: parseInt(document.getElementById('ham-step-g').value)||8, 
-            b: parseInt(document.getElementById('ham-step-b').value)||8 
+            r: 4, 
+            g: 4, 
+            b: 4 
         }),
         getMetric: () => document.getElementById('encode-metric').value,
         getCurrentOffset: () => parseInt(document.getElementById('pal-offset-input')?.value || 0),
@@ -1046,9 +1045,9 @@ export function initHamBuilderMode(appState, containerEl) {
 
     // 8. FEHLERBILD-FENSTER (eigenes, verschiebbares Fenster)
     const getBuilderStep = () => ({
-        r: parseInt(document.getElementById('ham-step-r').value) || 8,
-        g: parseInt(document.getElementById('ham-step-g').value) || 8,
-        b: parseInt(document.getElementById('ham-step-b').value) || 8
+        r: 4,
+        g: 4,
+        b: 4
     });
     errorWindow = initErrorWindow(appState, {
         getStep: getBuilderStep,

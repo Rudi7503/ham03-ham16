@@ -51,6 +51,13 @@ export const HAM_CONFIGS = {
     },
 
     // --- Neue reine HAM-Delta Sub-Formate (ohne Anker-Bit) ---
+    "HAM04_DELTA": {
+        isPaletted: true,
+        isMixed: false,
+        slotsPerBank: 0,
+        hasTurbo: true,
+        bits: 4
+    },
     "HAM05_DELTA": {
         isPaletted: true,
         isMixed: false,
@@ -194,11 +201,71 @@ export const HAM_CONFIGS = {
         slotsPerBank: 0,
         sequence: ["HAM12_ANCHOR", "HAM05_DELTA", "HAM05_DELTA", "HAM05_DELTA", "HAM05_DELTA"]
     },
+    "HAM_256BIT_12_61x4_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12_ANCHOR", ...Array(61).fill("HAM04_DELTA")]
+    },
+    "HAM_256BIT_12_inter_5_4_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12_ANCHOR", ...Array(10).fill(["HAM05_DELTA", "HAM05_DELTA", "HAM05_DELTA", "HAM05_DELTA", "HAM04_DELTA"]).flat(), "HAM04_DELTA"]
+    },
+    "HAM_256BIT_12_48x5_4_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12_ANCHOR", ...Array(48).fill("HAM05_DELTA"), "HAM04_DELTA"]
+    },
+    "HAM_256BIT_12_8_46x5_6_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12_ANCHOR", "HAM08_DELTA", ...Array(46).fill("HAM05_DELTA"), "HAM06_DELTA"]
+    },
+    "HAM_256BIT_12_14x5_29x6_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12_ANCHOR", ...Array(14).fill("HAM05_DELTA"), ...Array(29).fill("HAM06_DELTA")]
+    },
+    "HAM_256BIT_12_40x6_4_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12_ANCHOR", ...Array(40).fill("HAM06_DELTA"), "HAM04_DELTA"]
+    },
     "HAM_32BIT_12_686_DELTA": {
         isPaletted: true,
         isMixed: true,
         slotsPerBank: 0,
         sequence: ["HAM12_ANCHOR", "HAM06_DELTA", "HAM08_DELTA", "HAM06_DELTA"]
+    },
+    "HAM_32BIT_12_44444_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12_ANCHOR", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA"]
+    },
+    "HAM_32BIT_44444444_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA"]
+    },
+    "HAM_32BIT_12_866_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12_ANCHOR", "HAM08_DELTA", "HAM06_DELTA", "HAM06_DELTA"]
+    },
+    "HAM_32BIT_12_4646_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12_ANCHOR", "HAM04_DELTA", "HAM06_DELTA", "HAM04_DELTA", "HAM06_DELTA"]
     },
     "HAM_32BIT_12_686": {
         isPaletted: true,
