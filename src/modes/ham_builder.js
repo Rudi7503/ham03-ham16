@@ -2,7 +2,7 @@
 
 import { HAM_CONFIGS } from '../codecs/configs.js';
 import { rgbToHex, hexToRgb } from '../codecs/utils.js';
-import { encodePaletted, decodePaletted, packPaletted, describeCommand } from '../core/module_paletted.js';
+import { encodePaletted, decodePaletted, packPaletted, describeCommand, formatSupportsRowAnchors, formatHasAnchors } from '../core/module_paletted.js';
 import { encodeHam12_16, decodeHam12_16, packHam12_16 } from '../core/module_ham12_16.js';
 import { debugRoundtripHam12_16, debugRoundtripPaletted } from '../core/debugger.js';
 import { computeDetailedAnalysis, errorBins } from '../core/analysis.js';
@@ -346,6 +346,7 @@ export function initHamBuilderMode(appState, containerEl) {
     const ctxOrig = canvasOrig.getContext('2d');
     const ctxDec = canvasDec.getContext('2d');
     let errorWindow = null; // wird unten initialisiert (Fehlerbild-Fenster)
+    let encodeWarnings = []; // Warnungen des Encoders aus dem letzten Lauf
 
     // Aktuell angezeigte Quelle bestimmen: Original, Smart Target oder Fehlerbild.
     // appState.viewMode: 'original' | 'modified' | 'error'
@@ -606,6 +607,19 @@ export function initHamBuilderMode(appState, containerEl) {
 
         updateSmartTooltips();
 
+        // Zeilenanker nur anbieten, wenn das Format an Zeilenanfängen Anker hat.
+        // Sonst würde ein Anker erzwungen, den das Format nicht kodieren kann.
+        const rowAnchorBox = document.getElementById('row-anchors');
+        if (rowAnchorBox) {
+            const breite = appState.currentImgW || 0;
+            const moeglich = isPalFormat && breite > 0 && formatSupportsRowAnchors(appState.currentFormat, breite);
+            rowAnchorBox.disabled = !moeglich;
+            if (!moeglich && rowAnchorBox.checked) rowAnchorBox.checked = false;
+            rowAnchorBox.title = moeglich
+                ? `Anker am Anfang jeder Zeile erzwingen (für Zeilensprung/Interlace ohne Puffer). Gemessen bei 640×512: HAM03 +22,7 %, HAM04 +0,6 %, HAM05 +0,4 %, HAM06 +0,08 %, HAM08 +0,04 % MSE.`
+                : `Für ${appState.currentFormat} bei ${breite || '?'} px nicht möglich: das Format hat an Zeilenanfängen keinen Anker (reine Delta-Formate und die 256-Bit-Formate bei 640 px Breite).`;
+        }
+
         renderPaletteWithLocks(appState);
     }
     
@@ -660,6 +674,21 @@ export function initHamBuilderMode(appState, containerEl) {
         let is16BitClass = (format === "HAM12" || format === "HAM16");
         appState.globalPaletteRAM[0] = 0; appState.globalPaletteRAM[1] = 0; appState.globalPaletteRAM[2] = 0;
 
+        // Vorabprüfung: Zeilenanker sind nicht bei jedem Format möglich. Ohne
+        // diese Prüfung würde an Zeilenanfängen ein Anker erzwungen, den das
+        // Format nicht kodieren kann — die gespeicherte Datei dekodiert dann
+        // voellig anders als die Vorschau (stiller Datenverlust).
+        const willRowAnchors = !!document.getElementById('row-anchors')?.checked;
+        if (willRowAnchors && !is16BitClass && !formatSupportsRowAnchors(format, appState.currentImgW)) {
+            const ra = document.getElementById('row-anchors');
+            if (ra) ra.checked = false;
+            updateProgress(`Zeilenanker für ${format} bei ${appState.currentImgW} px nicht möglich — das Format hat an Zeilenanfängen keinen Anker. Option wurde abgeschaltet, es wird ohne Ankerzwang kodiert.`, 100, 100);
+        } else if (willRowAnchors && is16BitClass) {
+            const ra = document.getElementById('row-anchors');
+            if (ra) ra.checked = false;
+            updateProgress(`Zeilenanker gelten nur für Paletten-Formate, nicht für ${format}. Option wurde abgeschaltet.`, 100, 100);
+        }
+
         // Codiert wird die aktuell angezeigte Quelle (Original oder Smart Target).
         let sourceData = getEncodeSourceImageData().data;
         // Quelle merken: Der lokale Re-Encode im Fehlerbild-Fenster ist nur gültig,
@@ -681,6 +710,11 @@ export function initHamBuilderMode(appState, containerEl) {
             // Zeilenanker: Option fuer Zeilensprung/Interlace ohne Puffer
             const forceRowAnchors = !!document.getElementById('row-anchors')?.checked;
             let encodeRes = await encodePaletted(sourceData, appState.currentImgW, appState.currentImgH, format, step, appState.globalPaletteRAM, offset, strategy, metric, updateProgress, 0, 0, 15.0, 6, forceRowAnchors);
+            if (encodeRes.warnings && encodeRes.warnings.length) {
+                // Der Encoder hat eine Einstellung nicht wie gewuenscht umsetzen
+                // koennen — das muss sichtbar sein, nicht nur im Log.
+                encodeWarnings = encodeRes.warnings.slice();
+            }
             appState.latestCommandArray = encodeRes.commands;
             appState.latestPackedData = packPaletted(appState.latestCommandArray, format);
             decodedPixels = decodePaletted(appState.latestCommandArray, appState.currentImgW, appState.currentImgH, step, appState.globalPaletteRAM, offset);
@@ -703,7 +737,8 @@ export function initHamBuilderMode(appState, containerEl) {
             console.warn('Fehlerbild konnte nicht erzeugt werden:', e);
         }
 
-        updateProgress(`Fertig${errInfoMsg}`, 100, 100);
+        const warnMsg = (encodeWarnings && encodeWarnings.length) ? ` ⚠ ${encodeWarnings.join(' · ')}` : '';
+        updateProgress(`Fertig${errInfoMsg}${warnMsg}`, 100, 100);
         btnSave.disabled = false;
         if(document.getElementById('btn-debug-roundtrip')) document.getElementById('btn-debug-roundtrip').disabled = false;
         

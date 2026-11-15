@@ -23,6 +23,11 @@ export const CHANNEL_DEFS = {
 // Alle Delta-Kommandos eines Sub-Formats inkl. der bereits eingerechneten
 // Farbverschiebungen (Kanalwert × Schritt × Turbo-Multiplikator).
 function buildFormatDeltaCache(fmt, stepVal) {
+    // HAM12_ANCHOR ist ein reines Anker-Format (Direktfarbanker) und hat keine
+    // Kanal-Deltas. Ohne diese Sperre entstünde aus dem Fallback [-1,1] ein
+    // Delta-Befehl, der sich nicht kodieren lässt: beim Packen wurde daraus ein
+    // 12-Bit-Wort, das als schwarzer Anker dekodiert (stiller Datenverlust).
+    if (fmt === "HAM12_ANCHOR") return [];
     const effConfig = HAM_CONFIGS[fmt] || { slotsPerBank: 0, hasTurbo: false };
     let multipliers;
     if (fmt === "HAM05_DELTA") {
@@ -98,6 +103,29 @@ export function phaseFormatAt(format, imgW, pxIndex) {
     return format;
 }
 
+// Hat dieses Sub-Format an dieser Position einen Anker?
+export function formatHasAnchors(fmt) {
+    if (fmt === "HAM12_ANCHOR") return true;          // Direktfarbanker
+    const cfg = HAM_CONFIGS[fmt];
+    return !!(cfg && cfg.slotsPerBank > 0);
+}
+
+// Kann jede Zeile der Breite `width` mit einem Anker beginnen?
+// Fuer Mischformate wird der Zyklus der Zeilenanfaenge geprueft: Position
+// k*width mod sequence.length. Reicht bis sequence.length, weil der Zyklus
+// hoechstens so lang ist.
+export function formatSupportsRowAnchors(format, width) {
+    const cfg = HAM_CONFIGS[format];
+    if (!cfg) return false;
+    if (!cfg.isMixed || !Array.isArray(cfg.sequence) || cfg.sequence.length === 0) {
+        return formatHasAnchors(format);
+    }
+    const seq = cfg.sequence;
+    for (let k = 0; k < seq.length; k++) {
+        if (!formatHasAnchors(seq[(k * width) % seq.length])) return false;
+    }
+    return true;
+}
 export async function encodePaletted(origData, imgW, imgH, format, stepVal, paletteRAM, offset, strategy="greedy", metric="yuv_weight", progressCallback=null, startOverride=0, endOverride=0, errorThreshold = 15.0, beamWidth = 6, forceRowAnchors = false) {
     let totalPixels = imgW * imgH;
     let commands = new Array(totalPixels);
@@ -122,6 +150,11 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
     }
 
     let anchorInfo = {};
+    // Warnungen waehrend des Encodens (einmal je Format/Strategie), damit die
+    // Oberflaeche sagen kann, warum eine Einstellung nicht wie gewuenscht wirkt.
+    const warnings = [];
+    const warnRowAnchorFormats = new Set();
+    const warnStrategyFormats = new Set();
     for (let fmt of formatsToCache) {
         anchorInfo[fmt] = buildFormatAnchorInfo(fmt, offset);
     }
@@ -138,9 +171,24 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         // jede Zeile unabhaengig dekodierbar (kein Farbzustand aus der Vorderzeile
         // noetig) — Voraussetzung fuer Zeilensprung im Betrieb, z. B. Interlace.
         // Kostet keine Bytes (feste Bitrate), nur Farbfreiheit an diesem Pixel.
+        //
+        // WICHTIG: Das geht nur, wenn das Sub-Format an genau dieser Position
+        // ueberhaupt Anker besitzt. Delta-Formate (slotsPerBank 0) und
+        // HAM12_ANCHOR-Formate an Delta-Positionen haben keinen Anker; ein
+        // erzwungener Anker waere nicht kodierbar und die Datei dekodiert Unsinn.
+        // In dem Fall wird der Zwang fuer dieses Pixel ignoriert und gemeldet.
         const rowStart = forceRowAnchors && (pxIdx % imgW) === 0;
+        const anchorsHere = effFormat === "HAM12_ANCHOR" ? [] : (anchorInfo[effFormat] || []);
+        const canAnchorHere = effFormat === "HAM12_ANCHOR" || anchorsHere.length > 0;
+        if (rowStart && !canAnchorHere) {
+            if (!warnRowAnchorFormats.has(effFormat)) {
+                warnRowAnchorFormats.add(effFormat);
+                warnings.push(`Zeilenanker an Position 0 nicht möglich: ${effFormat} hat dort keinen Anker (Format wird umsortiert/deaktiviert)`);
+            }
+        }
+        const forceAnchorHere = rowStart && canAnchorHere;
 
-        if (rowStart || strategy !== 'delta_only') {
+        if (forceAnchorHere || strategy !== 'delta_only') {
             if (effFormat === "HAM12_ANCHOR") {
                 let tr = origData[pxIdx*4], tg = origData[pxIdx*4+1], tb = origData[pxIdx*4+2];
                 let r3 = tr >> 5, g4 = tg >> 4, b3 = tb >> 5;
@@ -151,9 +199,8 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
                     rs.push(ar); gs.push(ag); bs.push(ab);
                 }
             } else {
-                const anchors = anchorInfo[effFormat] || [];
-                for (let s = 0; s < anchors.length; s++) {
-                    const a = anchors[s];
+                for (let s = 0; s < anchorsHere.length; s++) {
+                    const a = anchorsHere[s];
                     cmds.push(a.cmd);
                     rs.push(paletteRAM[a.absSlot * 3]);
                     gs.push(paletteRAM[a.absSlot * 3 + 1]);
@@ -162,7 +209,7 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
             }
         }
 
-        if (!rowStart && strategy !== 'anchor_only') {
+        if (!forceAnchorHere && strategy !== 'anchor_only') {
             const cachedDeltas = deltaCache[effFormat] || [];
             for (let i = 0; i < cachedDeltas.length; i++) {
                 const d = cachedDeltas[i];
@@ -174,6 +221,11 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         }
 
         if (cmds.length === 0) {
+            // Keine Kandidaten: Es MUSS ein Befehl erzeugt werden, der vom Format
+            // auch kodierbar ist. Vorher wurde hier immer ein Anker erfunden — bei
+            // ankerlosen Formaten entstand so eine Datei, die nach dem Speichern
+            // voellig anders dekodiert (stiller Datenverlust). Jetzt: Anker nur bei
+            // vorhandenen Ankern, sonst der betragskleinste Delta-Befehl.
             if (effFormat === "HAM12_ANCHOR") {
                 let tr = origData[pxIdx*4], tg = origData[pxIdx*4+1], tb = origData[pxIdx*4+2];
                 let r3 = tr >> 5, g4 = tg >> 4, b3 = tb >> 5;
@@ -181,9 +233,32 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
                 let ar = (r3 << 1) << 4, ag = g4 << 4, ab = (b3 << 1) << 4;
                 cmds.push({ isAnchor: true, isDirect: true, format: "HAM12_ANCHOR", r3, g4, b3, b10, r: ar, g: ag, b: ab });
                 rs.push(ar); gs.push(ag); bs.push(ab);
+            } else if (anchorsHere.length > 0) {
+                const a = anchorsHere[0];
+                cmds.push(a.cmd);
+                rs.push(paletteRAM[a.absSlot * 3]);
+                gs.push(paletteRAM[a.absSlot * 3 + 1]);
+                bs.push(paletteRAM[a.absSlot * 3 + 2]);
             } else {
-                cmds.push({ isAnchor: true, format: effFormat, anchorIdx: 0 });
-                rs.push(c_acc.r); gs.push(c_acc.g); bs.push(c_acc.b);
+                const cands = deltaCache[effFormat] || [];
+                if (cands.length === 0) {
+                    throw new Error(`Format ${effFormat} hat weder Anker noch Deltas`);
+                }
+                // betragskleinster Delta-Befehl = kleinste Farbaenderung
+                let best = cands[0];
+                let bestMag = Infinity;
+                for (const d of cands) {
+                    const mag = Math.abs(d.dr) + Math.abs(d.dg) + Math.abs(d.db);
+                    if (mag < bestMag) { bestMag = mag; best = d; }
+                }
+                cmds.push(best.cmd);
+                rs.push(clamp(c_acc.r + best.dr, 0, 255));
+                gs.push(clamp(c_acc.g + best.dg, 0, 255));
+                bs.push(clamp(c_acc.b + best.db, 0, 255));
+                if (!warnStrategyFormats.has(`${effFormat}|${strategy}`)) {
+                    warnStrategyFormats.add(`${effFormat}|${strategy}`);
+                    warnings.push(`Strategie "${strategy}" liefert für ${effFormat} keine Kandidaten; es wird ein Delta-Befehl verwendet (Format hat keine Anker)`);
+                }
             }
         }
         return { cmds, rs, gs, bs, len: cmds.length };
@@ -327,7 +402,7 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         }
     }
 
-    return { commands };
+    return { commands, warnings };
 }
 
 // Modusbit-Konvention (ab Formatversion 4):
