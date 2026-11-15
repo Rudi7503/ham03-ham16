@@ -414,11 +414,7 @@ export function initHamBuilderMode(appState, containerEl) {
             getCommandText: (px) => {
                 const cmd = appState.latestCommandArray && appState.latestCommandArray[px];
                 if (!cmd) return null;
-                const step = {
-                    r: 4,
-                    g: 4,
-                    b: 4
-                };
+                const step = appState.encodeStep || getBuilderStep();
                 const offset = parseInt(document.getElementById('pal-offset-input')?.value) || 0;
                 return describeCommand(cmd, step, offset);
             }
@@ -664,18 +660,30 @@ export function initHamBuilderMode(appState, containerEl) {
     const btnEncode = document.getElementById('btn-encode');
     const btnSave = document.getElementById('btn-save');
 
+    // Der Schritt wird an genau einer Stelle gelesen: die drei Eingabefelder
+    // „Schritt" im Codierbereich. Vorher stand hier überall hart {4,4,4}, die
+    // Felder hatten keine Wirkung — und beim Speichern landete trotzdem 4 im
+    // Dateikopf, auch wenn mit etwas anderem gerechnet worden wäre.
+    function getBuilderStep() {
+        const lies = (id) => {
+            const el = document.getElementById(id);
+            const v = el ? parseInt(el.value, 10) : NaN;
+            return Number.isFinite(v) && v >= 1 ? Math.min(128, v) : 4;
+        };
+        return { r: lies('ham-step-r'), g: lies('ham-step-g'), b: lies('ham-step-b') };
+    }
+
     async function triggerEncode() {
         let format = appState.currentFormat;
-        let step = { 
-            r: 4,
-            g: 4,
-            b: 4 
-        };
+        let step = getBuilderStep();
         let strategy = document.getElementById('encode-strategy').value;
         let metric = document.getElementById('encode-metric').value;
         let offset = parseInt(document.getElementById('pal-offset-input')?.value || 0);
 
         let is16BitClass = (format === "HAM12" || format === "HAM16");
+        // Der tatsächlich verwendete Schritt wird gemerkt: Speichern, Fehlerfenster
+        // und lokales Nachcodieren müssen mit genau diesen Werten arbeiten.
+        appState.encodeStep = { r: step.r, g: step.g, b: step.b };
         appState.globalPaletteRAM[0] = 0; appState.globalPaletteRAM[1] = 0; appState.globalPaletteRAM[2] = 0;
 
         // Vorabprüfung: Zeilenanker sind nicht bei jedem Format möglich. Ohne
@@ -781,11 +789,7 @@ export function initHamBuilderMode(appState, containerEl) {
         let format = appState.currentFormat;
         let config = HAM_CONFIGS[format];
         if (!config || !config.isPaletted) return;
-        let step = {
-            r: 4,
-            g: 4,
-            b: 4
-        };
+        let step = appState.encodeStep || getBuilderStep();
         let metric = document.getElementById('encode-metric').value;
         let strategy = document.getElementById('encode-strategy').value;
         let offset = parseInt(document.getElementById('pal-offset-input')?.value || 0);
@@ -899,7 +903,7 @@ export function initHamBuilderMode(appState, containerEl) {
         if (!customName) return;
 
         let fmtBytes = new TextEncoder().encode(fmt);
-        let step = { r: 4, g: 4, b: 4 };
+        let step = appState.encodeStep || getBuilderStep();
         let offset = parseInt(document.getElementById('pal-offset-input')?.value || 0);
 
         let buffer = new ArrayBuffer(11 + fmtBytes.length + 4 + 768 + appState.latestPackedData.length);
@@ -935,7 +939,7 @@ export function initHamBuilderMode(appState, containerEl) {
             return;
         }
         let fmt = appState.currentFormat;
-        let step = { r: 4, g: 4, b: 4 };
+        let step = appState.encodeStep || getBuilderStep();
         let strat = document.getElementById('encode-strategy').value;
         let met = document.getElementById('encode-metric').value;
         let off = parseInt(document.getElementById('pal-offset-input')?.value || 0);
@@ -953,7 +957,7 @@ export function initHamBuilderMode(appState, containerEl) {
             if (appState.originalImageData.data.every(v => v === 0)) return alert("Die Fehleranalyse benötigt das echte Originalbild!");
 
             analysisModal.style.display = 'block'; 
-            let step = { r: 4, g: 4, b: 4 };
+            let step = appState.encodeStep || getBuilderStep();
             let metric = document.getElementById('encode-metric').value;
             let config = HAM_CONFIGS[appState.currentFormat];
             let totalPixels = appState.currentImgW * appState.currentImgH;
@@ -1068,11 +1072,7 @@ export function initHamBuilderMode(appState, containerEl) {
     initPaletteBuilderUI(appState, {
         getOptRegion: () => optRegion,
         getLockedSlots: () => lockedSlots,
-        getStep: () => ({ 
-            r: 4, 
-            g: 4, 
-            b: 4 
-        }),
+        getStep: getBuilderStep,
         getMetric: () => document.getElementById('encode-metric').value,
         getCurrentOffset: () => parseInt(document.getElementById('pal-offset-input')?.value || 0),
         triggerEncode: triggerEncode,
@@ -1083,11 +1083,6 @@ export function initHamBuilderMode(appState, containerEl) {
     });
 
     // 8. FEHLERBILD-FENSTER (eigenes, verschiebbares Fenster)
-    const getBuilderStep = () => ({
-        r: 4,
-        g: 4,
-        b: 4
-    });
     errorWindow = initErrorWindow(appState, {
         getStep: getBuilderStep,
         getMetric: () => document.getElementById('encode-metric').value,
