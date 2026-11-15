@@ -163,7 +163,11 @@ export function initHamBuilderMode(appState, containerEl) {
                         <option value="HAM_32BIT_5454545">HAM 32-Bit 5454545  (5/4/5/4/5/4/5)    4.6 Bit/pixel</option>
                         <option value="HAM_32BIT_6454544">HAM 32-Bit 6454544  (6/4/5/4/5/4/4)    4.6 Bit/pixel</option>
                         <option value="HAM_32BIT_655655">HAM 32-Bit 655655   (6/5/5/6/5/5)      5.3 Bit/pixel</option>
+                        <option value="HAM_32BIT_844844">HAM 32-Bit 844844   (8/4/4/8/4/4)      5.3 Bit/pixel</option>
+                        <option value="HAM_32BIT_846554">HAM 32-Bit 846554   (8/4/6/5/5/4)      5.3 Bit/pixel</option>
+                        <option value="HAM_32BIT_646565">HAM 32-Bit 646565   (6/4/6/5/6/5)      5.3 Bit/pixel</option>
                         <option value="HAM_32BIT_86666">HAM 32-Bit 86666    (8/6/6/6/6)        6.4 Bit/pixel</option>
+                        <option value="HAM_32BIT_85865">HAM 32-Bit 85865    (8/5/8/6/5)        6.4 Bit/pixel</option>
                         <option value="HAM_32BIT_12_5555">HAM 32-Bit 12_5555  (12/5/5/5/5)      6.4 Bit/pixel</option>
                         <option value="HAM_32BIT_12_686">HAM 32-Bit 12_686   (12/6/8/6)        8.0 Bit/pixel</option>
                         <option value="HAM_32BIT_8888">HAM 32-Bit 8888     (8/8/8/8)          8.0 Bit/pixel</option>
@@ -184,12 +188,15 @@ export function initHamBuilderMode(appState, containerEl) {
                         <option value="HAM_256BIT_12_48x5_4_DELTA">HAM 256-Bit 12_48x5_4_DELTA (12 + 48×5d + 4d) 5.12 Bit/pixel</option>
                         <option value="HAM_256BIT_12_8_46x5_6_DELTA">HAM 256-Bit 12_8_46x5_6_DELTA (12 + 8d + 46×5d + 6d) 5.22 Bit/pixel</option>
                         <option value="HAM_256BIT_12_14x5_29x6_DELTA">HAM 256-Bit 12_14x5_29x6_DELTA (12 + 14×5d + 29×6d) 5.82 Bit/pixel</option>
+                        <option value="HAM_32BIT_12_44444_DELTA">HAM 32-Bit 12_44444_DELTA (12/4d×5) 5.33 Bit/pixel</option>
+                        <option value="HAM_32BIT_12_4646_DELTA">HAM 32-Bit 12_4646_DELTA (12/4d/6d/4d/6d) 6.40 Bit/pixel</option>
                         <option value="HAM06_DELTA">HAM06_DELTA  6 Bit · 4-Stufen Turboturbo (1x/4x/8x/16x) · 2-Bit Grün</option>
                         <option value="HAM_256BIT_12_40x6_4_DELTA">HAM 256-Bit 12_40x6_4_DELTA (12 + 40×6d + 4d) 6.10 Bit/pixel</option>
                         <option value="HAM_32BIT_12_5555_DELTA">HAM 32-Bit 12_5555_DELTA (12/5d/5d/5d/5d) 6.4 Bit/pixel</option>
                         <option value="HAM08_DELTA">HAM08_DELTA  8 Bit · 4-Stufen Turboturbo (1x/4x/8x/16x) · 2-Bit RGB</option>
                         <option value="HAM_32BIT_HAM08_DELTA">HAM 32-Bit HAM08_DELTA (8d/8d/8d/8d) 8.0 Bit/pixel</option>
                         <option value="HAM_32BIT_12_686_DELTA">HAM 32-Bit 12_686_DELTA (12/6d/8d/6d) 8.0 Bit/pixel</option>
+                        <option value="HAM_32BIT_12_866_DELTA">HAM 32-Bit 12_866_DELTA (12/8d/6d/6d) 8.0 Bit/pixel</option>
                         </optgroup>
                         <optgroup label="Andere Codecs">
                         <option value="HAM12">HAM12</option>
