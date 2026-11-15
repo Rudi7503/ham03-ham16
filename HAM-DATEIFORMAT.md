@@ -138,6 +138,16 @@ HAM08_DELTA  (8 Bit, kein Ankerbit):
              Bit5..4 = rIndex (2 Bit: -2/-1/+1/+2)
              Bit3..2 = gIndex (2 Bit: -2/-1/+1/+2)
              Bit1..0 = bIndex (2 Bit: -2/-1/+1/+2)
+
+HAM12 als Sub-Format (12 Bit Direktfarbe, identisch zum Ankerfeld von
+                    Familie B, siehe §4.2):
+             Bit10 = b10 (gemeinsames LSB für R und B)
+             Bit9..7 = r3, Bit6..3 = g4, Bit2..0 = b3
+             R = ((r3<<1) | b10) << 4, G = g4 << 4, B = ((b3<<1) | b10) << 4
+
+             Kein Modusbit: in einem Mischstrom ist dieses Sub-Format IMMER ein
+             Anker. Es hat keine Deltas (die kommen aus den Delta-Sub-Formaten)
+             und benutzt keinen Palettenplatz — slotsPerBank = 0.
 ```
 
 ### 3.5 Gemischte Formate
@@ -161,7 +171,10 @@ auf 32 (genau ein Wort).
 | `HAM_32BIT_85865` | HAM08,HAM05,HAM08,HAM06,HAM05 | 8,5,8,6,5 = 32 |
 | `HAM_32BIT_8888` | HAM08 ×4 | 8×4 = 32 |
 | `HAM_32BIT_HAM08_DELTA` | HAM08_DELTA ×4 | 8×4 = 32 |
-| `HAM_32BIT_44444444_DELTA` | HAM04_DELTA ×8 | 4×8 = 32 |
+| `HAM_32BIT_12_5555_DELTA` | HAM12, HAM05_DELTA ×4 | 12 + 5×4 = 32 |
+| `HAM_32BIT_12_686_DELTA` | HAM12, HAM06_DELTA, HAM08_DELTA, HAM06_DELTA | 12 + 6+8+6 = 32 |
+| `HAM_32BIT_12_5555` | HAM12, HAM05 ×4 | 12 + 5×4 = 32 |
+| `HAM_32BIT_12_686` | HAM12, HAM06, HAM08, HAM06 | 12 + 6+8+6 = 32 |
 
 Beispiel `HAM_32BIT_63436343`: 4,0 Bit/Pixel → `W*H/2` Byte.
 
@@ -219,6 +232,14 @@ Delta: Bit11 = 1, Bit10 = Turbo
        Bit6..3 = dg (4 Bit, −8…7)
        Bit2..0 = db (3 Bit, −4…3)
 ```
+
+**HAM12 hat zwei Rollen.** Als eigenes Bildformat belegt es ein 16-Bit-Wort je
+Pixel (Bits 15..12 bleiben ungenutzt, siehe §3.4). In einem **Mischstrom**
+(§3.5) tritt es nur als **12-Bit-Ankerfeld** auf — also ohne Modusbit und ohne
+Deltas, dafür mit voller Direktfarbe. Es ist damit der einzige Anker, der keinen
+Palettenplatz braucht. Ein Decoder muss beide Rollen unterscheiden: im
+Mischstrom steht HAM12 in der `sequence`, im eigenen Format bestimmt der
+Formatname im Kopf die 16-Bit-Wortlesung.
 
 ### 4.3 Dekodier-Algorithmus
 

@@ -11,14 +11,16 @@ import {
 console.log("=== Starte Test-Suite für reine HAM-Delta-Modi ===");
 
 // 1. Bit- und Config-Prüfung
-// HAM12_ANCHOR und die darauf aufbauenden 12er-/256-Bit-Formate wurden entfernt.
 const deltaConfigs = [
-    "HAM04_DELTA",
     "HAM05_DELTA",
     "HAM06_DELTA",
     "HAM08_DELTA",
+    "HAM12",
     "HAM_32BIT_HAM08_DELTA",
-    "HAM_32BIT_44444444_DELTA"
+    "HAM_32BIT_12_5555_DELTA",
+    "HAM_32BIT_12_686_DELTA",
+    "HAM_32BIT_12_686",
+    "HAM_32BIT_12_5555"
 ];
 
 for (const name of deltaConfigs) {
@@ -105,11 +107,38 @@ console.log("\n--- Teste Pack/Unpack Roundtrip ---");
     console.log("OK   HAM08_DELTA alle 256 Codes (4-Stufen Turboturbo) packen/entpacken bit-exakt");
 }
 
+// Test HAM12 (12 Bit)
+{
+    const cmds = [];
+    for (let r3 = 0; r3 < 8; r3 += 2) {
+        for (let g4 = 0; g4 < 16; g4 += 4) {
+            for (let b3 = 0; b3 < 8; b3 += 2) {
+                for (let b10 of [0, 1]) {
+                    cmds.push({ isAnchor: true, isDirect: true, format: "HAM12", r3, g4, b3, b10 });
+                }
+            }
+        }
+    }
+    const packed = packPaletted(cmds, "HAM12");
+    const unpacked = unpackPaletted(packed, "HAM12", cmds.length);
+    for (let i = 0; i < cmds.length; i++) {
+        assert.strictEqual(unpacked[i].format, "HAM12");
+        assert.strictEqual(unpacked[i].r3, cmds[i].r3);
+        assert.strictEqual(unpacked[i].g4, cmds[i].g4);
+        assert.strictEqual(unpacked[i].b3, cmds[i].b3);
+        assert.strictEqual(unpacked[i].b10, cmds[i].b10);
+    }
+    console.log("OK   HAM12 12-Bit Direct-Anchor packen/entpacken bit-exakt");
+}
+
 // 3. 32-Bit-Mischsequenzen prüfen
 console.log("\n--- Teste 32-Bit Mischsequenz Wort-Größen ---");
 const mixedToTest = [
+    { name: "HAM_32BIT_12_5555_DELTA", expectedBitsPerWord: 32, pxPerWord: 5 },
+    { name: "HAM_32BIT_12_686_DELTA", expectedBitsPerWord: 32, pxPerWord: 4 },
     { name: "HAM_32BIT_HAM08_DELTA", expectedBitsPerWord: 32, pxPerWord: 4 },
-    { name: "HAM_32BIT_44444444_DELTA", expectedBitsPerWord: 32, pxPerWord: 8 }
+    { name: "HAM_32BIT_12_5555", expectedBitsPerWord: 32, pxPerWord: 5 },
+    { name: "HAM_32BIT_12_686", expectedBitsPerWord: 32, pxPerWord: 4 }
 ];
 
 for (const m of mixedToTest) {

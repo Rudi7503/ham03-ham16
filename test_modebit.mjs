@@ -12,14 +12,14 @@ import { packHam12_16, unpackHam12_16 } from './src/core/module_ham12_16.js';
 
 const BITS = {
     HAM01: 1, HAM02: 2, HAM03: 3, HAM04: 4, HAM05: 5, HAM06: 6, HAM08: 8,
-    // Delta-Sub-Formate (kein Modusbit, nur Deltas)
-    HAM04_DELTA: 4, HAM05_DELTA: 5, HAM06_DELTA: 6, HAM08_DELTA: 8
+    // Delta-Sub-Formate (kein Modusbit, nur Deltas) und der 12-Bit-Direktanker
+    HAM04_DELTA: 4, HAM05_DELTA: 5, HAM06_DELTA: 6, HAM08_DELTA: 8, HAM12: 12
 };
 // Modusbit = höchstwertiges Bit des Codes; 0 = dieses Format hat keines
-// (HAM01/HAM02 und alle reinen Delta-Formate)
+// (HAM01/HAM02 und alle reinen Delta-Formate; HAM12 ist immer ein Anker)
 const MODEBIT = {
     HAM01: 0, HAM02: 0, HAM03: 4, HAM04: 8, HAM05: 16, HAM06: 32, HAM08: 128,
-    HAM04_DELTA: 0, HAM05_DELTA: 0, HAM06_DELTA: 0, HAM08_DELTA: 0
+    HAM04_DELTA: 0, HAM05_DELTA: 0, HAM06_DELTA: 0, HAM08_DELTA: 0, HAM12: 0
 };
 
 const W = 16, H = 4, TOTAL = W * H, STEP = { r: 4, g: 4, b: 4 };

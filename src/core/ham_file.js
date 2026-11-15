@@ -86,6 +86,12 @@ export function expectedPayloadBytes(format, totalPixels) {
     }
     const cfg = HAM_CONFIGS[format];
     if (!cfg) return null;
+    // HAM12/HAM16 sind eigene 16-Bit-Formate: eine Wort je Pixel, auch wenn
+    // HAM12 davon nur 12 Bit belegt. Als Sub-Format in einem Mischstrom zählt
+    // dagegen nur der 12-Bit-Anker — dafür greift der Zweig weiter unten.
+    if (format === 'HAM12' || format === 'HAM16') {
+        return totalPixels * 2;
+    }
     if (cfg.isMixed && Array.isArray(cfg.sequence)) {
         const bits = cfg.sequence.reduce((s, f) => s + (HAM_CONFIGS[f]?.bits || 0), 0);
         const proPixel = bits / cfg.sequence.length;

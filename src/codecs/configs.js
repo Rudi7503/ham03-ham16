@@ -85,7 +85,11 @@ export const HAM_CONFIGS = {
         isPaletted: false,
         isMixed: false,
         hasTurbo: true,
-        bits: 12
+        // Als eigenes Format: 16 Bit je Pixel (12 Nutzbits). Als Sub-Format in
+        // gemischten Strömen zählt nur der 12-Bit-Anker, und die Palette bleibt
+        // unbenutzt — daher 0 Ankerslots.
+        bits: 12,
+        slotsPerBank: 0
     },
     "HAM16": {
         isPaletted: false,
@@ -187,11 +191,89 @@ export const HAM_CONFIGS = {
         slotsPerBank: 0,
         sequence: ["HAM08_DELTA", "HAM08_DELTA", "HAM08_DELTA", "HAM08_DELTA"]
     },
+    "HAM_32BIT_12_5555_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12", "HAM05_DELTA", "HAM05_DELTA", "HAM05_DELTA", "HAM05_DELTA"]
+    },
+    "HAM_256BIT_12_61x4_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12", ...Array(61).fill("HAM04_DELTA")]
+    },
+    "HAM_256BIT_12_inter_5_4_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12", ...Array(10).fill(["HAM05_DELTA", "HAM05_DELTA", "HAM05_DELTA", "HAM05_DELTA", "HAM04_DELTA"]).flat(), "HAM04_DELTA"]
+    },
+    "HAM_256BIT_12_48x5_4_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12", ...Array(48).fill("HAM05_DELTA"), "HAM04_DELTA"]
+    },
+    "HAM_256BIT_12_8_46x5_6_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12", "HAM08_DELTA", ...Array(46).fill("HAM05_DELTA"), "HAM06_DELTA"]
+    },
+    "HAM_256BIT_12_14x5_29x6_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12", ...Array(14).fill("HAM05_DELTA"), ...Array(29).fill("HAM06_DELTA")]
+    },
+    "HAM_256BIT_12_40x6_4_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12", ...Array(40).fill("HAM06_DELTA"), "HAM04_DELTA"]
+    },
+    "HAM_32BIT_12_686_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12", "HAM06_DELTA", "HAM08_DELTA", "HAM06_DELTA"]
+    },
+    "HAM_32BIT_12_44444_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA"]
+    },
     "HAM_32BIT_44444444_DELTA": {
         isPaletted: true,
         isMixed: true,
         slotsPerBank: 0,
         sequence: ["HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA", "HAM04_DELTA"]
+    },
+    "HAM_32BIT_12_866_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12", "HAM08_DELTA", "HAM06_DELTA", "HAM06_DELTA"]
+    },
+    "HAM_32BIT_12_4646_DELTA": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 0,
+        sequence: ["HAM12", "HAM04_DELTA", "HAM06_DELTA", "HAM04_DELTA", "HAM06_DELTA"]
+    },
+    "HAM_32BIT_12_686": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 32,
+        sequence: ["HAM12", "HAM06", "HAM08", "HAM06"]
+    },
+    "HAM_32BIT_12_5555": {
+        isPaletted: true,
+        isMixed: true,
+        slotsPerBank: 16,
+        sequence: ["HAM12", "HAM05", "HAM05", "HAM05", "HAM05"]
     },
 
     // ... andere Formate ...
@@ -207,11 +289,11 @@ export const HAM_CONFIGS = {
 
 // Anzahl erreichbarer Ankerslots eines (Sub-)Formats.
 //
-// ACHTUNG: 0 ist ein GÜLTIGER Wert — reine Delta-Formate haben keinen einzigen
-// Palettenplatz. Der frühere Ausdruck `slotsPerBank || 8` bildete diese 0 auf 8
-// ab und täuschte damit acht nutzbare Slots vor (Palettenoptimierung und
-// Sortierung rechneten mit Slots, die der Encoder nie anspringt). Der
-// Ersatzwert gilt nur für UNBEKANNTE Formate.
+// ACHTUNG: 0 ist ein GÜLTIGER Wert — reine Delta-Formate und der
+// HAM12-Direktfarbanker haben keinen einzigen Palettenplatz. Der frühere
+// Ausdruck `slotsPerBank || 8` bildete diese 0 auf 8 ab und täuschte damit acht
+// nutzbare Slots vor (Palettenoptimierung und Sortierung rechneten mit Slots,
+// die der Encoder nie anspringt). Der Ersatzwert gilt nur für UNBEKANNTE Formate.
 export function slotsPerBankOf(fmt, fallback = 8) {
     const cfg = HAM_CONFIGS[fmt];
     if (!cfg) return fallback;
