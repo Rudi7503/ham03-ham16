@@ -1,6 +1,6 @@
 // src/modes/ham_builder.js
 
-import { HAM_CONFIGS } from '../codecs/configs.js';
+import { HAM_CONFIGS, slotsPerBankOf } from '../codecs/configs.js';
 import { rgbToHex, hexToRgb } from '../codecs/utils.js';
 import { encodePaletted, decodePaletted, packPaletted, describeCommand, formatSupportsRowAnchors, formatHasAnchors } from '../core/module_paletted.js';
 import { encodeHam12_16, decodeHam12_16, packHam12_16 } from '../core/module_ham12_16.js';
@@ -643,7 +643,7 @@ export function initHamBuilderMode(appState, containerEl) {
     document.getElementById('btn-reset-palette')?.addEventListener('click', async () => {
         if (!confirm("Möchtest du alle ungesperrten Farben dieser Bank auf Schwarz (0,0,0) zurücksetzen?")) return;
         let config = HAM_CONFIGS[appState.currentFormat] || HAM_CONFIGS["HAM_32BIT_63436343"];
-        let slotsPerBank = config.slotsPerBank || 8;
+        let slotsPerBank = slotsPerBankOf(appState.currentFormat);
         let currentOffset = parseInt(document.getElementById('pal-offset-input')?.value || 0);
 
         for (let i = 0; i < slotsPerBank; i++) {
@@ -1020,7 +1020,7 @@ export function initHamBuilderMode(appState, containerEl) {
         paletteContainer.innerHTML = "";
 
         let config = HAM_CONFIGS[appState.currentFormat] || HAM_CONFIGS["HAM_32BIT_63436343"];
-        let slotsPerBank = config.slotsPerBank || 8;
+        let slotsPerBank = slotsPerBankOf(appState.currentFormat);
         let currentOffset = parseInt(document.getElementById('pal-offset-input')?.value || 0);
 
         for (let i = 0; i < slotsPerBank; i++) {

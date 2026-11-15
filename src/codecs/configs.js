@@ -290,3 +290,16 @@ export const HAM_CONFIGS = {
     
 
 };
+
+// Anzahl erreichbarer Ankerslots eines (Sub-)Formats.
+//
+// ACHTUNG: 0 ist ein GÜLTIGER Wert — reine Delta-Formate und der
+// HAM12_ANCHOR-Direktfarbanker haben keinen einzigen Palettenplatz. Der frühere
+// Ausdruck `slotsPerBank || 8` bildete diese 0 auf 8 ab und täuschte damit acht
+// nutzbare Slots vor (Palettenoptimierung und Sortierung rechneten mit Slots,
+// die der Encoder nie anspringt). Der Ersatzwert gilt nur für UNBEKANNTE Formate.
+export function slotsPerBankOf(fmt, fallback = 8) {
+    const cfg = HAM_CONFIGS[fmt];
+    if (!cfg) return fallback;
+    return Number.isFinite(cfg.slotsPerBank) ? cfg.slotsPerBank : fallback;
+}

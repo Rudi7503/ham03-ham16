@@ -1,6 +1,6 @@
 // src/ui/palette_builder.js
 
-import { HAM_CONFIGS } from '../codecs/configs.js';
+import { HAM_CONFIGS, slotsPerBankOf } from '../codecs/configs.js';
 import { rgbToHex } from '../codecs/utils.js';
 import { computeDetailedAnalysis, getImageHistogram } from '../core/analysis.js';
 import { runOptimizationWithProxy, runManualRefinementWithProxy, requestOptimizationAbort } from '../core/palette_optimizer.js';
@@ -151,7 +151,7 @@ export function initPaletteBuilderUI(appState, deps) {
     async function applyColorToSelectedSlot(r, g, b) {
         let currentOffset = getCurrentOffset();
         let config = HAM_CONFIGS[appState.currentFormat];
-        let slots = config ? (config.slotsPerBank || 8) : 8;
+        let slots = slotsPerBankOf(appState.currentFormat);
 
         if (!selectedTargetSlot) selectedTargetSlot = { index: 1, absSlot: (currentOffset + 1) % 256 };
         
@@ -180,7 +180,7 @@ export function initPaletteBuilderUI(appState, deps) {
         let metric = getMetric();
         let optRegion = getOptRegion();
         let config = HAM_CONFIGS[appState.currentFormat];
-        let slots = config ? (config.slotsPerBank || 8) : 8;
+        let slots = slotsPerBankOf(appState.currentFormat);
         
         if (document.getElementById('b-fmt')) document.getElementById('b-fmt').innerText = appState.currentFormat;
         if (document.getElementById('b-bank-title')) document.getElementById('b-bank-title').innerText = `Offset ${currentOffset}`;
@@ -324,7 +324,7 @@ export function initPaletteBuilderUI(appState, deps) {
         }
 
         let formatsInUse = config.isMixed ? [...new Set(config.sequence)] : [appState.currentFormat];
-        let capacities = [...new Set(formatsInUse.map(f => HAM_CONFIGS[f]?.slotsPerBank || 8))].sort((a,b) => a - b);
+        let capacities = [...new Set(formatsInUse.map(f => slotsPerBankOf(f)))].sort((a,b) => a - b);
         let sortGroups = [];
         let lastEnd = -1;
         

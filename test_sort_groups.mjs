@@ -9,7 +9,7 @@
 //   - Kein Farbwert wandert über eine Format-Kapazitätsgrenze (Band) hinweg.
 //   - Sortiert wird ausschließlich absteigend nach Usage INNERHALB eines Bands.
 
-import { HAM_CONFIGS } from './src/codecs/configs.js';
+import { HAM_CONFIGS, slotsPerBankOf } from './src/codecs/configs.js';
 
 let failures = 0;
 const fail = (msg) => { failures++; console.log('  FEHLER: ' + msg); };
@@ -19,7 +19,10 @@ const ok = (msg) => console.log('  ok: ' + msg);
 function deriveGroups(formatName) {
     const config = HAM_CONFIGS[formatName];
     const formatsInUse = config.isMixed ? [...new Set(config.sequence)] : [formatName];
-    const capacities = [...new Set(formatsInUse.map(f => HAM_CONFIGS[f]?.slotsPerBank || 8))].sort((a, b) => a - b);
+    // 2026-11-15: an die Produktionslogik angeglichen. Vorher stand hier
+    // `slotsPerBank || 8`, was den gültigen Wert 0 auf 8 abbildete; die
+    // Produktion benutzt jetzt slotsPerBankOf() (0 bleibt 0).
+    const capacities = [...new Set(formatsInUse.map(f => slotsPerBankOf(f)))].sort((a, b) => a - b);
     const sortGroups = [];
     let lastEnd = -1;
     for (const cap of capacities) {

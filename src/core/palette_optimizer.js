@@ -4,7 +4,7 @@
 // HAM-PALETTE OPTIMIZER (PARALLEL VECTOR SHIFT 8-31 & DESCENDING ANCHOR LOOP)
 // ===========================================================================
 
-import { HAM_CONFIGS } from '../codecs/configs.js';
+import { HAM_CONFIGS, slotsPerBankOf } from '../codecs/configs.js';
 import { clamp } from '../codecs/utils.js';
 import { computeDetailedAnalysis, computeAvgYuvScore, getImageHistogram } from './analysis.js';
 import { encodePaletted, decodePaletted } from './module_paletted.js';
@@ -152,8 +152,8 @@ function downscaleRgba(src, srcW, srcH, dstW, dstH) {
 
 function resolveBankLayout(format, config) {
     const formatsInUse = config?.isMixed ? [...new Set(config.sequence)] : [format];
-    const capacities = [...new Set(formatsInUse.map(f => HAM_CONFIGS[f]?.slotsPerBank || 8))].sort((a, b) => a - b);
-    const maxSlots = config?.slotsPerBank || capacities[capacities.length - 1] || 8;
+    const capacities = [...new Set(formatsInUse.map(f => slotsPerBankOf(f)))].sort((a, b) => a - b);
+    const maxSlots = (config && config.slotsPerBank > 0) ? config.slotsPerBank : (capacities[capacities.length - 1] ?? 8);
     return { formatsInUse, maxSlots };
 }
 

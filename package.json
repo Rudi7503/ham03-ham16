@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node run_tests.mjs",
+    "test:all": "node run_tests.mjs --all",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"

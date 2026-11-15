@@ -103,6 +103,8 @@ async function measure(size, intensity) {
     if (typeof size === 'number') fs.writeFileSync(`testbilder/real-${size}-palette.bin`, appState.globalPaletteRAM);
 }
 
-const sizeArg = process.argv[2];
+// Standardgröße 128, damit der Testrunner das Skript ohne Argumente aufrufen
+// kann (vorher entstand "real-NaN.bgra" und der Lauf brach ab).
+const sizeArg = process.argv[2] || '128';
 const size = sizeArg === 'full' ? 'full' : parseInt(sizeArg, 10);
 await measure(size, process.argv[3] || 'sehr_schnell');

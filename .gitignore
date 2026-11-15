@@ -32,3 +32,7 @@ testbilder/ref640/_src.raw.tmp
 testbilder/ref640/_variant_*
 testbilder/ref640/_optimize_result.json
 testbilder/ref640/_preview_*
+
+# Temporäre Artefakte der Messläufe
+testbilder/tmp-refine-start-*.bin
+testbilder/real-*-palette.bin
