@@ -10,6 +10,7 @@
 //
 // Zusaetzlich INDEX.md mit Kopfdaten, Zeilenzahlen und Pruefsummen.
 import fs from 'node:fs';
+import { parseHamHeader, buildHamFile } from './src/core/ham_file.js';
 import crypto from 'node:crypto';
 import { unpackPaletted, decodePaletted } from './src/core/module_paletted.js';
 
@@ -23,18 +24,10 @@ const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 const hex8 = (v) => v.toString(16).toUpperCase().padStart(8, '0');
 const hex6 = (v) => v.toString(16).toUpperCase().padStart(6, '0');
 
+// Kopf kommt aus dem gemeinsamen Modul (src/core/ham_file.js).
 function parseHam(path) {
     const raw = new Uint8Array(fs.readFileSync(path));
-    const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-    const le = raw[5] === 0;
-    const w = dv.getUint16(6, le), h = dv.getUint16(8, le);
-    const fLen = raw[10];
-    let p = 11;
-    const format = new TextDecoder().decode(raw.slice(p, p + fLen)); p += fLen;
-    const step = { r: raw[p++], g: raw[p++], b: raw[p++] };
-    const offset = raw[p++];
-    const palette = raw.slice(p, p + 768); p += 768;
-    return { raw, width: w, height: h, format, step, offset, palette, payload: raw.slice(p), headerBytes: p };
+    return { raw, ...parseHamHeader(raw) };
 }
 
 const zeilen = [];

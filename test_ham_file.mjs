@@ -69,6 +69,23 @@ let abgewiesen = false;
 try { parseHamHeader(alt); } catch (e) { abgewiesen = /version 3/i.test(e.message); }
 check('Version 3 wird klar abgewiesen', abgewiesen);
 
+// --- 3b. Schreiben ist byte-treu: parse -> build muss die Datei exakt ergeben ---
+// Damit kann der Kopfaufbau nicht mehr zwischen Oberfläche, Generatoren und
+// Tests auseinanderlaufen (Grundlage aller Prüfsummen im Index).
+let byteGleich = 0, byteAbw = 0;
+for (const dir of ['testbilder/ref', 'testbilder/ref640', 'testbilder/ref512']) {
+    for (const m of ['03', '04', '05', '06', '08']) {
+        const pfad = `${dir}/ham${m}.ham`;
+        if (!fs.existsSync(pfad)) continue;
+        const orig = fs.readFileSync(pfad);
+        const h = parseHamHeader(orig);
+        const neu = buildHamFile({ width: h.width, height: h.height, format: h.format, step: h.step, offset: h.offset, palette: h.palette, payload: h.payload });
+        if (orig.length === neu.length && Buffer.compare(Buffer.from(orig), Buffer.from(neu)) === 0) byteGleich++;
+        else { byteAbw++; console.log(`     Abweichung: ${pfad}`); }
+    }
+}
+check('parse -> build ergibt byte-identische Dateien', byteAbw === 0, `${byteAbw} Abweichungen bei ${byteGleich + byteAbw} Dateien`);
+
 // --- 4. Unbekanntes Format wird abgelehnt (kein stilles Falschbild) ---
 const unbekannt = buildHamFile({ width: 4, height: 4, format: 'GIBTSNICHT', step: { r: 1, g: 1, b: 1 }, palette: new Uint8Array(768), payload: new Uint8Array(8) });
 let abgelehnt = false;

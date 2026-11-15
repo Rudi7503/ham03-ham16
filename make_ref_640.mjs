@@ -19,36 +19,16 @@ const MODES = ['03', '04', '05', '06', '08'];
 
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 
+// Kopf lesen/schreiben kommt aus dem gemeinsamen Modul (src/core/ham_file.js):
+// eine Quelle für Oberfläche, Generatoren und Tests. Die früheren Kopien hier
+// liefen auseinander — genau daraus entstand der veraltete Index.
 function readHam(path) {
     const raw = new Uint8Array(fs.readFileSync(path));
-    const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-    const le = raw[5] === 0;
-    const w = dv.getUint16(6, le), h = dv.getUint16(8, le);
-    const fLen = raw[10];
-    let p = 11;
-    const format = new TextDecoder().decode(raw.slice(p, p + fLen)); p += fLen;
-    const step = { r: raw[p++], g: raw[p++], b: raw[p++] };
-    const offset = raw[p++];
-    const palette = raw.slice(p, p + 768); p += 768;
-    return { raw, width: w, height: h, format, step, offset, palette, payload: raw.slice(p) };
+    return { raw, ...parseHamHeader(raw) };
 }
 
 function writeHam({ format, palette, payload }) {
-    const nameBytes = new TextEncoder().encode(format);
-    const buf = new Uint8Array(11 + nameBytes.length + 4 + 768 + payload.length);
-    const dv = new DataView(buf.buffer);
-    buf.set([72, 65, 77, 33], 0);          // "HAM!"
-    dv.setUint8(4, 4);                      // Version 4
-    dv.setUint8(5, 0);                      // Little-Endian fuer die Kopffelder
-    dv.setUint16(6, W, true);
-    dv.setUint16(8, H, true);
-    dv.setUint8(10, nameBytes.length);
-    let p = 11;
-    buf.set(nameBytes, p); p += nameBytes.length;
-    dv.setUint8(p++, STEP.r); dv.setUint8(p++, STEP.g); dv.setUint8(p++, STEP.b); dv.setUint8(p++, OFFSET);
-    buf.set(palette, p); p += 768;
-    buf.set(payload, p);
-    return buf;
+    return buildHamFile({ width: W, height: H, format, step: STEP, offset: OFFSET, palette, payload });
 }
 
 // --- Quelle skalieren ---
