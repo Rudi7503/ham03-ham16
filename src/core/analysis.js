@@ -164,7 +164,7 @@ export function computeDetailedAnalysis(origData, decData, imgW, imgH, startPx, 
                 if (config.isMixed && config.sequence) {
                     let seqIdx = x % config.sequence.length;
                     let fmt = config.sequence[seqIdx];
-                    bits = (fmt === "HAM01") ? 1 : (fmt === "HAM02") ? 2 : (fmt === "HAM03") ? 3 : (fmt === "HAM04") ? 4 : (fmt === "HAM05") ? 5 : (fmt === "HAM06") ? 6 : (fmt === "HAM08_PAL") ? 8 : 8;
+                    bits = (fmt === "HAM01") ? 1 : (fmt === "HAM02") ? 2 : (fmt === "HAM03") ? 3 : (fmt === "HAM04") ? 4 : (fmt === "HAM05") ? 5 : (fmt === "HAM06") ? 6 : 8;
                 } else if (config.bits) {
                     bits = config.bits;
                 }

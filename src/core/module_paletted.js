@@ -23,11 +23,6 @@ export const CHANNEL_DEFS = {
 // Alle Delta-Kommandos eines Sub-Formats inkl. der bereits eingerechneten
 // Farbverschiebungen (Kanalwert × Schritt × Turbo-Multiplikator).
 function buildFormatDeltaCache(fmt, stepVal) {
-    // HAM12_ANCHOR ist ein reines Anker-Format (Direktfarbanker) und hat keine
-    // Kanal-Deltas. Ohne diese Sperre entstünde aus dem Fallback [-1,1] ein
-    // Delta-Befehl, der sich nicht kodieren lässt: beim Packen wurde daraus ein
-    // 12-Bit-Wort, das als schwarzer Anker dekodiert (stiller Datenverlust).
-    if (fmt === "HAM12_ANCHOR") return [];
     const effConfig = HAM_CONFIGS[fmt] || { slotsPerBank: 0, hasTurbo: false };
     let multipliers;
     if (fmt === "HAM05_DELTA") {
@@ -105,7 +100,6 @@ export function phaseFormatAt(format, imgW, pxIndex) {
 
 // Hat dieses Sub-Format an dieser Position einen Anker?
 export function formatHasAnchors(fmt) {
-    if (fmt === "HAM12_ANCHOR") return true;          // Direktfarbanker
     const cfg = HAM_CONFIGS[fmt];
     return !!(cfg && cfg.slotsPerBank > 0);
 }
@@ -173,13 +167,13 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         // Kostet keine Bytes (feste Bitrate), nur Farbfreiheit an diesem Pixel.
         //
         // WICHTIG: Das geht nur, wenn das Sub-Format an genau dieser Position
-        // ueberhaupt Anker besitzt. Delta-Formate (slotsPerBank 0) und
-        // HAM12_ANCHOR-Formate an Delta-Positionen haben keinen Anker; ein
-        // erzwungener Anker waere nicht kodierbar und die Datei dekodiert Unsinn.
-        // In dem Fall wird der Zwang fuer dieses Pixel ignoriert und gemeldet.
+        // ueberhaupt Anker besitzt. Reine Delta-Formate (slotsPerBank 0) haben
+        // keinen; ein erzwungener Anker waere nicht kodierbar und die Datei
+        // dekodiert Unsinn. In dem Fall wird der Zwang fuer dieses Pixel
+        // ignoriert und gemeldet.
         const rowStart = forceRowAnchors && (pxIdx % imgW) === 0;
-        const anchorsHere = effFormat === "HAM12_ANCHOR" ? [] : (anchorInfo[effFormat] || []);
-        const canAnchorHere = effFormat === "HAM12_ANCHOR" || anchorsHere.length > 0;
+        const anchorsHere = anchorInfo[effFormat] || [];
+        const canAnchorHere = anchorsHere.length > 0;
         if (rowStart && !canAnchorHere) {
             if (!warnRowAnchorFormats.has(effFormat)) {
                 warnRowAnchorFormats.add(effFormat);
@@ -189,23 +183,12 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
         const forceAnchorHere = rowStart && canAnchorHere;
 
         if (forceAnchorHere || strategy !== 'delta_only') {
-            if (effFormat === "HAM12_ANCHOR") {
-                let tr = origData[pxIdx*4], tg = origData[pxIdx*4+1], tb = origData[pxIdx*4+2];
-                let r3 = tr >> 5, g4 = tg >> 4, b3 = tb >> 5;
-                for (let b10 of [0, 1]) {
-                    let r4 = (r3 << 1) | b10, b4 = (b3 << 1) | b10;
-                    let ar = r4 << 4, ag = g4 << 4, ab = b4 << 4;
-                    cmds.push({ isAnchor: true, isDirect: true, format: "HAM12_ANCHOR", r3, g4, b3, b10, r: ar, g: ag, b: ab });
-                    rs.push(ar); gs.push(ag); bs.push(ab);
-                }
-            } else {
-                for (let s = 0; s < anchorsHere.length; s++) {
-                    const a = anchorsHere[s];
-                    cmds.push(a.cmd);
-                    rs.push(paletteRAM[a.absSlot * 3]);
-                    gs.push(paletteRAM[a.absSlot * 3 + 1]);
-                    bs.push(paletteRAM[a.absSlot * 3 + 2]);
-                }
+            for (let s = 0; s < anchorsHere.length; s++) {
+                const a = anchorsHere[s];
+                cmds.push(a.cmd);
+                rs.push(paletteRAM[a.absSlot * 3]);
+                gs.push(paletteRAM[a.absSlot * 3 + 1]);
+                bs.push(paletteRAM[a.absSlot * 3 + 2]);
             }
         }
 
@@ -226,14 +209,7 @@ export async function encodePaletted(origData, imgW, imgH, format, stepVal, pale
             // ankerlosen Formaten entstand so eine Datei, die nach dem Speichern
             // voellig anders dekodiert (stiller Datenverlust). Jetzt: Anker nur bei
             // vorhandenen Ankern, sonst der betragskleinste Delta-Befehl.
-            if (effFormat === "HAM12_ANCHOR") {
-                let tr = origData[pxIdx*4], tg = origData[pxIdx*4+1], tb = origData[pxIdx*4+2];
-                let r3 = tr >> 5, g4 = tg >> 4, b3 = tb >> 5;
-                let b10 = 0;
-                let ar = (r3 << 1) << 4, ag = g4 << 4, ab = (b3 << 1) << 4;
-                cmds.push({ isAnchor: true, isDirect: true, format: "HAM12_ANCHOR", r3, g4, b3, b10, r: ar, g: ag, b: ab });
-                rs.push(ar); gs.push(ag); bs.push(ab);
-            } else if (anchorsHere.length > 0) {
+            if (anchorsHere.length > 0) {
                 const a = anchorsHere[0];
                 cmds.push(a.cmd);
                 rs.push(paletteRAM[a.absSlot * 3]);
@@ -467,9 +443,6 @@ function getCmdVal(cmd) {
              (((cmd.rIndex || 0) & 3) << 4) |
              (((cmd.gIndex || 0) & 3) << 2) |
              ((cmd.bIndex || 0) & 3));
-    } else if (fmt === "HAM12_ANCHOR") {
-        bits = 12;
-        v = ((cmd.b10 & 1) << 10) | ((cmd.r3 & 7) << 7) | ((cmd.g4 & 0xF) << 3) | (cmd.b3 & 7);
     }
     return { v, bits };
 }
@@ -478,8 +451,7 @@ function getCmdVal(cmd) {
 // dieselbe Quelle haben).
 const BITS_BY_FMT = {
     HAM01: 1, HAM02: 2, HAM03: 3, HAM04: 4, HAM05: 5, HAM06: 6, HAM08: 8,
-    HAM04_DELTA: 4, HAM05_DELTA: 5, HAM06_DELTA: 6, HAM08_DELTA: 8,
-    HAM12_ANCHOR: 12
+    HAM04_DELTA: 4, HAM05_DELTA: 5, HAM06_DELTA: 6, HAM08_DELTA: 8
 };
 
 // Packt die Befehlskette als kontinuierlichen Bitstrom (MSB-first) in
@@ -568,15 +540,6 @@ export function unpackPaletted(packedData, format, totalPixels) {
             let gDir = (v >> 2) & 3;
             let bDir = v & 3;
             return { isAnchor: false, format: fmt, turboIndex, isTurbo: turboIndex > 0, rIndex: rDir, gIndex: gDir, bIndex: bDir };
-        } else if (fmt === "HAM12_ANCHOR") {
-            let b10 = (v >> 10) & 1;
-            let r3 = (v >> 7) & 7;
-            let g4 = (v >> 3) & 0xF;
-            let b3 = v & 7;
-            let ar = ((r3 << 1) | b10) << 4;
-            let ag = g4 << 4;
-            let ab = ((b3 << 1) | b10) << 4;
-            return { isAnchor: true, isDirect: true, format: fmt, r3, g4, b3, b10, r: ar, g: ag, b: ab };
         }
         return { isAnchor: true, format: fmt, anchorIdx: 0 };
     }
@@ -666,9 +629,7 @@ export function decodePaletted(commands, imgW, imgH, stepVal, paletteRAM, offset
     for (let i = 0; i < commands.length; i++) {
         const cmd = commands[i];
         if (cmd.isAnchor) {
-            if (cmd.isDirect) {
-                r = cmd.r; g = cmd.g; b = cmd.b;
-            } else if (SLOT_COUNT_BY_FMT[cmd.format] > 0) {
+            if (SLOT_COUNT_BY_FMT[cmd.format] > 0) {
                 const absIdx = ((offset + cmd.anchorIdx) % 256) * 3;
                 r = paletteRAM[absIdx]; g = paletteRAM[absIdx + 1]; b = paletteRAM[absIdx + 2];
             }
@@ -706,9 +667,6 @@ export function describeCommand(cmd, step, offset = 0) {
     if (cmd.isAnchor) {
         if (cmd.format === "HAM12" || cmd.format === "HAM16") {
             return `${fmt} anker`;
-        }
-        if (cmd.format === "HAM12_ANCHOR") {
-            return `ham12 direct rgb(${cmd.r}, ${cmd.g}, ${cmd.b})`;
         }
         return `${fmt} ankerslot ${cmd.anchorIdx} (abs ${(offset + cmd.anchorIdx) % 256})`;
     }

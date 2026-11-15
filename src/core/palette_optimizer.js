@@ -977,8 +977,6 @@ export async function runHybridOptimization(appState, optRegion, step, metric, c
     if (!frueheBank || !(frueheBank.slotsPerBank > 0)) {
         const fmtName = appState.currentFormat;
         const slots = frueheBank ? (frueheBank.slotsPerBank || 0) : 0;
-        // Mischformate mit HAM12_ANCHOR haben slotsPerBank 0, nutzen aber den
-        // Direktfarbanker und brauchen ebenfalls keine Palette.
         return [
             `<div style="color:#ffc107; font-weight:bold;">Palette wird für ${fmtName} nicht benutzt</div>`,
             `<div style="color:#ffc107;">Das Format hat ${slots} Ankerslots: der Encoder arbeitet ausschließlich mit Farbschritten. `
