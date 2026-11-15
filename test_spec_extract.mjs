@@ -7,8 +7,9 @@ import { encodePaletted, decodePaletted, packPaletted } from './src/core/module_
 
 const md = readFileSync(new URL('./HAM06-SPEZIFIKATION.md', import.meta.url), 'utf8');
 
-// Alle ```js-Blöcke einsammeln und den mit decodeHam nehmen
-const blocks = [...md.matchAll(/```js\n([\s\S]*?)```/g)].map(m => m[1]);
+// Alle ```js-Blöcke einsammeln und den mit decodeHam nehmen.
+// \r? erlaubt CRLF-Zeilenenden (Windows-Checkout ohne .gitattributes).
+const blocks = [...md.matchAll(/```js\r?\n([\s\S]*?)```/g)].map(m => m[1]);
 const code = blocks.find(b => b.includes('function decodeHam'));
 if (!code) {
     console.log('FEHL: kein js-Block mit decodeHam in der Spezifikation gefunden');

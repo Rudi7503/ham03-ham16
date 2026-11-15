@@ -34,17 +34,33 @@ function writeHam(format, palette, payload) {
 
 fs.mkdirSync(OUT, { recursive: true });
 
-// --- Quelle skalieren (x/y getrennt) ---
-const raw = fs.readFileSync(SRC_RAW);
-const src = new Uint8ClampedArray(SRC_W * SRC_H * 4);
-for (let i = 0, j = 0; i < SRC_W * SRC_H; i++, j += 3) {
-    src[i * 4] = raw[j]; src[i * 4 + 1] = raw[j + 1]; src[i * 4 + 2] = raw[j + 2]; src[i * 4 + 3] = 255;
+// --- Eingabebild bestimmen (x/y getrennt skaliert) ---
+// Das skalierte Eingabebild ist versioniert; damit läuft der Generator auch im
+// frischen Clone, wo die Zwischendatei _src.raw.tmp (gitignore) fehlt.
+const INPUT = `${OUT}/input_640x512.rgb`;
+let pixels;
+if (fs.existsSync(INPUT)) {
+    const rgb = fs.readFileSync(INPUT);
+    if (rgb.length !== TOTAL * 3) throw new Error(`${INPUT}: ${rgb.length} Byte, erwartet ${TOTAL * 3}`);
+    pixels = new Uint8ClampedArray(TOTAL * 4);
+    for (let i = 0, j = 0; i < TOTAL; i++, j += 3) {
+        pixels[i * 4] = rgb[j]; pixels[i * 4 + 1] = rgb[j + 1]; pixels[i * 4 + 2] = rgb[j + 2]; pixels[i * 4 + 3] = 255;
+    }
+    console.log(`Eingabe: ${INPUT} (versioniert, ${W}x${H}), Zeilenanker aktiv`);
+} else if (fs.existsSync(SRC_RAW)) {
+    const raw = fs.readFileSync(SRC_RAW);
+    const src = new Uint8ClampedArray(SRC_W * SRC_H * 4);
+    for (let i = 0, j = 0; i < SRC_W * SRC_H; i++, j += 3) {
+        src[i * 4] = raw[j]; src[i * 4 + 1] = raw[j + 1]; src[i * 4 + 2] = raw[j + 2]; src[i * 4 + 3] = 255;
+    }
+    pixels = resizeImage(src, SRC_W, SRC_H, W, H, 'lanczos');
+    const inputRgb = new Uint8Array(TOTAL * 3);
+    for (let i = 0; i < TOTAL; i++) { inputRgb[i * 3] = pixels[i * 4]; inputRgb[i * 3 + 1] = pixels[i * 4 + 1]; inputRgb[i * 3 + 2] = pixels[i * 4 + 2]; }
+    fs.writeFileSync(INPUT, inputRgb);
+    console.log(`${SRC_W}x${SRC_H} -> ${W}x${H}, x/y getrennt (${(W / SRC_W).toFixed(4)} / ${(H / SRC_H).toFixed(4)}), Zeilenanker aktiv`);
+} else {
+    throw new Error(`Weder ${INPUT} noch ${SRC_RAW} vorhanden.`);
 }
-const pixels = resizeImage(src, SRC_W, SRC_H, W, H, 'lanczos');
-const inputRgb = new Uint8Array(TOTAL * 3);
-for (let i = 0; i < TOTAL; i++) { inputRgb[i * 3] = pixels[i * 4]; inputRgb[i * 3 + 1] = pixels[i * 4 + 1]; inputRgb[i * 3 + 2] = pixels[i * 4 + 2]; }
-fs.writeFileSync(`${OUT}/input_640x512.rgb`, inputRgb);
-console.log(`${SRC_W}x${SRC_H} -> ${W}x${H}, x/y getrennt (${(W / SRC_W).toFixed(4)} / ${(H / SRC_H).toFixed(4)}), Zeilenanker aktiv`);
 
 const zeilen = [];
 for (const m of MODES) {

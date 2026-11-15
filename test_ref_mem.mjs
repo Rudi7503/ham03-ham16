@@ -16,7 +16,9 @@ const check = (name, cond, detail) => {
     console.log(`${cond ? 'OK  ' : 'FEHL'} ${name}${detail && !cond ? ' — ' + detail : ''}`);
     if (!cond) fehler++;
 };
-const zeilen = (p) => fs.readFileSync(p, 'utf8').split('\n').filter(l => l.length > 0);
+// \r entfernen: auf einem Windows-Checkout mit core.autocrlf=true kommen die
+// Zeilen mit CRLF an, sonst scheitert die Hexziffern-Prüfung.
+const zeilen = (p) => fs.readFileSync(p, 'utf8').split('\n').map(l => l.replace(/\r$/, '')).filter(l => l.length > 0);
 
 function parseHam(path) {
     const raw = new Uint8Array(fs.readFileSync(path));

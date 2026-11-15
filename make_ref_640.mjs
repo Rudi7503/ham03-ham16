@@ -6,6 +6,7 @@
 // die Faktoren sind hier 640/1120 = 0,5714 und 256/1120 = 0,2286.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { parseHamHeader, buildHamFile } from './src/core/ham_file.js';
 import { resizeImage } from './src/core/resample.js';
 import { encodePaletted, packPaletted, unpackPaletted, decodePaletted } from './src/core/module_paletted.js';
 
@@ -31,19 +32,38 @@ function writeHam({ format, palette, payload }) {
     return buildHamFile({ width: W, height: H, format, step: STEP, offset: OFFSET, palette, payload });
 }
 
-// --- Quelle skalieren ---
-const raw = fs.readFileSync(SRC_RAW);
-const src = new Uint8ClampedArray(SRC_W * SRC_H * 4);
-for (let i = 0, j = 0; i < SRC_W * SRC_H; i++, j += 3) {
-    src[i * 4] = raw[j]; src[i * 4 + 1] = raw[j + 1]; src[i * 4 + 2] = raw[j + 2]; src[i * 4 + 3] = 255;
+// --- Eingabebild bestimmen ---
+// Das skalierte Eingabebild ist versioniert (es ist genau das, was der Encoder
+// gesehen hat). Damit läuft dieser Generator auch in einem frischen Clone, in dem
+// die 9,5 MB große Zwischendatei _src.raw.tmp (gitignore) fehlt. Nur wenn die
+// Datei fehlt, wird aus der 1120er-Quelle neu skaliert.
+const INPUT = `${OUT}/input_640x256.rgb`;
+let pixels;
+if (fs.existsSync(INPUT)) {
+    const rgb = fs.readFileSync(INPUT);
+    if (rgb.length !== TOTAL * 3) throw new Error(`${INPUT}: ${rgb.length} Byte, erwartet ${TOTAL * 3}`);
+    pixels = new Uint8ClampedArray(TOTAL * 4);
+    for (let i = 0, j = 0; i < TOTAL; i++, j += 3) {
+        pixels[i * 4] = rgb[j]; pixels[i * 4 + 1] = rgb[j + 1]; pixels[i * 4 + 2] = rgb[j + 2]; pixels[i * 4 + 3] = 255;
+    }
+    console.log(`Eingabe: ${INPUT} (versioniert, ${W}x${H})`);
+} else if (fs.existsSync(SRC_RAW)) {
+    const raw = fs.readFileSync(SRC_RAW);
+    const src = new Uint8ClampedArray(SRC_W * SRC_H * 4);
+    for (let i = 0, j = 0; i < SRC_W * SRC_H; i++, j += 3) {
+        src[i * 4] = raw[j]; src[i * 4 + 1] = raw[j + 1]; src[i * 4 + 2] = raw[j + 2]; src[i * 4 + 3] = 255;
+    }
+    pixels = resizeImage(src, SRC_W, SRC_H, W, H, 'lanczos');
+    fs.writeFileSync(INPUT, (() => {
+        const rgb = new Uint8Array(TOTAL * 3);
+        for (let i = 0; i < TOTAL; i++) { rgb[i * 3] = pixels[i * 4]; rgb[i * 3 + 1] = pixels[i * 4 + 1]; rgb[i * 3 + 2] = pixels[i * 4 + 2]; }
+        return rgb;
+    })());
+    console.log(`Eingabe: ${SRC_W}x${SRC_H} -> ${W}x${H}, x- und y-Achse getrennt skaliert (Faktoren ${(W / SRC_W).toFixed(4)} / ${(H / SRC_H).toFixed(4)}), kein Beschnitt`);
+} else {
+    throw new Error(`Weder ${INPUT} noch ${SRC_RAW} vorhanden. Beides fehlt — `
+        + `das skalierte Eingabebild ist normalerweise versioniert.`);
 }
-const pixels = resizeImage(src, SRC_W, SRC_H, W, H, 'lanczos');
-fs.writeFileSync(`${OUT}/input_640x256.rgb`, (() => {
-    const rgb = new Uint8Array(TOTAL * 3);
-    for (let i = 0; i < TOTAL; i++) { rgb[i * 3] = pixels[i * 4]; rgb[i * 3 + 1] = pixels[i * 4 + 1]; rgb[i * 3 + 2] = pixels[i * 4 + 2]; }
-    return rgb;
-})());
-console.log(`Eingabe: ${SRC_W}x${SRC_H} -> ${W}x${H}, x- und y-Achse getrennt skaliert (Faktoren ${(W / SRC_W).toFixed(4)} / ${(H / SRC_H).toFixed(4)}), kein Beschnitt`);
 
 const zeilen = [];
 for (const m of MODES) {

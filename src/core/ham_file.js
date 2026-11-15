@@ -93,9 +93,18 @@ export function expectedPayloadBytes(format, totalPixels) {
         return totalPixels * 2;
     }
     if (cfg.isMixed && Array.isArray(cfg.sequence)) {
-        const bits = cfg.sequence.reduce((s, f) => s + (HAM_CONFIGS[f]?.bits || 0), 0);
-        const proPixel = bits / cfg.sequence.length;
-        return Math.ceil(totalPixels * proPixel / 32) * 4;
+        // Die Bitbreite hängt vom Pixelindex ab, nicht vom Durchschnitt: bei einer
+        // Sequenzlänge, die die Pixelzahl nicht teilt, endet der Strom mitten in
+        // einer Periode. Mit dem Durchschnitt gerechnet kam bei
+        // HAM_256BIT_12_48x5_4_DELTA (256 px, 50er-Periode) 164 statt 168 Byte
+        // heraus — deshalb hier gliedweise aufsummieren.
+        const seq = cfg.sequence;
+        const perioden = Math.floor(totalPixels / seq.length);
+        const rest = totalPixels % seq.length;
+        const bitsProPeriode = seq.reduce((s, f) => s + (HAM_CONFIGS[f]?.bits || 0), 0);
+        let bits = perioden * bitsProPeriode;
+        for (let i = 0; i < rest; i++) bits += HAM_CONFIGS[seq[i]]?.bits || 0;
+        return Math.ceil(bits / 32) * 4;
     }
     const bits = cfg.bits || 0;
     return Math.ceil(totalPixels * bits / 32) * 4;
