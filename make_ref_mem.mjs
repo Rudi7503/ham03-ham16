@@ -16,7 +16,9 @@ import { unpackPaletted, decodePaletted } from './src/core/module_paletted.js';
 
 const REF_DIR = process.argv[2] || 'testbilder/ref';   // Verzeichnis der .ham-Dateien
 const OUT_DIR = `${REF_DIR}/mem`;
-const MODES = ['03', '04', '05', '06', '08'];
+// Alle .ham-Dateien im Verzeichnis - nicht mehr eine feste Liste, damit neue
+// Formate (Delta-Modi, 256-Bit) automatisch mitlaufen.
+const DATEIEN = fs.readdirSync(REF_DIR).filter(f => f.toLowerCase().endsWith('.ham')).sort();
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
@@ -32,8 +34,9 @@ function parseHam(path) {
 
 const zeilen = [];
 
-for (const m of MODES) {
-    const h = parseHam(`${REF_DIR}/ham${m}.ham`);
+for (const dateiName of DATEIEN) {
+    const stem = dateiName.replace(/\.ham$/i, '');
+    const h = parseHam(`${REF_DIR}/${dateiName}`);
     const total = h.width * h.height;
 
     // --- Nutzlast als 32-Bit-Woerter ---
@@ -43,7 +46,7 @@ for (const m of MODES) {
         words.push(hex8(w));
     }
     const payloadText = words.join('\n') + '\n';
-    const payloadName = `ham${m}_payload.mem`;
+    const payloadName = `${stem}_payload.mem`;
     fs.writeFileSync(`${OUT_DIR}/${payloadName}`, payloadText);
 
     // --- Sollpixel aus dem Referenzdecoder ---
@@ -53,7 +56,7 @@ for (const m of MODES) {
         pix.push(hex6((rgba[i * 4] << 16) | (rgba[i * 4 + 1] << 8) | rgba[i * 4 + 2]));
     }
     const expectedText = pix.join('\n') + '\n';
-    const expectedName = `ham${m}_expected.mem`;
+    const expectedName = `${stem}_expected.mem`;
     fs.writeFileSync(`${OUT_DIR}/${expectedName}`, expectedText);
 
     // --- Palette ---
@@ -62,11 +65,11 @@ for (const m of MODES) {
         pal.push(hex6((h.palette[i * 3] << 16) | (h.palette[i * 3 + 1] << 8) | h.palette[i * 3 + 2]));
     }
     const paletteText = pal.join('\n') + '\n';
-    const paletteName = `ham${m}_palette.mem`;
+    const paletteName = `${stem}_palette.mem`;
     fs.writeFileSync(`${OUT_DIR}/${paletteName}`, paletteText);
 
     zeilen.push({
-        mode: h.format, datei: `ham${m}.ham`, dateiSha256: sha(h.raw), dateiBytes: h.raw.length,
+        mode: h.format, datei: dateiName, dateiSha256: sha(h.raw), dateiBytes: h.raw.length,
         breite: h.width, hoehe: h.height, step: h.step, offset: h.offset,
         nutzlastBytes: h.payload.length, woerter: words.length,
         pixel: total,

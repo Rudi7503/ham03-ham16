@@ -3,8 +3,13 @@
 import fs from 'node:fs';
 import { unpackPaletted, decodePaletted } from './src/core/module_paletted.js';
 
-const REF = 'testbilder/ref', MEM = `${REF}/mem`;
-const MODES = ['03', '04', '05', '06', '08'];
+// Verzeichnis aus dem Argument (vorher stand hier fest 'testbilder/ref' — der
+// Aufruf `node test_ref_mem.mjs testbilder/ref640` prüfte also immer den
+// 320er-Satz und meldete für die anderen Sätze fälschlich Erfolg).
+const REF = process.argv[2] || 'testbilder/ref', MEM = `${REF}/mem`;
+// Alle .ham-Dateien im Verzeichnis prüfen (nicht mehr eine feste Liste), damit
+// neue Formate wie die 256-Bit-Delta-Modi automatisch mitgeprüft werden.
+const DATEIEN = fs.existsSync(REF) ? fs.readdirSync(REF).filter(f => f.toLowerCase().endsWith('.ham')).sort() : [];
 
 let fehler = 0;
 const check = (name, cond, detail) => {
@@ -27,8 +32,9 @@ function parseHam(path) {
     return { width: w, height: h, format, step, offset, palette, payload: raw.slice(p) };
 }
 
-for (const m of MODES) {
-    const h = parseHam(`${REF}/ham${m}.ham`);
+for (const dateiName of DATEIEN) {
+    const m = dateiName.replace(/\.ham$/i, '').replace(/^ham/i, '');
+    const h = parseHam(`${REF}/${dateiName}`);
     const total = h.width * h.height;
 
     // --- Nutzlast ---
@@ -83,7 +89,7 @@ for (const m of MODES) {
 
 // --- Index vorhanden und vollständig ---
 const idx = fs.readFileSync(`${MEM}/INDEX.md`, 'utf8');
-check('INDEX.md nennt alle fünf Modi', MODES.every(m => idx.includes(`ham${m}_payload.mem`)));
+check('INDEX.md nennt alle Dateien', DATEIEN.every(f => idx.includes(f.replace(/\.ham$/i, '') + '_payload.mem')));
 check('INDEX.md dokumentiert Byte0 in Bits 31:24', /Bits 31:24/.test(idx));
 check('INDEX.md hält den Stand "kein FPGA-Build" fest', /FPGA-Build oder Hardwaretest/.test(idx));
 
